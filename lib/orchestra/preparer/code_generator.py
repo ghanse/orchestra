@@ -461,22 +461,26 @@ def generate_set_variable_notebook(activity: SetVariableActivity) -> str:
         else:
             import_block = ""
 
-        body = textwrap.dedent(f"""\
-            import json
-            {import_block}
-            variable_name = "{activity.variable_name}"
-
-            # Compute value at runtime.
-            # Original ADF expression resolved to notebook code.
-            value = {activity.notebook_code}
-
-            # Set task value so downstream tasks can reference it via
-            # {{{{tasks.{activity.task_key}.values.{activity.variable_name}}}}}.
-            dbutils.jobs.taskValues.set(key=variable_name, value=value)
-            print(f"Set task value '{{variable_name}}' = '{{value}}'")
-
-            dbutils.notebook.exit(json.dumps({{"variable_name": variable_name, "value": str(value)}}))
-        """)
+        # Build body lines list to avoid textwrap.dedent issues when
+        # import_block starts at column 0 (which would prevent dedent
+        # from stripping the common leading whitespace).
+        lines = ["import json"]
+        if import_block:
+            lines.append(import_block.rstrip("\n"))
+        lines.append("")
+        lines.append(f'variable_name = "{activity.variable_name}"')
+        lines.append("")
+        lines.append("# Compute value at runtime.")
+        lines.append("# Original ADF expression resolved to notebook code.")
+        lines.append(f"value = {activity.notebook_code}")
+        lines.append("")
+        lines.append("# Set task value so downstream tasks can reference it via")
+        lines.append(f"# {{{{tasks.{activity.task_key}.values.{activity.variable_name}}}}}.")
+        lines.append("dbutils.jobs.taskValues.set(key=variable_name, value=value)")
+        lines.append('print(f"Set task value \'{variable_name}\' = \'{value}\'")')
+        lines.append("")
+        lines.append(f'dbutils.notebook.exit(json.dumps({{"variable_name": variable_name, "value": str(value)}}))')
+        body = "\n".join(lines) + "\n"
     else:
         # literal or dab_ref: read from widget parameter
         body = textwrap.dedent(f"""\
@@ -989,37 +993,40 @@ def generate_append_variable_notebook(activity: AppendVariableActivity) -> str:
         else:
             import_block = ""
 
-        body = textwrap.dedent(f"""\
-            import json
-            {import_block}
-            # Parameters
-            variable_name = dbutils.widgets.get("variable_name") or "{activity.variable_name}"
-
-            # Compute value at runtime.
-            value = {activity.notebook_code}
-
-            # Read the current array from task values (or start with empty list)
-            try:
-                tk = dbutils.widgets.get("task_key", "")
-                current_raw = dbutils.jobs.taskValues.get(taskKey=tk, key=variable_name)
-                if isinstance(current_raw, str):
-                    current = json.loads(current_raw)
-                else:
-                    current = current_raw
-            except Exception:
-                current = []
-
-            if not isinstance(current, list):
-                current = [current] if current else []
-
-            # Append and write back
-            current.append(value)
-            result = json.dumps(current)
-            dbutils.jobs.taskValues.set(key=variable_name, value=result)
-            print(f"Appended to '{{variable_name}}': array now has {{len(current)}} item(s)")
-
-            dbutils.notebook.exit(result)
-        """)
+        # Build body lines list to avoid textwrap.dedent issues when
+        # import_block starts at column 0.
+        lines = ["import json"]
+        if import_block:
+            lines.append(import_block.rstrip("\n"))
+        lines.append("")
+        lines.append("# Parameters")
+        lines.append(f'variable_name = dbutils.widgets.get("variable_name") or "{activity.variable_name}"')
+        lines.append("")
+        lines.append("# Compute value at runtime.")
+        lines.append(f"value = {activity.notebook_code}")
+        lines.append("")
+        lines.append("# Read the current array from task values (or start with empty list)")
+        lines.append("try:")
+        lines.append('    tk = dbutils.widgets.get("task_key", "")')
+        lines.append("    current_raw = dbutils.jobs.taskValues.get(taskKey=tk, key=variable_name)")
+        lines.append("    if isinstance(current_raw, str):")
+        lines.append("        current = json.loads(current_raw)")
+        lines.append("    else:")
+        lines.append("        current = current_raw")
+        lines.append("except Exception:")
+        lines.append("    current = []")
+        lines.append("")
+        lines.append("if not isinstance(current, list):")
+        lines.append("    current = [current] if current else []")
+        lines.append("")
+        lines.append("# Append and write back")
+        lines.append("current.append(value)")
+        lines.append("result = json.dumps(current)")
+        lines.append("dbutils.jobs.taskValues.set(key=variable_name, value=result)")
+        lines.append('print(f"Appended to \'{variable_name}\': array now has {len(current)} item(s)")')
+        lines.append("")
+        lines.append("dbutils.notebook.exit(result)")
+        body = "\n".join(lines) + "\n"
     else:
         body = textwrap.dedent(f"""\
             import json
