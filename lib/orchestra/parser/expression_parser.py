@@ -75,9 +75,19 @@ def resolve_expression(
 
     expr = value[1:]  # strip leading @
 
-    # --- item() ---
+    # --- item() and item().field ---
     if _ITEM_RE.match(expr):
         return ExpressionResult(kind="dab_ref", value="{{input}}")
+
+    m = _ITEM_FIELD_RE.match(expr)
+    if m:
+        field_name = m.group(1)
+        # item().field requires notebook code to parse the JSON item
+        return ExpressionResult(
+            kind="notebook_code",
+            value=f"__import__('json').loads(dbutils.widgets.get('item'))['{field_name}']",
+            imports=["import json"],
+        )
 
     # --- Pipeline parameters ---
     result = _resolve_pipeline_param(expr)
@@ -116,6 +126,54 @@ def resolve_expression(
 
     # Unsupported expression
     return None
+
+
+# Matches @{...} interpolation tokens
+_INTERPOLATION_RE = re.compile(r"@\{(.+?)\}")
+
+
+def resolve_interpolated_string(
+    value: str,
+    context: TranslationContext,
+    *,
+    variable_task_keys: dict[str, str] | None = None,
+) -> str:
+    """Resolve ``@{...}`` interpolation tokens within a string.
+
+    ADF uses ``@{expr}`` for inline string interpolation, e.g.
+    ``"prefix_@{pipeline().parameters.name}_suffix"``.  Each ``@{...}``
+    token is resolved through :func:`resolve_expression` and replaced
+    with its resolved value.
+
+    If the entire string is a single ``@{...}`` token (no surrounding
+    text), it is treated as a full expression and the resolved value is
+    returned directly.
+
+    Args:
+        value: A string potentially containing ``@{...}`` tokens.
+        context: Translation context for resolving variables.
+        variable_task_keys: Optional explicit variable-name-to-task-key map.
+
+    Returns:
+        The string with all ``@{...}`` tokens replaced by resolved values.
+        Tokens that cannot be resolved are left unchanged.
+    """
+    if not isinstance(value, str):
+        return value
+
+    # Fast path: no interpolation tokens
+    if "@{" not in value:
+        return value
+
+    def _replace_match(m: re.Match[str]) -> str:
+        inner_expr = m.group(1)
+        result = resolve_expression("@" + inner_expr, context, variable_task_keys=variable_task_keys)
+        if result is not None and result.kind in ("dab_ref", "literal"):
+            return result.value
+        # Cannot resolve — leave token unchanged
+        return m.group(0)
+
+    return _INTERPOLATION_RE.sub(_replace_match, value)
 
 
 def parse_expression(value: str | dict[str, Any] | int | float | bool, context: TranslationContext) -> str | None:
@@ -168,6 +226,9 @@ def parse_expression_for_dab(
 
 # Matches: item()
 _ITEM_RE = re.compile(r"item\(\s*\)$", re.IGNORECASE)
+
+# Matches: item().fieldName
+_ITEM_FIELD_RE = re.compile(r"item\(\s*\)\.(\w+)", re.IGNORECASE)
 
 # Matches: activity('ActivityName').output.firstRow.col  (and variants)
 _ACTIVITY_OUTPUT_RE = re.compile(
@@ -505,8 +566,10 @@ def _resolve_function_call(
         if not raw_arg:
             continue
 
-        # String literal
-        if raw_arg.startswith("'") and raw_arg.endswith("'"):
+        # String literal (single or double quoted)
+        if (raw_arg.startswith("'") and raw_arg.endswith("'")) or (
+            raw_arg.startswith('"') and raw_arg.endswith('"')
+        ):
             resolved_args.append(ExpressionResult(kind="literal", value=raw_arg[1:-1]))
         # Numeric literal
         elif _is_numeric(raw_arg):

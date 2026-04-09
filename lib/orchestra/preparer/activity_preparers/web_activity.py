@@ -5,11 +5,37 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from orchestra.models.dab import DabNotebook, SecretInstruction
+from orchestra.models.ir import TranslationContext
+from orchestra.parser.expression_parser import resolve_expression, resolve_interpolated_string
 from orchestra.preparer.code_generator import generate_web_activity_notebook
 from orchestra.preparer.workflow_preparer import PreparedActivity, _build_common_task_fields
 
 if TYPE_CHECKING:
     from orchestra.models.ir import WebActivity
+
+
+def _resolve_param_value(value: str) -> str:
+    """Resolve an ADF expression parameter value to a DAB ref.
+
+    Args:
+        value: A parameter value string that may contain ADF expressions.
+
+    Returns:
+        Resolved value string.
+    """
+    ctx = TranslationContext()
+
+    # Try @{...} interpolation
+    if "@{" in value:
+        return resolve_interpolated_string(value, ctx)
+
+    # Try @expr style
+    if value.startswith("@"):
+        result = resolve_expression(value, ctx)
+        if result is not None and result.kind in ("dab_ref", "literal"):
+            return result.value
+
+    return value
 
 
 def prepare(activity: WebActivity, *, scope: str = "") -> PreparedActivity:
@@ -29,7 +55,7 @@ def prepare(activity: WebActivity, *, scope: str = "") -> PreparedActivity:
     task["notebook_task"] = {
         "notebook_path": f"../src/{notebook_path}",
         "base_parameters": {
-            "url": activity.url,
+            "url": _resolve_param_value(activity.url),
             "method": activity.method,
         },
     }

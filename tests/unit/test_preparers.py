@@ -372,9 +372,81 @@ class TestSwitchPreparer:
         prepared = prepare_activity(activity)
         assert "condition_task" in prepared.task
         cond = prepared.task["condition_task"]
-        assert "condition_expression" in cond
+        # Should use op/left/right format, not condition_expression
+        assert "op" in cond
+        assert cond["op"] == "EQUAL_TO"
+        assert "left" in cond
+        assert "right" in cond
+        assert cond["right"] == "full"
         assert "if_true" in cond
         assert "if_false" in cond
+
+    def test_prepare_switch_multi_case_unique_keys(self):
+        """Each nested condition node in a multi-case switch gets a unique task key."""
+        inner1 = WaitActivity(**_make_base("Wait1", "wait1"), wait_time_seconds=1)
+        inner2 = WaitActivity(**_make_base("Wait2", "wait2"), wait_time_seconds=2)
+        inner3 = WaitActivity(**_make_base("Wait3", "wait3"), wait_time_seconds=3)
+        default = WaitActivity(**_make_base("Default", "default_wait"), wait_time_seconds=5)
+        activity = SwitchActivity(
+            **_make_base("Route", "route"),
+            on_expression="@pipeline().parameters.env",
+            cases=[
+                SwitchCase(value="dev", activities=[inner1]),
+                SwitchCase(value="staging", activities=[inner2]),
+                SwitchCase(value="prod", activities=[inner3]),
+            ],
+            default_activities=[default],
+        )
+        prepared = prepare_activity(activity)
+        cond = prepared.task["condition_task"]
+        # Outermost condition: checks dev
+        assert cond["op"] == "EQUAL_TO"
+        assert cond["right"] == "dev"
+        # Second case is nested in if_false -- named after the inner case (staging)
+        assert len(cond["if_false"]) == 1
+        nested1 = cond["if_false"][0]
+        assert nested1["task_key"] == "route__case_staging"
+        nested1_cond = nested1["condition_task"]
+        assert nested1_cond["right"] == "staging"
+        # Third case: the prod condition is wrapped with its own key
+        assert len(nested1_cond["if_false"]) == 1
+        nested2 = nested1_cond["if_false"][0]
+        assert nested2["task_key"] == "route__case_prod"
+        nested2_cond = nested2["condition_task"]
+        assert nested2_cond["right"] == "prod"
+        # Default branch is the if_false of the innermost (prod) condition
+        assert len(nested2_cond["if_false"]) == 1  # default task
+        # All task keys are unique
+        all_keys = {"route", nested1["task_key"], nested2["task_key"]}
+        assert len(all_keys) == 3
+
+    def test_prepare_switch_resolves_variables_expression(self):
+        """Switch on @variables('x') resolves to a DAB task value ref."""
+        inner = WaitActivity(**_make_base("CaseWait", "case_wait"), wait_time_seconds=1)
+        activity = SwitchActivity(
+            **_make_base("Route", "route"),
+            on_expression="@variables('sourceType')",
+            cases=[SwitchCase(value="SQL", activities=[inner])],
+            default_activities=[],
+        )
+        prepared = prepare_activity(activity)
+        cond = prepared.task["condition_task"]
+        # Should be resolved to a DAB ref (fallback: variable name used as task key)
+        assert "tasks." in cond["left"]
+        assert "sourceType" in cond["left"]
+
+    def test_prepare_switch_resolves_pipeline_param(self):
+        """Switch on @pipeline().parameters.X resolves to a DAB job parameter ref."""
+        inner = WaitActivity(**_make_base("CaseWait", "case_wait"), wait_time_seconds=1)
+        activity = SwitchActivity(
+            **_make_base("Route", "route"),
+            on_expression="@pipeline().parameters.env",
+            cases=[SwitchCase(value="dev", activities=[inner])],
+            default_activities=[],
+        )
+        prepared = prepare_activity(activity)
+        cond = prepared.task["condition_task"]
+        assert cond["left"] == "{{job.parameters.env}}"
 
 
 class TestPlaceholderPreparer:

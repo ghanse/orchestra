@@ -11,6 +11,33 @@ from typing import Any
 
 from orchestra.models.adf_ast import AdfActivity, AdfDefinitions
 from orchestra.models.ir import Activity, SwitchActivity, SwitchCase, TranslationContext
+from orchestra.parser.expression_parser import resolve_expression, resolve_interpolated_string
+
+
+def _resolve_on_expression(on_expression: str, context: TranslationContext) -> str:
+    """Resolve the ``on`` expression to a DAB dynamic value ref.
+
+    Handles ``@variables('name')``, ``@pipeline().parameters.X``,
+    ``@{expr}`` interpolation, and other ADF expressions.
+
+    Args:
+        on_expression: Raw ADF on-expression string.
+        context: Translation context for resolving variables.
+
+    Returns:
+        Resolved DAB ref string, or the original if unresolvable.
+    """
+    # Try @{...} interpolation
+    if "@{" in on_expression:
+        return resolve_interpolated_string(on_expression, context)
+
+    # Try @expr style
+    if on_expression.startswith("@"):
+        result = resolve_expression(on_expression, context)
+        if result is not None and result.kind in ("dab_ref", "literal"):
+            return result.value
+
+    return on_expression
 
 
 def translate(
@@ -39,11 +66,14 @@ def translate(
     # Extract the switch expression from typeProperties.on.value
     on_raw = tp.get("on", {})
     if isinstance(on_raw, dict):
-        on_expression = on_raw.get("value", "")
+        on_expression_raw = on_raw.get("value", "")
     elif isinstance(on_raw, str):
-        on_expression = on_raw
+        on_expression_raw = on_raw
     else:
-        on_expression = str(on_raw) if on_raw else ""
+        on_expression_raw = str(on_raw) if on_raw else ""
+
+    # Resolve through expression parser (handles @variables, @pipeline, etc.)
+    on_expression = _resolve_on_expression(on_expression_raw, context)
 
     # Translate each case branch
     cases: list[SwitchCase] = []

@@ -39,6 +39,21 @@ _COMPARISON_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 
+# Matches: not(equals(a, b))  -- negated comparison
+_NOT_COMPARISON_RE = re.compile(
+    r"not\s*\(\s*(equals|greater|greaterOrEquals|less|lessOrEquals)\s*\((.+)\)\s*\)",
+    re.IGNORECASE | re.DOTALL,
+)
+
+# Negation map: when not() wraps a comparison, flip the operator
+_NEGATE_OP_MAP: dict[str, str] = {
+    "equals": "NOT_EQUAL",
+    "greater": "LESS_THAN_OR_EQUAL",
+    "greaterorequals": "LESS_THAN",
+    "less": "GREATER_THAN_OR_EQUAL",
+    "lessorequals": "GREATER_THAN",
+}
+
 
 def translate(
     activity: AdfActivity,
@@ -99,6 +114,9 @@ def _parse_condition(expression: dict[str, Any] | str, context: TranslationConte
     activity outputs are converted to task value references
     (``{{tasks.<key>.values.<field>}}``).
 
+    Handles ``@not(equals(a, b))`` by negating the inner comparison
+    operator (e.g., ``EQUAL_TO`` becomes ``NOT_EQUAL``).
+
     Args:
         expression: Raw ADF expression dict or string.
         context: Translation context for resolving variables.
@@ -116,10 +134,27 @@ def _parse_condition(expression: dict[str, Any] | str, context: TranslationConte
     if expr_str.startswith("@"):
         expr_str = expr_str[1:]
 
+    # Try not(comparison(...)) first -- negated comparison
+    m_not = _NOT_COMPARISON_RE.match(expr_str.strip())
+    if m_not:
+        inner_op_name = m_not.group(1).lower()
+        op = _NEGATE_OP_MAP.get(inner_op_name, "NOT_EQUAL")
+        args = _split_args(m_not.group(2).strip())
+        left = _resolve_operand(args[0], context) if len(args) > 0 else ""
+        right = _resolve_operand(args[1], context) if len(args) > 1 else ""
+        return op, left, right
+
     m = _COMPARISON_RE.match(expr_str.strip())
     if m:
         adf_op = m.group(1).lower()
         op = _OP_MAP.get(adf_op, adf_op.upper())
+
+        # Special case: not(single_arg) with no inner comparison
+        if adf_op == "not":
+            inner = m.group(2).strip()
+            resolved = _resolve_operand(inner, context)
+            return "NOT_EQUAL", resolved, ""
+
         args = _split_args(m.group(2).strip())
         left = _resolve_operand(args[0], context) if len(args) > 0 else ""
         right = _resolve_operand(args[1], context) if len(args) > 1 else ""
@@ -134,7 +169,8 @@ def _resolve_operand(operand: str, context: TranslationContext) -> str:
     """Convert an ADF expression operand to a Databricks task value reference.
 
     Uses the shared ``resolve_expression()`` for activity output, variable,
-    and pipeline property references.
+    and pipeline property references.  Also handles nested function calls
+    by trying to resolve the entire operand as an expression.
 
     Examples::
 
@@ -146,6 +182,7 @@ def _resolve_operand(operand: str, context: TranslationContext) -> str:
 
         0  -> 0   (literal)
         'active'  -> active  (string literal)
+        null  -> ""  (null literal)
 
     Args:
         operand: A single operand string from the parsed condition.
@@ -155,6 +192,10 @@ def _resolve_operand(operand: str, context: TranslationContext) -> str:
         A DAB dynamic value reference or literal string.
     """
     operand = operand.strip()
+
+    # Null literal -> empty string
+    if operand.lower() == "null":
+        return ""
 
     # String literal in single quotes
     if operand.startswith("'") and operand.endswith("'"):
@@ -172,7 +213,13 @@ def _resolve_operand(operand: str, context: TranslationContext) -> str:
     if result is not None and result.kind in ("dab_ref", "literal"):
         return result.value
 
-    # Unrecognised — return as-is
+    # If inner != operand (we unwrapped something), also try the original
+    if inner != operand:
+        result = resolve_expression("@" + operand, context)
+        if result is not None and result.kind in ("dab_ref", "literal"):
+            return result.value
+
+    # Unrecognised -- return as-is
     return operand
 
 
