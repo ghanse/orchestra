@@ -3,14 +3,11 @@
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING
 
 from orchestra.models.dab import DabNotebook, SecretInstruction, SetupTask
+from orchestra.models.ir import CopyActivity
 from orchestra.preparer.code_generator import generate_copy_notebook
 from orchestra.preparer.workflow_preparer import PreparedActivity, _build_common_task_fields
-
-if TYPE_CHECKING:
-    from orchestra.models.ir import CopyActivity
 
 # Source type strings that indicate file-based origins
 _FILE_SOURCE_TYPES = {
@@ -103,6 +100,42 @@ def prepare(activity: CopyActivity) -> PreparedActivity:
     """
     notebook_name = f"{activity.task_key}.py"
     notebook_path = f"notebooks/{notebook_name}"
+
+    src_props = activity.source_properties or {}
+    source_type = activity.source_type or ""
+
+    # Pre-compute the UC volume path so the code generator can embed it in
+    # the notebook as the default source_path instead of the raw abfss:// URL.
+    volume_name: str | None = None
+    volume_path: str | None = None
+    abfss_url: str | None = None
+    if source_type in _FILE_SOURCE_TYPES:
+        vol_info = _extract_volume_info(src_props)
+        if vol_info:
+            volume_name = _make_volume_name(activity.task_key)
+            abfss_url = f"abfss://{vol_info['container']}@{vol_info['storage_account']}"
+            if vol_info["path"]:
+                abfss_url += f"/{vol_info['path']}"
+            volume_path = f"/Volumes/${{var.catalog}}/${{var.schema}}/{volume_name}"
+            # Store the volume path in source_properties so the code generator
+            # can use it as the default source_path in the Auto Loader notebook.
+            src_props = {**src_props, "volume_path": volume_path}
+            activity = CopyActivity(
+                name=activity.name,
+                task_key=activity.task_key,
+                description=activity.description,
+                timeout_seconds=activity.timeout_seconds,
+                max_retries=activity.max_retries,
+                min_retry_interval_millis=activity.min_retry_interval_millis,
+                depends_on=activity.depends_on,
+                cluster=activity.cluster,
+                source_type=activity.source_type,
+                sink_type=activity.sink_type,
+                source_properties=src_props,
+                sink_properties=activity.sink_properties,
+                column_mapping=activity.column_mapping,
+            )
+
     content = generate_copy_notebook(activity)
 
     task = _build_common_task_fields(activity)
@@ -115,11 +148,14 @@ def prepare(activity: CopyActivity) -> PreparedActivity:
     if activity.sink_type:
         task["notebook_task"]["base_parameters"]["sink_type"] = activity.sink_type
 
-    # Pass through the resolved source path as a parameter
-    src_props = activity.source_properties or {}
-    resolved_path = src_props.get("resolved_path")
-    if resolved_path:
-        task["notebook_task"]["base_parameters"]["source_path"] = resolved_path
+    # Pass through the source path as a parameter: prefer the volume path,
+    # fall back to the resolved abfss:// path.
+    if volume_path:
+        task["notebook_task"]["base_parameters"]["source_path"] = volume_path
+    else:
+        resolved_path = src_props.get("resolved_path")
+        if resolved_path:
+            task["notebook_task"]["base_parameters"]["source_path"] = resolved_path
 
     notebooks = [
         DabNotebook(
@@ -130,7 +166,6 @@ def prepare(activity: CopyActivity) -> PreparedActivity:
 
     secrets: list[SecretInstruction] = []
     setup_tasks: list[SetupTask] = []
-    source_type = activity.source_type or ""
 
     if source_type in _DB_SOURCE_TYPES:
         scope = f"orchestra-{activity.task_key}"
@@ -160,32 +195,16 @@ def prepare(activity: CopyActivity) -> PreparedActivity:
             )
 
         # Create UC external volume setup task for file-based sources
-        vol_info = _extract_volume_info(src_props)
-        if vol_info:
-            volume_name = _make_volume_name(activity.task_key)
-            abfss_base = f"abfss://{vol_info['container']}@{vol_info['storage_account']}"
-            if vol_info["path"]:
-                abfss_base += f"/{vol_info['path']}"
+        if volume_name and abfss_url:
             setup_tasks.append(
                 SetupTask(
                     type="volume",
                     config={
                         "volume_name": volume_name,
-                        "storage_account": vol_info["storage_account"],
-                        "container": vol_info["container"],
-                        "path": vol_info["path"],
-                        "sql": (
-                            f"CREATE EXTERNAL VOLUME IF NOT EXISTS "
-                            f"${{var.catalog}}.${{var.schema}}.{volume_name}\n"
-                            f"LOCATION '{abfss_base}'"
-                        ),
-                        "volume_path": (f"/Volumes/${{var.catalog}}/${{var.schema}}/{volume_name}"),
+                        "volume_type": "EXTERNAL",
+                        "location": abfss_url,
                     },
                 )
-            )
-            # Also set the volume path as a parameter
-            task["notebook_task"]["base_parameters"]["volume_path"] = (
-                f"/Volumes/${{var.catalog}}/${{var.schema}}/{volume_name}"
             )
 
     return PreparedActivity(task=task, notebooks=notebooks, secrets=secrets, setup_tasks=setup_tasks)

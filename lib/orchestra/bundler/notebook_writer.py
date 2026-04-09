@@ -25,7 +25,10 @@ def write_notebooks(notebooks: list[DabNotebook], output_dir: Path) -> list[Path
     for nb in notebooks:
         dest = output_dir / nb.relative_path
         dest.parent.mkdir(parents=True, exist_ok=True)
-        content = nb.content if nb.content.endswith("\n") else nb.content + "\n"
-        dest.write_text(content, encoding="utf-8")
+        if nb.binary_content is not None:
+            dest.write_bytes(nb.binary_content)
+        else:
+            content = nb.content if nb.content.endswith("\n") else nb.content + "\n"
+            dest.write_text(content, encoding="utf-8")
         created.append(dest.resolve())
     return created

@@ -90,8 +90,13 @@ def prepare(activity: NotebookActivity) -> PreparedActivity:
     sanitized = activity.task_key
     notebook_rel_path = f"notebooks/{sanitized}.py"
 
-    # Generate placeholder notebook with export instructions
-    content = _notebook_placeholder(activity.notebook_path, activity.name, f"{sanitized}.py")
+    # Try to download the actual notebook from the workspace
+    from orchestra.preparer.workspace_downloader import download_notebook
+
+    content = download_notebook(activity.notebook_path)
+    if content is None:
+        # Fall back to placeholder with export instructions
+        content = _notebook_placeholder(activity.notebook_path, activity.name, f"{sanitized}.py")
 
     task = _build_common_task_fields(activity)
     task["notebook_task"] = {

@@ -54,7 +54,14 @@ def prepare(activity: SparkPythonActivity) -> PreparedActivity:
         filename = f"{activity.task_key}.py"
     script_rel_path = f"scripts/{filename}"
 
-    content = _python_placeholder(original_path, activity.name)
+    # Try to download the actual Python file from DBFS
+    from orchestra.preparer.workspace_downloader import download_dbfs_file
+
+    downloaded = download_dbfs_file(original_path)
+    if downloaded is not None:
+        content = downloaded.decode("utf-8")
+    else:
+        content = _python_placeholder(original_path, activity.name)
     notebooks = [
         DabNotebook(
             relative_path=script_rel_path,

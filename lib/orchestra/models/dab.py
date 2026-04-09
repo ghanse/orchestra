@@ -23,11 +23,14 @@ class DabNotebook:
         relative_path: Path relative to the bundle root (e.g. ``"src/copy_data.py"``).
         content: Full notebook source content.
         language: Notebook language (``"python"``, ``"sql"``, ``"scala"``, ``"r"``).
+        binary_content: Raw bytes for binary files (e.g. JARs).  When set,
+            the notebook writer writes these bytes instead of ``content``.
     """
 
     relative_path: str
-    content: str
+    content: str = ""
     language: str = "python"
+    binary_content: bytes | None = None
 
 
 # ---------------------------------------------------------------------------

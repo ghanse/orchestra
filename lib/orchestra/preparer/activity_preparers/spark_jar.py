@@ -51,30 +51,44 @@ def prepare(activity: SparkJarActivity) -> PreparedActivity:
     """
     task = _build_common_task_fields(activity)
 
-    # Rewrite library paths to bundle-relative
+    # Rewrite library paths to bundle-relative and try downloading JARs
+    from orchestra.preparer.workspace_downloader import download_dbfs_file
+
     rewritten_libraries: list[dict] = []
     notebooks: list[DabNotebook] = []
+    downloaded_any = False
     if activity.libraries:
         for lib in activity.libraries:
             rewritten_lib = {}
             for key, path in lib.items():
                 if isinstance(path, str) and ("dbfs:" in path or "/" in path):
-                    # Extract filename from path
                     filename = path.rsplit("/", 1)[-1] if "/" in path else path
                     rewritten_lib[key] = f"../lib/{filename}"
+                    # Try to download the JAR from DBFS
+                    if key == "jar":
+                        jar_content = download_dbfs_file(path)
+                        if jar_content is not None:
+                            downloaded_any = True
+                            notebooks.append(
+                                DabNotebook(
+                                    relative_path=f"lib/{filename}",
+                                    binary_content=jar_content,
+                                )
+                            )
                 else:
                     rewritten_lib[key] = path
             rewritten_libraries.append(rewritten_lib)
 
-        # Create a placeholder readme for the JAR files
-        placeholder_content = _jar_placeholder(activity.libraries, activity.name)
-        notebooks.append(
-            DabNotebook(
-                relative_path=f"lib/{activity.task_key}_README.txt",
-                content=placeholder_content,
-                language="python",
+        # Create a placeholder readme if we didn't download all JARs
+        if not downloaded_any:
+            placeholder_content = _jar_placeholder(activity.libraries, activity.name)
+            notebooks.append(
+                DabNotebook(
+                    relative_path=f"lib/{activity.task_key}_README.txt",
+                    content=placeholder_content,
+                    language="python",
+                )
             )
-        )
 
     task["spark_jar_task"] = {
         "main_class_name": activity.main_class_name,

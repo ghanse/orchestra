@@ -447,10 +447,15 @@ def _generate_autoloader_body(activity: CopyActivity) -> str:
     src_props = activity.source_properties or {}
     sink_props = activity.sink_properties or {}
 
-    # Use the resolved path from dataset if available, otherwise fall back
+    # Prefer the UC volume path when available (set by the copy preparer
+    # when an external volume setup task is created); otherwise fall back
+    # to the resolved abfss:// path or raw dataset path.
     source_path = src_props.get(
-        "resolved_path",
-        src_props.get("path", src_props.get("filePath", "/mnt/source")),
+        "volume_path",
+        src_props.get(
+            "resolved_path",
+            src_props.get("path", src_props.get("filePath", "/mnt/source")),
+        ),
     )
     sink_table = sink_props.get("table", sink_props.get("tableName", f"{activity.task_key}_raw"))
     checkpoint = f"/tmp/checkpoints/{activity.task_key}"
