@@ -8,7 +8,6 @@ from typing import Any
 import pytest
 
 from orchestra.models.ir import (
-    Activity,
     AppendVariableActivity,
     CopyActivity,
     DeleteActivity,
@@ -16,7 +15,6 @@ from orchestra.models.ir import (
     ExecutePipelineActivity,
     FilterActivity,
     ForEachActivity,
-    IfConditionActivity,
     LookupActivity,
     NotebookActivity,
     Pipeline,
@@ -36,7 +34,6 @@ from orchestra.preparer.workflow_preparer import (
     prepare_activity,
     prepare_workflow,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers

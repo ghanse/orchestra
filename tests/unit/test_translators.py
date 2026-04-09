@@ -5,8 +5,6 @@ from __future__ import annotations
 from types import MappingProxyType
 from typing import Any
 
-import pytest
-
 from orchestra.models.adf_ast import (
     AdfActivity,
     AdfDatasetReference,
@@ -16,11 +14,9 @@ from orchestra.models.adf_ast import (
     AdfPolicy,
 )
 from orchestra.models.ir import (
-    Activity,
     AppendVariableActivity,
     CopyActivity,
     DeleteActivity,
-    Dependency,
     ExecutePipelineActivity,
     FilterActivity,
     ForEachActivity,
@@ -39,7 +35,6 @@ from orchestra.models.ir import (
     WebActivity,
 )
 from orchestra.translator.engine import translate_pipeline
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -501,7 +496,10 @@ class TestIfConditionTranslator:
             if_false_activities=[false_act],
         )
         result, ctx = translate(
-            activity, _base_kwargs("Branch"), _context(), _EMPTY_DEFS,
+            activity,
+            _base_kwargs("Branch"),
+            _context(),
+            _EMPTY_DEFS,
             translate_activities_fn=_mock_translate,
         )
         assert isinstance(result, IfConditionActivity)
@@ -582,7 +580,10 @@ class TestSwitchTranslator:
             },
         )
         result, ctx = translate(
-            activity, _base_kwargs("Route"), _context(), _EMPTY_DEFS,
+            activity,
+            _base_kwargs("Route"),
+            _context(),
+            _EMPTY_DEFS,
             translate_activities_fn=_mock_translate,
         )
         assert isinstance(result, SwitchActivity)

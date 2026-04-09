@@ -21,7 +21,6 @@ import argparse
 import json
 import logging
 import re
-import sys
 from collections import defaultdict
 from dataclasses import asdict
 from pathlib import Path
@@ -49,7 +48,7 @@ from orchestra.models.ir import (
     UnsupportedActivity,
     WaitActivity,
 )
-from orchestra.parser.adf_loader import AGENTIC_TYPES, DETERMINISTIC_TYPES, classify_activity
+from orchestra.parser.adf_loader import classify_activity
 from orchestra.translator.activity_translators import (
     append_variable,
     copy,
@@ -136,23 +135,25 @@ def translate_pipeline(pipeline: AdfPipeline, definitions: AdfDefinitions) -> Tr
             deterministic_count += 1
         elif strategy is TranslationStrategy.AGENTIC:
             agentic_count += 1
-            gaps.append(AgenticGap(
-                activity_name=adf_activity.name,
-                activity_type=adf_activity.type,
-                recommended_skill=skill,
-                raw_definition=adf_activity.type_properties,
-            ))
+            gaps.append(
+                AgenticGap(
+                    activity_name=adf_activity.name,
+                    activity_type=adf_activity.type,
+                    recommended_skill=skill,
+                    raw_definition=adf_activity.type_properties,
+                )
+            )
         else:
             unsupported_count += 1
-            gaps.append(AgenticGap(
-                activity_name=adf_activity.name,
-                activity_type=adf_activity.type,
-                recommended_skill=None,
-                raw_definition=adf_activity.type_properties,
-            ))
-            warnings.append(
-                f"Activity '{adf_activity.name}' (type={adf_activity.type}) has no translation path."
+            gaps.append(
+                AgenticGap(
+                    activity_name=adf_activity.name,
+                    activity_type=adf_activity.type,
+                    recommended_skill=None,
+                    raw_definition=adf_activity.type_properties,
+                )
             )
+            warnings.append(f"Activity '{adf_activity.name}' (type={adf_activity.type}) has no translation path.")
 
     # Build parameters dict from pipeline definition
     parameters: dict[str, Any] = {}
@@ -210,7 +211,10 @@ def _dispatch_activity(
         # ---------------------------------------------------------------
         case "ForEach":
             result, context = for_each.translate(
-                activity, base_kwargs, context, definitions,
+                activity,
+                base_kwargs,
+                context,
+                definitions,
                 translate_activities_fn=_translate_activity_list,
             )
             context = context.with_activity(activity.name, result)
@@ -218,7 +222,10 @@ def _dispatch_activity(
 
         case "IfCondition":
             result, context = if_condition.translate(
-                activity, base_kwargs, context, definitions,
+                activity,
+                base_kwargs,
+                context,
+                definitions,
                 translate_activities_fn=_translate_activity_list,
             )
             context = context.with_activity(activity.name, result)
@@ -226,21 +233,30 @@ def _dispatch_activity(
 
         case "SetVariable":
             result, context = set_variable.translate(
-                activity, base_kwargs, context, definitions,
+                activity,
+                base_kwargs,
+                context,
+                definitions,
             )
             context = context.with_activity(activity.name, result)
             return result, context
 
         case "AppendVariable":
             result, context = append_variable.translate(
-                activity, base_kwargs, context, definitions,
+                activity,
+                base_kwargs,
+                context,
+                definitions,
             )
             context = context.with_activity(activity.name, result)
             return result, context
 
         case "Switch":
             result, context = switch.translate(
-                activity, base_kwargs, context, definitions,
+                activity,
+                base_kwargs,
+                context,
+                definitions,
                 translate_activities_fn=_translate_activity_list,
             )
             context = context.with_activity(activity.name, result)
@@ -400,10 +416,12 @@ def _build_base_kwargs(activity: AdfActivity, definitions: AdfDefinitions) -> di
         depends_on = []
         for dep in activity.depends_on:
             outcome = dep.dependency_conditions[0] if dep.dependency_conditions else None
-            depends_on.append(Dependency(
-                task_key=_sanitize_task_key(dep.activity),
-                outcome=outcome,
-            ))
+            depends_on.append(
+                Dependency(
+                    task_key=_sanitize_task_key(dep.activity),
+                    outcome=outcome,
+                )
+            )
 
     # Cluster config from linked service
     cluster: dict[str, Any] | None = None
@@ -498,6 +516,147 @@ def _extract_cluster_config(ls_properties: dict[str, Any]) -> dict[str, Any] | N
 
 
 # ---------------------------------------------------------------------------
+# Serialization helpers
+# ---------------------------------------------------------------------------
+
+
+def _pipeline_to_dict(pipeline: Pipeline) -> dict[str, Any]:
+    """Serialise a Pipeline IR to a JSON-friendly dictionary.
+
+    Args:
+        pipeline: The translated pipeline IR.
+
+    Returns:
+        Dictionary suitable for ``json.dumps``.
+    """
+    tasks: list[dict[str, Any]] = []
+    for task in pipeline.tasks:
+        task_dict: dict[str, Any] = {
+            "name": task.name,
+            "task_key": task.task_key,
+            "type": type(task).__name__,
+        }
+        if task.description:
+            task_dict["description"] = task.description
+        if task.timeout_seconds:
+            task_dict["timeout_seconds"] = task.timeout_seconds
+        if task.max_retries:
+            task_dict["max_retries"] = task.max_retries
+        if task.depends_on:
+            task_dict["depends_on"] = [{"task_key": d.task_key, "outcome": d.outcome} for d in task.depends_on]
+        if task.cluster:
+            task_dict["cluster"] = task.cluster
+
+        # Type-specific fields
+        extra = _activity_extra_fields(task)
+        task_dict.update(extra)
+        tasks.append(task_dict)
+
+    return {
+        "name": pipeline.name,
+        "parameters": pipeline.parameters,
+        "schedule": pipeline.schedule,
+        "tags": pipeline.tags,
+        "tasks": tasks,
+    }
+
+
+def _activity_extra_fields(activity: Activity) -> dict[str, Any]:
+    """Extract type-specific fields from an Activity subclass.
+
+    Args:
+        activity: Any Activity IR node.
+
+    Returns:
+        Dictionary of extra fields beyond the base Activity.
+    """
+    from orchestra.models.ir import (
+        AppendVariableActivity,
+        CopyActivity,
+        DeleteActivity,
+        ExecutePipelineActivity,
+        FilterActivity,
+        NotebookActivity,
+        RunJobActivity,
+        SparkJarActivity,
+        SparkPythonActivity,
+        WebActivity,
+    )
+
+    extra: dict[str, Any] = {}
+
+    match activity:
+        case NotebookActivity():
+            extra["notebook_path"] = activity.notebook_path
+            if activity.base_parameters:
+                extra["base_parameters"] = activity.base_parameters
+        case CopyActivity():
+            extra["source_type"] = activity.source_type
+            extra["sink_type"] = activity.sink_type
+            if activity.source_properties:
+                extra["source_properties"] = activity.source_properties
+            if activity.sink_properties:
+                extra["sink_properties"] = activity.sink_properties
+            if activity.column_mapping:
+                extra["column_mapping"] = activity.column_mapping
+        case ForEachActivity():
+            extra["items_expression"] = activity.items_expression
+            extra["concurrency"] = activity.concurrency
+        case IfConditionActivity():
+            extra["op"] = activity.op
+            extra["left"] = activity.left
+            extra["right"] = activity.right
+        case SetVariableActivity():
+            extra["variable_name"] = activity.variable_name
+            extra["variable_value"] = activity.variable_value
+        case FilterActivity():
+            extra["items_expression"] = activity.items_expression
+            extra["condition_expression"] = activity.condition_expression
+        case AppendVariableActivity():
+            extra["variable_name"] = activity.variable_name
+            extra["append_value"] = activity.append_value
+        case SwitchActivity():
+            extra["on_expression"] = activity.on_expression
+            extra["cases"] = [{"value": c.value, "activities": len(c.activities)} for c in activity.cases]
+            extra["default_activities_count"] = len(activity.default_activities)
+        case WaitActivity():
+            extra["wait_time_seconds"] = activity.wait_time_seconds
+        case SparkJarActivity():
+            extra["main_class_name"] = activity.main_class_name
+            if activity.parameters:
+                extra["parameters"] = activity.parameters
+            if activity.libraries:
+                extra["libraries"] = activity.libraries
+        case SparkPythonActivity():
+            extra["python_file"] = activity.python_file
+            if activity.parameters:
+                extra["parameters"] = activity.parameters
+        case WebActivity():
+            extra["url"] = activity.url
+            extra["method"] = activity.method
+        case DeleteActivity():
+            extra["dataset_name"] = activity.dataset_name
+            extra["recursive"] = activity.recursive
+        case ExecutePipelineActivity():
+            extra["pipeline_name"] = activity.pipeline_name
+            extra["wait_on_completion"] = activity.wait_on_completion
+            if activity.parameters:
+                extra["parameters"] = activity.parameters
+        case RunJobActivity():
+            extra["job_name"] = activity.job_name
+            if activity.existing_job_id:
+                extra["existing_job_id"] = activity.existing_job_id
+        case PlaceholderActivity():
+            extra["original_type"] = activity.original_type
+            extra["comment"] = activity.comment
+        case UnsupportedActivity():
+            extra["original_type"] = activity.original_type
+            extra["reason"] = activity.reason
+
+    return extra
+
+
+# ---------------------------------------------------------------------------
 # CLI entry point
 # ---------------------------------------------------------------------------
 
@@ -565,151 +724,9 @@ if __name__ == "__main__":
 
     # Summary
     total = total_det + total_agentic + total_unsupported
-    print(f"\nTranslation Summary")
-    print(f"===================")
+    print("\nTranslation Summary")
+    print("===================")
     print(f"Deterministic:    {total_det}")
     print(f"Agentic:          {total_agentic}")
     print(f"Unsupported:      {total_unsupported}")
     print(f"Total:            {total}")
-
-
-def _pipeline_to_dict(pipeline: Pipeline) -> dict[str, Any]:
-    """Serialise a Pipeline IR to a JSON-friendly dictionary.
-
-    Args:
-        pipeline: The translated pipeline IR.
-
-    Returns:
-        Dictionary suitable for ``json.dumps``.
-    """
-    tasks: list[dict[str, Any]] = []
-    for task in pipeline.tasks:
-        task_dict: dict[str, Any] = {
-            "name": task.name,
-            "task_key": task.task_key,
-            "type": type(task).__name__,
-        }
-        if task.description:
-            task_dict["description"] = task.description
-        if task.timeout_seconds:
-            task_dict["timeout_seconds"] = task.timeout_seconds
-        if task.max_retries:
-            task_dict["max_retries"] = task.max_retries
-        if task.depends_on:
-            task_dict["depends_on"] = [
-                {"task_key": d.task_key, "outcome": d.outcome} for d in task.depends_on
-            ]
-        if task.cluster:
-            task_dict["cluster"] = task.cluster
-
-        # Type-specific fields
-        extra = _activity_extra_fields(task)
-        task_dict.update(extra)
-        tasks.append(task_dict)
-
-    return {
-        "name": pipeline.name,
-        "parameters": pipeline.parameters,
-        "schedule": pipeline.schedule,
-        "tags": pipeline.tags,
-        "tasks": tasks,
-    }
-
-
-def _activity_extra_fields(activity: Activity) -> dict[str, Any]:
-    """Extract type-specific fields from an Activity subclass.
-
-    Args:
-        activity: Any Activity IR node.
-
-    Returns:
-        Dictionary of extra fields beyond the base Activity.
-    """
-    from orchestra.models.ir import (
-        AppendVariableActivity,
-        CopyActivity,
-        DeleteActivity,
-        ExecutePipelineActivity,
-        FilterActivity,
-        NotebookActivity,
-        RunJobActivity,
-        SparkJarActivity,
-        SparkPythonActivity,
-        SwitchCase,
-        WebActivity,
-    )
-
-    extra: dict[str, Any] = {}
-
-    match activity:
-        case NotebookActivity():
-            extra["notebook_path"] = activity.notebook_path
-            if activity.base_parameters:
-                extra["base_parameters"] = activity.base_parameters
-        case CopyActivity():
-            extra["source_type"] = activity.source_type
-            extra["sink_type"] = activity.sink_type
-            if activity.source_properties:
-                extra["source_properties"] = activity.source_properties
-            if activity.sink_properties:
-                extra["sink_properties"] = activity.sink_properties
-            if activity.column_mapping:
-                extra["column_mapping"] = activity.column_mapping
-        case ForEachActivity():
-            extra["items_expression"] = activity.items_expression
-            extra["concurrency"] = activity.concurrency
-        case IfConditionActivity():
-            extra["op"] = activity.op
-            extra["left"] = activity.left
-            extra["right"] = activity.right
-        case SetVariableActivity():
-            extra["variable_name"] = activity.variable_name
-            extra["variable_value"] = activity.variable_value
-        case FilterActivity():
-            extra["items_expression"] = activity.items_expression
-            extra["condition_expression"] = activity.condition_expression
-        case AppendVariableActivity():
-            extra["variable_name"] = activity.variable_name
-            extra["append_value"] = activity.append_value
-        case SwitchActivity():
-            extra["on_expression"] = activity.on_expression
-            extra["cases"] = [
-                {"value": c.value, "activities": len(c.activities)}
-                for c in activity.cases
-            ]
-            extra["default_activities_count"] = len(activity.default_activities)
-        case WaitActivity():
-            extra["wait_time_seconds"] = activity.wait_time_seconds
-        case SparkJarActivity():
-            extra["main_class_name"] = activity.main_class_name
-            if activity.parameters:
-                extra["parameters"] = activity.parameters
-            if activity.libraries:
-                extra["libraries"] = activity.libraries
-        case SparkPythonActivity():
-            extra["python_file"] = activity.python_file
-            if activity.parameters:
-                extra["parameters"] = activity.parameters
-        case WebActivity():
-            extra["url"] = activity.url
-            extra["method"] = activity.method
-        case DeleteActivity():
-            extra["dataset_name"] = activity.dataset_name
-            extra["recursive"] = activity.recursive
-        case ExecutePipelineActivity():
-            extra["pipeline_name"] = activity.pipeline_name
-            extra["wait_on_completion"] = activity.wait_on_completion
-            if activity.parameters:
-                extra["parameters"] = activity.parameters
-        case RunJobActivity():
-            extra["job_name"] = activity.job_name
-            if activity.existing_job_id:
-                extra["existing_job_id"] = activity.existing_job_id
-        case PlaceholderActivity():
-            extra["original_type"] = activity.original_type
-            extra["comment"] = activity.comment
-        case UnsupportedActivity():
-            extra["original_type"] = activity.original_type
-            extra["reason"] = activity.reason
-
-    return extra

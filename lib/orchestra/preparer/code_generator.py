@@ -310,7 +310,9 @@ def generate_wait_notebook(activity: WaitActivity) -> str:
         import time
 
         # Parameters
-        wait_seconds = int(dbutils.widgets.get("wait_seconds")) if dbutils.widgets.get("wait_seconds") else {activity.wait_time_seconds}
+        default_wait = {activity.wait_time_seconds}
+        param = dbutils.widgets.get("wait_seconds")
+        wait_seconds = int(param) if param else default_wait
 
         print(f"Waiting for {{wait_seconds}} seconds...")
         time.sleep(wait_seconds)

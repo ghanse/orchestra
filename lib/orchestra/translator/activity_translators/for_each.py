@@ -63,7 +63,11 @@ def translate(
     foreach_activity = ForEachActivity(
         **base_kwargs,
         items_expression=items_expression,
-        child_activity=inner_activities[0] if len(inner_activities) == 1 else inner_activities[0] if inner_activities else Activity(name="noop", task_key="noop"),
+        child_activity=inner_activities[0]
+        if len(inner_activities) == 1
+        else inner_activities[0]
+        if inner_activities
+        else Activity(name="noop", task_key="noop"),
         concurrency=batch_count,
     )
 

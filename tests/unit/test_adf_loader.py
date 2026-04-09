@@ -2,14 +2,8 @@
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
-
-import pytest
-
 from orchestra.models.adf_ast import (
     AdfDefinitions,
-    AdfPipeline,
     TranslationStrategy,
 )
 from orchestra.parser.adf_loader import (
@@ -21,7 +15,6 @@ from orchestra.parser.adf_loader import (
     classify_activity,
     load_adf_definitions,
 )
-
 
 # ---------------------------------------------------------------------------
 # load_adf_definitions

@@ -35,9 +35,7 @@ def translate(
 
     # The query can be in source.query, source.sqlReaderQuery, or source.sqlReaderStoredProcedureName
     source_query = (
-        source_raw.get("query")
-        or source_raw.get("sqlReaderQuery")
-        or source_raw.get("sqlReaderStoredProcedureName")
+        source_raw.get("query") or source_raw.get("sqlReaderQuery") or source_raw.get("sqlReaderStoredProcedureName")
     )
 
     first_row_only = tp.get("firstRowOnly", True)

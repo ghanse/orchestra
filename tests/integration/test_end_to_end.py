@@ -8,7 +8,6 @@ invokes the orchestra skills.
 from __future__ import annotations
 
 import ast
-from pathlib import Path
 
 import pytest
 import yaml
@@ -18,15 +17,12 @@ from orchestra.models.adf_ast import AdfDefinitions, TranslationStrategy
 from orchestra.models.ir import (
     CopyActivity,
     ForEachActivity,
-    IfConditionActivity,
-    Pipeline,
     PlaceholderActivity,
     SwitchActivity,
 )
-from orchestra.parser.adf_loader import build_inventory, load_adf_definitions
+from orchestra.parser.adf_loader import build_inventory
 from orchestra.preparer.workflow_preparer import PreparedWorkflow, prepare_workflow
 from orchestra.translator.engine import translate_pipeline
-
 
 # ---------------------------------------------------------------------------
 # TestTranslateAllPipelines — simulates "translate all pipelines"
@@ -284,8 +280,7 @@ class TestBundleOutput:
                     ast.parse(python_code)
                 except SyntaxError as exc:
                     pytest.fail(
-                        f"Notebook {nb_file.relative_to(out)} in pipeline "
-                        f"'{pipeline.name}' has invalid Python: {exc}"
+                        f"Notebook {nb_file.relative_to(out)} in pipeline '{pipeline.name}' has invalid Python: {exc}"
                     )
 
     def test_setup_notebooks_generated(self, adf_definitions, pipeline_by_name, tmp_path):
