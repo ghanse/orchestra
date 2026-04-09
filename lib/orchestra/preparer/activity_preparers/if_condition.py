@@ -1,4 +1,18 @@
-"""Preparer for IfConditionActivity -> condition_task dict."""
+"""Preparer for IfConditionActivity -> condition_task dict.
+
+Emits the structured ``condition_task`` format with ``op``, ``left``, and
+``right`` fields as required by Databricks Jobs:
+
+.. code-block:: yaml
+
+    condition_task:
+      op: GREATER_THAN
+      left: "{{tasks.CheckDataExists.values.cnt}}"
+      right: "0"
+
+References:
+- https://docs.databricks.com/aws/en/jobs/conditional-tasks
+"""
 
 from __future__ import annotations
 
@@ -17,6 +31,7 @@ def prepare(activity: IfConditionActivity, *, scope: str = "") -> PreparedActivi
 
     Args:
         activity: The translated if-condition activity from the IR.
+        scope: Secret scope name passed through to child preparers.
 
     Returns:
         A PreparedActivity with the condition_task and aggregated artifacts
@@ -44,14 +59,15 @@ def prepare(activity: IfConditionActivity, *, scope: str = "") -> PreparedActivi
         all_secrets.extend(prepared.secrets)
         all_setup_tasks.extend(prepared.setup_tasks)
 
-    # Build condition expression from the op/left/right fields
-    condition_expr = f"{activity.left} {activity.op} {activity.right}"
-
     task["condition_task"] = {
-        "condition_expression": condition_expr,
-        "if_true": if_true_tasks,
-        "if_false": if_false_tasks,
+        "op": activity.op,
+        "left": activity.left,
+        "right": activity.right,
     }
+    if if_true_tasks:
+        task["condition_task"]["if_true"] = if_true_tasks
+    if if_false_tasks:
+        task["condition_task"]["if_false"] = if_false_tasks
 
     return PreparedActivity(
         task=task,

@@ -2,6 +2,13 @@
 
 IfCondition is a control-flow container that threads context through both
 branch translations.  Returns a ``(Activity, TranslationContext)`` tuple.
+
+The ADF expression is parsed into a structured ``(op, left, right)`` triple.
+Operands that reference activity outputs are converted to Databricks task
+value references (``{{tasks.<key>.values.<field>}}``).
+
+References:
+- https://docs.databricks.com/aws/en/jobs/conditional-tasks
 """
 
 from __future__ import annotations
@@ -12,10 +19,29 @@ from typing import Any
 from orchestra.models.adf_ast import AdfActivity, AdfDefinitions
 from orchestra.models.ir import Activity, IfConditionActivity, TranslationContext
 
-# Common ADF comparison functions
+# ---------------------------------------------------------------------------
+# ADF comparison function -> Databricks condition_task op mapping
+# ---------------------------------------------------------------------------
+
+_OP_MAP: dict[str, str] = {
+    "equals": "EQUAL_TO",
+    "greater": "GREATER_THAN",
+    "greaterorequals": "GREATER_THAN_OR_EQUAL",
+    "less": "LESS_THAN",
+    "lessorequals": "LESS_THAN_OR_EQUAL",
+    "not": "NOT_EQUAL",
+}
+
+# Matches: equals(...), greater(...), etc.
 _COMPARISON_RE = re.compile(
-    r"""(equals|greater|greaterOrEquals|less|lessOrEquals|not|and|or|contains|startsWith|endsWith|empty)\s*\((.+)\)""",
+    r"(equals|greater|greaterOrEquals|less|lessOrEquals|not)\s*\((.+)\)",
     re.IGNORECASE | re.DOTALL,
+)
+
+# Matches: activity('Name').output.firstRow.col  (and variants)
+_ACTIVITY_OUTPUT_RE = re.compile(
+    r"activity\(\s*'([^']+)'\s*\)\.output(?:\.(.+))?",
+    re.IGNORECASE,
 )
 
 
@@ -73,15 +99,16 @@ def translate(
 def _parse_condition(expression: dict[str, Any] | str) -> tuple[str, str, str]:
     """Parse an ADF IfCondition expression into ``(op, left, right)``.
 
-    ADF expressions use a ``{"type": "Expression", "value": "@equals(a, b)"}``
-    format.  This function extracts the comparison operator and operands.
+    The operator is mapped to a Databricks ``condition_task`` operator
+    (``EQUAL_TO``, ``GREATER_THAN``, etc.).  Operands that reference ADF
+    activity outputs are converted to task value references
+    (``{{tasks.<key>.values.<field>}}``).
 
     Args:
         expression: Raw ADF expression dict or string.
 
     Returns:
-        Tuple of ``(operator_name, left_operand, right_operand)``.
-        For unary operators, *right* is an empty string.
+        Tuple of ``(databricks_op, left_operand, right_operand)``.
     """
     expr_str = ""
     if isinstance(expression, dict):
@@ -95,15 +122,72 @@ def _parse_condition(expression: dict[str, Any] | str) -> tuple[str, str, str]:
 
     m = _COMPARISON_RE.match(expr_str.strip())
     if m:
-        op = m.group(1)
-        args_str = m.group(2).strip()
-        args = _split_args(args_str)
-        left = args[0] if len(args) > 0 else ""
-        right = args[1] if len(args) > 1 else ""
+        adf_op = m.group(1).lower()
+        op = _OP_MAP.get(adf_op, adf_op.upper())
+        args = _split_args(m.group(2).strip())
+        left = _resolve_operand(args[0]) if len(args) > 0 else ""
+        right = _resolve_operand(args[1]) if len(args) > 1 else ""
         return op, left, right
 
-    # Fallback: return the whole expression as left with unknown op
-    return "unknown", expr_str, ""
+    # Fallback: treat the whole expression as a truthy check
+    resolved = _resolve_operand(expr_str)
+    return "NOT_EQUAL", resolved, "0"
+
+
+def _resolve_operand(operand: str) -> str:
+    """Convert an ADF expression operand to a Databricks task value reference.
+
+    Examples::
+
+        activity('Lookup').output.firstRow.cnt
+            -> {{tasks.Lookup.values.cnt}}
+
+        activity('Lookup').output.value
+            -> {{tasks.Lookup.values.result}}
+
+        0  -> 0   (literal)
+        'active'  -> active  (string literal)
+
+    Args:
+        operand: A single operand string from the parsed condition.
+
+    Returns:
+        A DAB dynamic value reference or literal string.
+    """
+    operand = operand.strip()
+
+    # String literal in single quotes
+    if operand.startswith("'") and operand.endswith("'"):
+        return operand[1:-1]
+
+    # Numeric literal
+    if operand.lstrip("-").replace(".", "", 1).isdigit():
+        return operand
+
+    # Activity output reference
+    m = _ACTIVITY_OUTPUT_RE.match(operand)
+    if m:
+        activity_name = m.group(1)
+        # Sanitize to task_key
+        task_key = re.sub(r"[^a-zA-Z0-9_-]", "_", activity_name)
+        task_key = re.sub(r"_+", "_", task_key).strip("_") or "unnamed"
+
+        property_path = m.group(2) or ""
+        # Extract the deepest field name for the task value key
+        # e.g., "firstRow.cnt" -> "cnt", "value" -> "result"
+        if property_path:
+            parts = property_path.split(".")
+            # Skip "firstRow" — it's a Lookup wrapper, the actual value key is the column
+            field = parts[-1] if parts[-1] != "firstRow" else "result"
+            if field == "value":
+                field = "result"
+        else:
+            field = "result"
+
+        return "{{" + f"tasks.{task_key}.values.{field}" + "}}"
+
+    # Unrecognised — return as-is
+    return operand
 
 
 def _split_args(args_str: str) -> list[str]:

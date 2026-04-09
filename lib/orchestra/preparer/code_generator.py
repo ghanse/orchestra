@@ -104,9 +104,15 @@ def generate_lookup_notebook(activity: LookupActivity, *, scope: str = "") -> st
             else:
                 output = [row.asDict() for row in df.collect()]
 
-            # Set task values so downstream tasks (e.g. ForEach) can reference
-            # them via {{{{tasks.{activity.task_key}.values.result}}}}.
+            # Set task values so downstream tasks can reference them via
+            # {{{{tasks.{activity.task_key}.values.<key>}}}}.
+            # The full result is stored under "result".  For firstRow lookups,
+            # each column is also stored as an individual task value so
+            # condition_task can reference e.g. {{{{tasks.{activity.task_key}.values.cnt}}}}.
             dbutils.jobs.taskValues.set(key="result", value=output)
+            if first_row_only and isinstance(output, dict):
+                for col_name, col_value in output.items():
+                    dbutils.jobs.taskValues.set(key=col_name, value=col_value)
             dbutils.notebook.exit(json.dumps(output))
         """)
     else:
@@ -126,9 +132,12 @@ def generate_lookup_notebook(activity: LookupActivity, *, scope: str = "") -> st
             else:
                 output = [row.asDict() for row in df.collect()]
 
-            # Set task values so downstream tasks (e.g. ForEach) can reference
-            # them via {{{{tasks.{activity.task_key}.values.result}}}}.
+            # Set task values so downstream tasks can reference them via
+            # {{{{tasks.{activity.task_key}.values.<key>}}}}.
             dbutils.jobs.taskValues.set(key="result", value=output)
+            if first_row_only and isinstance(output, dict):
+                for col_name, col_value in output.items():
+                    dbutils.jobs.taskValues.set(key=col_name, value=col_value)
             dbutils.notebook.exit(json.dumps(output))
         """)
 

@@ -503,7 +503,7 @@ class TestIfConditionTranslator:
             translate_activities_fn=_mock_translate,
         )
         assert isinstance(result, IfConditionActivity)
-        assert result.op == "equals"
+        assert result.op == "EQUAL_TO"
         assert len(result.if_true_activities) == 1
         assert len(result.if_false_activities) == 1
 
@@ -517,8 +517,8 @@ class TestIfConditionTranslator:
         )
         result, ctx = translate(activity, _base_kwargs("Check_Count"), _context(), _EMPTY_DEFS)
         assert isinstance(result, IfConditionActivity)
-        assert result.op == "greater"
-        assert "rowsCopied" in result.left
+        assert result.op == "GREATER_THAN"
+        assert "tasks.Copy.values.rowsCopied" in result.left
         assert result.right == "0"
 
 
