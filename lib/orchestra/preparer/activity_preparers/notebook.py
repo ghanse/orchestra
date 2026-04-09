@@ -45,11 +45,17 @@ def _notebook_placeholder(original_path: str, activity_name: str, filename: str)
     )
 
 
-def _resolve_base_parameters(params: dict[str, str]) -> dict[str, str]:
+def _resolve_base_parameters(
+    params: dict[str, str],
+    *,
+    variable_task_keys: dict[str, str] | None = None,
+) -> dict[str, str]:
     """Resolve ADF expression dicts and map to DAB dynamic value references.
 
     Args:
         params: Raw base_parameters dict from the NotebookActivity.
+        variable_task_keys: Mapping of variable names to the task keys that
+            set them, used to resolve ``@variables('name')`` references.
 
     Returns:
         Resolved dict with DAB dynamic value references where possible.
@@ -66,7 +72,7 @@ def _resolve_base_parameters(params: dict[str, str]) -> dict[str, str]:
 
         # Try to map ADF expression to DAB dynamic value reference
         if isinstance(value, str) and value.startswith("@"):
-            dab_ref = parse_expression_for_dab(value)
+            dab_ref = parse_expression_for_dab(value, variable_task_keys=variable_task_keys)
             if dab_ref is not None:
                 resolved[key] = dab_ref
                 continue
@@ -75,7 +81,12 @@ def _resolve_base_parameters(params: dict[str, str]) -> dict[str, str]:
     return resolved
 
 
-def prepare(activity: NotebookActivity, *, scope: str = "") -> PreparedActivity:
+def prepare(
+    activity: NotebookActivity,
+    *,
+    scope: str = "",
+    variable_task_keys: dict[str, str] | None = None,
+) -> PreparedActivity:
     """Convert a NotebookActivity into a DAB notebook_task definition.
 
     Rewrites the notebook_path to a bundle-relative path and creates a
@@ -103,7 +114,10 @@ def prepare(activity: NotebookActivity, *, scope: str = "") -> PreparedActivity:
         "notebook_path": f"../src/{notebook_rel_path}",
     }
     if activity.base_parameters:
-        task["notebook_task"]["base_parameters"] = _resolve_base_parameters(dict(activity.base_parameters))
+        task["notebook_task"]["base_parameters"] = _resolve_base_parameters(
+            dict(activity.base_parameters),
+            variable_task_keys=variable_task_keys,
+        )
 
     notebooks = [DabNotebook(relative_path=notebook_rel_path, content=content)]
     return PreparedActivity(task=task, notebooks=notebooks)

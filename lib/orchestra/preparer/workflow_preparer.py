@@ -102,7 +102,12 @@ def _build_common_task_fields(activity: Activity) -> dict[str, Any]:
     return task
 
 
-def prepare_activity(activity: Activity, *, scope: str = "") -> PreparedActivity:
+def prepare_activity(
+    activity: Activity,
+    *,
+    scope: str = "",
+    variable_task_keys: dict[str, str] | None = None,
+) -> PreparedActivity:
     """Dispatch to the appropriate activity preparer based on type.
 
     Args:
@@ -165,6 +170,9 @@ def prepare_activity(activity: Activity, *, scope: str = "") -> PreparedActivity
             f"No preparer registered for activity type {type(activity).__name__} (task_key={activity.task_key!r})"
         )
 
+    # Pass variable_task_keys only to preparers that accept it
+    if type(activity) is NotebookActivity:
+        return preparer_fn(activity, scope=scope, variable_task_keys=variable_task_keys)
     return preparer_fn(activity, scope=scope)
 
 
@@ -237,8 +245,16 @@ def prepare_workflow(pipeline: Pipeline) -> PreparedWorkflow:
 
     scope = pipeline.name
 
+    # Build variable-name → task-key mapping from SetVariable activities
+    # so downstream notebook preparers can resolve @variables('name')
+    # references to DAB dynamic value references.
+    vtk: dict[str, str] = {}
     for activity in pipeline.tasks:
-        prepared = prepare_activity(activity, scope=scope)
+        if isinstance(activity, SetVariableActivity):
+            vtk[activity.variable_name] = activity.task_key
+
+    for activity in pipeline.tasks:
+        prepared = prepare_activity(activity, scope=scope, variable_task_keys=vtk)
         all_tasks.append(prepared.task)
         all_notebooks.extend(prepared.notebooks)
         all_secrets.extend(prepared.secrets)

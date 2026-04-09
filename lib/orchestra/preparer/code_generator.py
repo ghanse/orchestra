@@ -274,7 +274,10 @@ def generate_set_variable_notebook(activity: SetVariableActivity) -> str:
 
     Databricks jobs use ``dbutils.jobs.taskValues.set()`` as the equivalent
     of ADF pipeline variables, allowing downstream tasks to read values via
-    ``dbutils.jobs.taskValues.get()``.
+    ``dbutils.jobs.taskValues.get()`` or ``{{tasks.<key>.values.<name>}}``.
+
+    The variable expression is evaluated at runtime so that functions like
+    ``datetime.utcnow()`` and task value references produce live values.
 
     Args:
         activity: The SetVariableActivity IR node.
@@ -284,18 +287,24 @@ def generate_set_variable_notebook(activity: SetVariableActivity) -> str:
     """
     header = _notebook_header(f"Set Variable: {activity.name}")
 
+    expr = activity.variable_value
+
     body = textwrap.dedent(f"""\
         import json
+        from datetime import datetime
 
-        # Parameters
-        variable_name = dbutils.widgets.get("variable_name") or "{activity.variable_name}"
-        value = dbutils.widgets.get("value") or {json.dumps(activity.variable_value)}
+        variable_name = "{activity.variable_name}"
 
-        # Set task value for downstream tasks
+        # Evaluate the variable expression at runtime.
+        # Original expression: {expr}
+        value = {expr}
+
+        # Set task value so downstream tasks can reference it via
+        # {{{{tasks.{activity.task_key}.values.{activity.variable_name}}}}}.
         dbutils.jobs.taskValues.set(key=variable_name, value=value)
         print(f"Set task value '{{variable_name}}' = '{{value}}'")
 
-        dbutils.notebook.exit(json.dumps({{"variable_name": variable_name, "value": value}}))
+        dbutils.notebook.exit(json.dumps({{"variable_name": variable_name, "value": str(value)}}))
     """)
 
     return header + _command_separator() + body

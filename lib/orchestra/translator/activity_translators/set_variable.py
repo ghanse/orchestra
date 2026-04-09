@@ -40,8 +40,13 @@ def translate(
     # Try deterministic expression translation
     variable_value = parse_expression(value_raw, context)
     if variable_value is None:
-        # Fall back to raw string representation
-        variable_value = repr(value_raw) if isinstance(value_raw, str) else str(value_raw)
+        # Unwrap expression-type dicts to at least preserve the expression string
+        if isinstance(value_raw, dict) and value_raw.get("type") == "Expression":
+            variable_value = value_raw.get("value", "")
+        elif isinstance(value_raw, str):
+            variable_value = repr(value_raw)
+        else:
+            variable_value = str(value_raw)
 
     set_var_activity = SetVariableActivity(
         **base_kwargs,

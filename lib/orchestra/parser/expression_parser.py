@@ -82,6 +82,11 @@ def parse_expression(value: str | dict[str, Any] | int | float | bool, context: 
     if result is not None:
         return result
 
+    # --- utcNow / utcnow ---
+    result = _parse_utcnow(expr)
+    if result is not None:
+        return result
+
     # Unsupported expression — route to agentic
     return None
 
@@ -113,6 +118,26 @@ _CONCAT_RE = re.compile(
     r"""concat\((.+)\)""",
     re.IGNORECASE | re.DOTALL,
 )
+
+# Matches: utcNow(), utcNow('format')
+_UTCNOW_RE = re.compile(
+    r"""utcNow\(\s*(?:'([^']*)')?\s*\)""",
+    re.IGNORECASE,
+)
+
+# ADF .NET date format -> Python strftime mapping
+_DATE_FORMAT_MAP: dict[str, str] = {
+    "yyyy": "%Y",
+    "yy": "%y",
+    "MM": "%m",
+    "dd": "%d",
+    "HH": "%H",
+    "hh": "%I",
+    "mm": "%M",
+    "ss": "%S",
+    "fff": "%f",
+    "tt": "%p",
+}
 
 # Map well-known pipeline() properties to dbutils equivalents
 _PIPELINE_PROPERTY_MAP: dict[str, str] = {
@@ -178,6 +203,41 @@ def _parse_variable(expr: str, context: TranslationContext) -> str | None:
         return f"dbutils.jobs.taskValues.get(taskKey='{task_key}', key='{var_name}')"
     # Fall back to a sensible default with the pipeline-level variable task key
     return f"dbutils.jobs.taskValues.get(taskKey='__variables__', key='{var_name}')"
+
+
+def _parse_utcnow(expr: str) -> str | None:
+    """Parse ``utcNow()`` or ``utcNow('format')`` expressions.
+
+    Args:
+        expr: Expression string without the leading ``@``.
+
+    Returns:
+        Python expression string, or ``None``.
+    """
+    m = _UTCNOW_RE.match(expr)
+    if m is None:
+        return None
+    fmt = m.group(1)
+    if fmt:
+        py_fmt = _convert_date_format(fmt)
+        return f"__import__('datetime').datetime.utcnow().strftime('{py_fmt}')"
+    return "__import__('datetime').datetime.utcnow().isoformat()"
+
+
+def _convert_date_format(adf_format: str) -> str:
+    """Convert an ADF .NET date format string to Python strftime format.
+
+    Args:
+        adf_format: ADF format string (e.g., ``"yyyy-MM-dd"``).
+
+    Returns:
+        Python strftime format string (e.g., ``"%Y-%m-%d"``).
+    """
+    result = adf_format
+    # Replace longest tokens first to avoid partial matches
+    for adf_token, py_token in sorted(_DATE_FORMAT_MAP.items(), key=lambda x: -len(x[0])):
+        result = result.replace(adf_token, py_token)
+    return result
 
 
 def _parse_concat(expr: str, context: TranslationContext) -> str | None:
@@ -285,7 +345,11 @@ _DAB_PIPELINE_PROPERTY_MAP: dict[str, str] = {
 }
 
 
-def parse_expression_for_dab(value: str | dict[str, Any] | int | float | bool) -> str | None:
+def parse_expression_for_dab(
+    value: str | dict[str, Any] | int | float | bool,
+    *,
+    variable_task_keys: dict[str, str] | None = None,
+) -> str | None:
     """Translate an ADF expression to a DAB dynamic value reference.
 
     This is an alternative to :func:`parse_expression` that outputs Lakeflow
@@ -297,6 +361,9 @@ def parse_expression_for_dab(value: str | dict[str, Any] | int | float | bool) -
         value: The ADF expression value.  May be a plain scalar, an
             ``@``-prefixed expression string, or an ``{"type": "Expression",
             "value": "..."}`` dict.
+        variable_task_keys: Optional mapping of variable names to the task keys
+            of the SetVariable activities that set them.  Used to resolve
+            ``@variables('name')`` references.
 
     Returns:
         A DAB dynamic value reference string, or ``None`` if the expression
@@ -305,7 +372,7 @@ def parse_expression_for_dab(value: str | dict[str, Any] | int | float | bool) -
     # Unwrap expression-type dicts
     if isinstance(value, dict):
         if value.get("type") == "Expression" and "value" in value:
-            return parse_expression_for_dab(value["value"])
+            return parse_expression_for_dab(value["value"], variable_task_keys=variable_task_keys)
         return None
 
     # Non-string values have no DAB mapping
@@ -331,6 +398,30 @@ def parse_expression_for_dab(value: str | dict[str, Any] | int | float | bool) -
         dab_ref = _DAB_PIPELINE_PROPERTY_MAP.get(prop)
         if dab_ref is not None:
             return dab_ref
+
+    # --- Variables --- @variables('name') -> {{tasks.<setter_key>.values.<name>}}
+    m = _VARIABLE_RE.match(expr)
+    if m is not None:
+        var_name = m.group(1)
+        vtk = variable_task_keys or {}
+        setter_key = vtk.get(var_name, var_name)
+        return "{{" + f"tasks.{setter_key}.values.{var_name}" + "}}"
+
+    # --- Activity output references ---
+    m = _ACTIVITY_OUTPUT_RE.match(expr)
+    if m is not None:
+        activity_name = m.group(1)
+        task_key = re.sub(r"[^a-zA-Z0-9_-]", "_", activity_name)
+        task_key = re.sub(r"_+", "_", task_key).strip("_") or "unnamed"
+        property_path = m.group(2) or ""
+        if property_path:
+            parts = property_path.split(".")
+            field = parts[-1] if parts[-1] != "firstRow" else "result"
+            if field == "value":
+                field = "result"
+        else:
+            field = "result"
+        return "{{" + f"tasks.{task_key}.values.{field}" + "}}"
 
     # No mapping found
     return None
