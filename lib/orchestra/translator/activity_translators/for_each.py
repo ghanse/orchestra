@@ -53,7 +53,6 @@ def translate(
     child_adf_activities = activity.activities or []
 
     if translate_activities_fn and child_adf_activities:
-        inner_prefix = context.task_key_prefix + activity.name + "__" if context.task_key_prefix else activity.name + "__"
         child_context = TranslationContext(
             activity_cache=context.activity_cache,
             registry=context.registry,

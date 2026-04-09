@@ -274,7 +274,7 @@ def generate_set_variable_notebook(activity: SetVariableActivity) -> str:
 
         # Parameters
         variable_name = dbutils.widgets.get("variable_name") or "{activity.variable_name}"
-        value = dbutils.widgets.get("value") or '''{activity.variable_value}'''
+        value = dbutils.widgets.get("value") or {json.dumps(activity.variable_value)}
 
         # Set task value for downstream tasks
         dbutils.jobs.taskValues.set(key=variable_name, value=value)
@@ -644,7 +644,7 @@ def generate_append_variable_notebook(activity: AppendVariableActivity) -> str:
 
         # Parameters
         variable_name = dbutils.widgets.get("variable_name") or "{activity.variable_name}"
-        value = dbutils.widgets.get("value") or '''{activity.append_value}'''
+        value = dbutils.widgets.get("value") or {json.dumps(activity.append_value)}
 
         # Read the current array from task values (or start with empty list)
         try:
