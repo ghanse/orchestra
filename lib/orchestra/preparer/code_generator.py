@@ -99,12 +99,14 @@ def generate_lookup_notebook(activity: LookupActivity) -> str:
 
             if first_row_only:
                 result = df.first()
-                output = json.dumps(result.asDict() if result else {{}})
+                output = result.asDict() if result else {{}}
             else:
-                rows = [row.asDict() for row in df.collect()]
-                output = json.dumps(rows)
+                output = [row.asDict() for row in df.collect()]
 
-            dbutils.notebook.exit(output)
+            # Set task values so downstream tasks (e.g. ForEach) can reference
+            # them via {{{{tasks.{activity.task_key}.values.result}}}}.
+            dbutils.jobs.taskValues.set(key="result", value=output)
+            dbutils.notebook.exit(json.dumps(output))
         """)
     else:
         body = textwrap.dedent(f"""\
@@ -119,12 +121,14 @@ def generate_lookup_notebook(activity: LookupActivity) -> str:
 
             if first_row_only:
                 result = df.first()
-                output = json.dumps(result.asDict() if result else {{}})
+                output = result.asDict() if result else {{}}
             else:
-                rows = [row.asDict() for row in df.collect()]
-                output = json.dumps(rows)
+                output = [row.asDict() for row in df.collect()]
 
-            dbutils.notebook.exit(output)
+            # Set task values so downstream tasks (e.g. ForEach) can reference
+            # them via {{{{tasks.{activity.task_key}.values.result}}}}.
+            dbutils.jobs.taskValues.set(key="result", value=output)
+            dbutils.notebook.exit(json.dumps(output))
         """)
 
     return header + _command_separator() + body
@@ -499,15 +503,79 @@ def _generate_autoloader_body(activity: CopyActivity) -> str:
 
 
 def _generate_jdbc_body(activity: CopyActivity) -> str:
-    """Generate JDBC ingestion body for database sources."""
+    """Generate JDBC ingestion body for database sources.
+
+    When the SQL query contains an ADF expression like
+    ``@concat('SELECT * FROM ', item().schema_name, '.', item().table_name)``,
+    the notebook is parameterized to accept an ``item`` widget (passed from
+    a ForEach task via ``{{input}}``) and build the query dynamically.
+    """
     scope = f"orchestra-{activity.task_key}"
     src_props = activity.source_properties or {}
     sink_props = activity.sink_properties or {}
 
     sink_table = sink_props.get("table", sink_props.get("tableName", f"{activity.task_key}_raw"))
     table_name = src_props.get("tableName", src_props.get("table", ""))
-    query = src_props.get("sqlReaderQuery", src_props.get("query", ""))
+    query_raw = src_props.get("sqlReaderQuery", src_props.get("query", ""))
 
+    # Detect ADF expression dicts that weren't resolved during translation
+    query = ""
+    is_expression = False
+    if isinstance(query_raw, dict) and query_raw.get("type") == "Expression":
+        is_expression = True
+        query = query_raw.get("value", "")
+    elif isinstance(query_raw, str):
+        query = query_raw
+        if query.startswith("@"):
+            is_expression = True
+
+    if is_expression:
+        # The query is an ADF expression (e.g. @concat('SELECT * FROM ', item().schema_name, ...)).
+        # Generate a notebook that reads the current ForEach item from the
+        # "item" widget (set to {{input}} by the for_each_task) and builds
+        # the SQL query dynamically.
+        return textwrap.dedent(f"""\
+            import json
+
+            # Parameters
+            default_table = "{sink_table}"
+            target_table = dbutils.widgets.get("target_table") or default_table
+
+            # The ForEach task passes the current item as the "item" widget
+            # parameter via {{{{input}}}}.  Parse it as JSON to access fields.
+            item_raw = dbutils.widgets.get("item")
+            item = json.loads(item_raw) if item_raw else {{}}
+
+            # Credentials
+            jdbc_url = dbutils.secrets.get(scope="{scope}", key="jdbc-url")
+            jdbc_password = dbutils.secrets.get(scope="{scope}", key="jdbc-password")
+            jdbc_user = dbutils.secrets.get(scope="{scope}", key="jdbc-user")
+
+            # Build the SQL query from the ForEach item fields.
+            # Original ADF expression: {query}
+            schema_name = item.get("schema_name", "dbo")
+            table_name = item.get("table_name", "UNKNOWN_TABLE")
+            query = f"SELECT * FROM {{schema_name}}.{{table_name}}"
+            print(f"Executing query: {{query}}")
+
+            # Read from source database via JDBC
+            df = (
+                spark.read.format("jdbc")
+                .option("url", jdbc_url)
+                .option("user", jdbc_user)
+                .option("password", jdbc_password)
+                .option("query", query)
+                .load()
+            )
+
+            # Write to Delta table (append for ForEach pattern)
+            df.write.format("delta").mode("append").option("mergeSchema", "true").saveAsTable(target_table)
+
+            print(f"JDBC ingestion complete: {{df.count()}} rows written to {{target_table}}")
+            dbutils.notebook.exit(f"Rows written: {{df.count()}}")
+        """)
+
+    # Static query or table name
     if table_name:
         read_option = f'    .option("dbtable", "{table_name}")'
     elif query:
