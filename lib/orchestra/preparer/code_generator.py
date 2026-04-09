@@ -149,6 +149,166 @@ def generate_lookup_notebook(activity: LookupActivity, *, scope: str = "") -> st
 # ---------------------------------------------------------------------------
 
 
+def _dab_ref_to_fstring_expr(ref: str) -> str:
+    """Convert a DAB ref like {{job.name}} to a Python f-string expression.
+
+    Args:
+        ref: A DAB dynamic value reference string.
+
+    Returns:
+        A Python f-string expression like ``{dbutils.widgets.get('name')}``.
+    """
+    import re as _re
+
+    m = _re.match(r"\{\{job\.parameters\.(\w+)\}\}", ref)
+    if m:
+        return "{dbutils.widgets.get('" + m.group(1) + "')}"
+    m = _re.match(r"\{\{job\.run_id\}\}", ref)
+    if m:
+        return "{spark.conf.get('spark.databricks.job.runId', 'unknown')}"
+    m = _re.match(r"\{\{job\.name\}\}", ref)
+    if m:
+        return "{spark.conf.get('spark.databricks.job.parentName', 'unknown')}"
+    m = _re.match(r"\{\{job\.start_time\.iso_datetime\}\}", ref)
+    if m:
+        return "{spark.conf.get('spark.databricks.job.triggerTime', 'unknown')}"
+    m = _re.match(r"\{\{tasks\.([^.]+)\.values\.(\w+)\}\}", ref)
+    if m:
+        return "{dbutils.jobs.taskValues.get(taskKey='" + m.group(1) + "', key='" + m.group(2) + "')}"
+    return ref
+
+
+def _resolve_body(body: Any) -> str:
+    """Resolve ADF expressions in a request body and return a Python literal.
+
+    Walks the body dict/list/string and resolves any ADF expression values
+    (``@{...}`` interpolation or ``{"type": "Expression", ...}`` dicts) to
+    Python code or literal strings.
+
+    Args:
+        body: The raw body from the WebActivity IR.
+
+    Returns:
+        A Python expression string suitable for embedding in generated code.
+    """
+    if body is None:
+        return "''"
+
+    from orchestra.models.ir import TranslationContext
+    from orchestra.parser.expression_parser import (
+        resolve_expression,
+        resolve_interpolated_string_for_notebook,
+    )
+
+    ctx = TranslationContext()
+
+    if isinstance(body, str):
+        if "@{" in body:
+            resolved_str = resolve_interpolated_string_for_notebook(body, ctx)
+            return f"f{repr(resolved_str)}"
+        if body.startswith("@"):
+            result = resolve_expression(body, ctx)
+            if result and result.kind == "literal":
+                return repr(result.value)
+        return repr(body)
+
+    if isinstance(body, dict):
+        # Check if any values need runtime resolution (DAB refs or expressions).
+        # If so, build the dict as a Python expression using f-strings.
+        needs_fstring = False
+        resolved: dict[str, Any] = {}
+        for k, v in body.items():
+            if isinstance(v, str) and "@{" in v:
+                needs_fstring = True
+                resolved[k] = resolve_interpolated_string_for_notebook(v, ctx)
+            elif isinstance(v, str) and v.startswith("@"):
+                result = resolve_expression(v, ctx)
+                if result and result.kind == "dab_ref":
+                    needs_fstring = True
+                    resolved[k] = _dab_ref_to_fstring_expr(result.value)
+                elif result and result.kind == "literal":
+                    resolved[k] = result.value
+                else:
+                    resolved[k] = v
+            elif isinstance(v, dict) and v.get("type") == "Expression":
+                result = resolve_expression(v, ctx)
+                if result and result.kind == "dab_ref":
+                    needs_fstring = True
+                    resolved[k] = _dab_ref_to_fstring_expr(result.value)
+                elif result and result.kind == "literal":
+                    resolved[k] = result.value
+                else:
+                    resolved[k] = v.get("value", str(v))
+            else:
+                resolved[k] = v
+
+        if needs_fstring:
+            # Build a Python dict literal with f-string expressions
+            parts = []
+            for k, v in resolved.items():
+                if isinstance(v, str) and "{" in v and "dbutils" in v:
+                    parts.append(f'"{k}": f"{v}"')
+                else:
+                    parts.append(f'"{k}": {json.dumps(v)}')
+            return "{" + ", ".join(parts) + "}"
+        return json.dumps(resolved)
+
+    return json.dumps(body) if body else "''"
+
+
+def _resolve_headers(headers: dict[str, str] | None) -> tuple[str, str]:
+    """Resolve ADF expressions in HTTP header values.
+
+    Header values may be plain strings or ADF expression dicts like
+    ``{"type": "Expression", "value": "@concat('Bearer ', ...)"}``.
+
+    Returns:
+        A tuple of ``(headers_literal, preamble_code)``:
+        - ``headers_literal`` is a Python dict literal for the initial headers
+        - ``preamble_code`` is Python code to execute after the headers dict
+          is created, adding dynamically computed header values
+    """
+    if not headers:
+        return "{}", ""
+
+    from orchestra.models.ir import TranslationContext
+    from orchestra.parser.expression_parser import resolve_expression
+
+    ctx = TranslationContext()
+    static_headers: dict[str, str] = {}
+    preamble_lines: list[str] = []
+
+    for key, value in headers.items():
+        result = resolve_expression(value, ctx)
+        if result is None:
+            # Unresolvable — keep as literal string representation
+            static_headers[key] = str(value) if not isinstance(value, str) else value
+        elif result.kind == "literal":
+            static_headers[key] = result.value
+        elif result.kind == "dab_ref":
+            # DAB ref in a header value — read from widget at runtime
+            preamble_lines.append(f'headers["{key}"] = dbutils.widgets.get("{key}")')
+        elif result.kind == "notebook_code":
+            # Python code — compute the value at runtime
+            for imp in result.imports:
+                preamble_lines.insert(0, imp)
+            preamble_lines.append(f'headers["{key}"] = {result.value}')
+
+    headers_literal = json.dumps(static_headers) if static_headers else "{}"
+    preamble = ""
+    if preamble_lines:
+        # Deduplicate imports
+        seen: set[str] = set()
+        unique_lines: list[str] = []
+        for line in preamble_lines:
+            if line not in seen:
+                seen.add(line)
+                unique_lines.append(line)
+        preamble = "\n".join(unique_lines) + "\n"
+
+    return headers_literal, preamble
+
+
 def generate_web_activity_notebook(activity: WebActivity, *, scope: str = "") -> str:
     """Generate a Python notebook that makes an HTTP request.
 
@@ -161,7 +321,9 @@ def generate_web_activity_notebook(activity: WebActivity, *, scope: str = "") ->
     """
     header = _notebook_header(f"Web Activity: {activity.name}")
 
-    headers_literal = json.dumps(activity.headers) if activity.headers else "{}"
+    # Resolve header values — some may contain ADF expressions like
+    # {"Authorization": {"type": "Expression", "value": "@concat('Bearer ', ...)"}}
+    headers_literal, headers_preamble = _resolve_headers(activity.headers)
 
     auth_block = ""
     auth = activity.authentication
@@ -193,7 +355,7 @@ def generate_web_activity_notebook(activity: WebActivity, *, scope: str = "") ->
     body_block = ""
     request_call = ""
     if activity.method in ("POST", "PUT", "PATCH"):
-        body_str = json.dumps(activity.body) if activity.body else "''"
+        body_str = _resolve_body(activity.body)
         body_block = textwrap.dedent(f"""\
             body = dbutils.widgets.get("body") if dbutils.widgets.get("body") else {body_str}
         """)
@@ -211,6 +373,7 @@ def generate_web_activity_notebook(activity: WebActivity, *, scope: str = "") ->
         headers = {headers_literal}
 
     """)
+    body += headers_preamble
     body += auth_block
     body += body_block
     body += request_call
@@ -622,11 +785,19 @@ def _generate_jdbc_body(activity: CopyActivity, *, scope: str = "") -> str:
             dbutils.notebook.exit(f"Rows written: {{df.count()}}")
         """)
 
-    # Static query or table name
+    # Static query or table name — resolve any @{...} interpolation in SQL strings
     if table_name:
         read_option = f'    .option("dbtable", "{table_name}")'
     elif query:
-        read_option = f'    .option("query", """{query}""")'
+        if "@{" in query:
+            from orchestra.models.ir import TranslationContext as _TC
+            from orchestra.parser.expression_parser import resolve_interpolated_string_for_notebook as _risn
+
+            resolved_query = _risn(query, _TC())
+            # The resolved query uses f-string expressions for runtime parameter access.
+            read_option = f'    .option("query", f"""{resolved_query}""")'
+        else:
+            read_option = f'    .option("query", """{query}""")'
     else:
         read_option = '    .option("dbtable", "REPLACE_WITH_TABLE_NAME")'
 

@@ -176,6 +176,66 @@ def resolve_interpolated_string(
     return _INTERPOLATION_RE.sub(_replace_match, value)
 
 
+def resolve_interpolated_string_for_notebook(
+    value: str,
+    context: TranslationContext,
+    *,
+    variable_task_keys: dict[str, str] | None = None,
+) -> str:
+    """Resolve ``@{...}`` tokens to Python f-string expressions for notebook code.
+
+    Like :func:`resolve_interpolated_string` but produces Python expressions
+    suitable for embedding in an f-string inside a generated notebook (e.g.,
+    ``{dbutils.widgets.get('startDate')}``), not DAB refs.
+
+    Args:
+        value: A string containing ``@{...}`` tokens.
+        context: Translation context for resolving variables.
+        variable_task_keys: Optional explicit variable-name-to-task-key map.
+
+    Returns:
+        A string with ``@{...}`` tokens replaced by Python f-string expressions.
+    """
+    if not isinstance(value, str) or "@{" not in value:
+        return value
+
+    def _replace_match(m: re.Match[str]) -> str:
+        inner_expr = m.group(1)
+        result = resolve_expression("@" + inner_expr, context, variable_task_keys=variable_task_keys)
+        if result is None:
+            return m.group(0)
+        if result.kind == "literal":
+            return result.value
+        if result.kind == "dab_ref":
+            # Convert DAB ref to Python expression for notebook f-strings
+            ref = result.value
+            # {{job.parameters.X}} -> dbutils.widgets.get('X')
+            param_m = re.match(r"\{\{job\.parameters\.(\w+)\}\}", ref)
+            if param_m:
+                return "{dbutils.widgets.get('" + param_m.group(1) + "')}"
+            # {{tasks.X.values.Y}} -> dbutils.jobs.taskValues.get(taskKey='X', key='Y')
+            tv_m = re.match(r"\{\{tasks\.([^.]+)\.values\.(\w+)\}\}", ref)
+            if tv_m:
+                return "{dbutils.jobs.taskValues.get(taskKey='" + tv_m.group(1) + "', key='" + tv_m.group(2) + "')}"
+            # {{job.run_id}} -> spark.conf.get('spark.databricks.job.runId', '')
+            if ref == "{{job.run_id}}":
+                return "{spark.conf.get('spark.databricks.job.runId', '')}"
+            # {{job.name}} -> spark.conf.get('spark.databricks.job.parentName', '')
+            if ref == "{{job.name}}":
+                return "{spark.conf.get('spark.databricks.job.parentName', '')}"
+            # {{job.start_time.iso_datetime}}
+            if ref == "{{job.start_time.iso_datetime}}":
+                return "{spark.conf.get('spark.databricks.job.triggerTime', '')}"
+            # {{input}} -> json.loads(dbutils.widgets.get('item'))
+            if ref == "{{input}}":
+                return "{dbutils.widgets.get('item')}"
+            return ref
+        # notebook_code — embed the Python expression directly
+        return "{" + result.value + "}"
+
+    return _INTERPOLATION_RE.sub(_replace_match, value)
+
+
 def parse_expression(value: str | dict[str, Any] | int | float | bool, context: TranslationContext) -> str | None:
     """Backward-compatible wrapper: return the resolved value for any kind, or None.
 
