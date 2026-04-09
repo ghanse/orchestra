@@ -12,7 +12,7 @@ if TYPE_CHECKING:
     from orchestra.models.ir import WebActivity
 
 
-def prepare(activity: WebActivity) -> PreparedActivity:
+def prepare(activity: WebActivity, *, scope: str = "") -> PreparedActivity:
     """Convert a WebActivity into a notebook_task with a generated HTTP notebook.
 
     Args:
@@ -23,7 +23,7 @@ def prepare(activity: WebActivity) -> PreparedActivity:
     """
     notebook_name = f"{activity.task_key}.py"
     notebook_path = f"notebooks/{notebook_name}"
-    content = generate_web_activity_notebook(activity)
+    content = generate_web_activity_notebook(activity, scope=scope)
 
     task = _build_common_task_fields(activity)
     task["notebook_task"] = {
@@ -44,11 +44,11 @@ def prepare(activity: WebActivity) -> PreparedActivity:
     secrets: list[SecretInstruction] = []
     auth = activity.authentication
     if auth:
-        scope = f"orchestra-{activity.task_key}"
+        scope_name = scope or activity.task_key
         auth_type = auth.get("type", "unknown")
         secrets.append(
             SecretInstruction(
-                scope=scope,
+                scope=scope_name,
                 key="auth-credential",
                 value_source=f"Authentication credential ({auth_type}) for web activity '{activity.name}'",
             )

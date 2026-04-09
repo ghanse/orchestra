@@ -12,7 +12,7 @@ if TYPE_CHECKING:
     from orchestra.models.ir import FilterActivity
 
 
-def prepare(activity: FilterActivity) -> PreparedActivity:
+def prepare(activity: FilterActivity, *, scope: str = "") -> PreparedActivity:
     """Convert a FilterActivity into a notebook_task that filters an array.
 
     The generated notebook reads the input array, applies the filter condition,

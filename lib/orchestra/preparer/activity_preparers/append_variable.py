@@ -12,7 +12,7 @@ if TYPE_CHECKING:
     from orchestra.models.ir import AppendVariableActivity
 
 
-def prepare(activity: AppendVariableActivity) -> PreparedActivity:
+def prepare(activity: AppendVariableActivity, *, scope: str = "") -> PreparedActivity:
     """Convert an AppendVariableActivity into a notebook_task that appends to an array.
 
     The generated notebook reads the current array from a task value (or

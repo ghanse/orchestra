@@ -59,11 +59,12 @@ _DB_SOURCE_TYPES = {
 }
 
 
-def generate_lookup_notebook(activity: LookupActivity) -> str:
+def generate_lookup_notebook(activity: LookupActivity, *, scope: str = "") -> str:
     """Generate a Python notebook that executes a lookup query.
 
     Args:
         activity: The LookupActivity IR node.
+        scope: Secret scope name (defaults to task_key if empty).
 
     Returns:
         Complete notebook source code as a string.
@@ -73,7 +74,7 @@ def generate_lookup_notebook(activity: LookupActivity) -> str:
     query = activity.source_query or ""
 
     if source_type in _DB_SOURCE_TYPES:
-        scope = f"orchestra-{activity.task_key}"
+        scope = scope or activity.task_key
         body = textwrap.dedent(f"""\
             import json
 
@@ -139,11 +140,12 @@ def generate_lookup_notebook(activity: LookupActivity) -> str:
 # ---------------------------------------------------------------------------
 
 
-def generate_web_activity_notebook(activity: WebActivity) -> str:
+def generate_web_activity_notebook(activity: WebActivity, *, scope: str = "") -> str:
     """Generate a Python notebook that makes an HTTP request.
 
     Args:
         activity: The WebActivity IR node.
+        scope: Secret scope name (defaults to task_key if empty).
 
     Returns:
         Complete notebook source code as a string.
@@ -155,7 +157,7 @@ def generate_web_activity_notebook(activity: WebActivity) -> str:
     auth_block = ""
     auth = activity.authentication
     if auth:
-        scope = f"orchestra-{activity.task_key}"
+        scope = scope or activity.task_key
         auth_type = auth.get("type", "")
         if auth_type in ("ServicePrincipal", "MSI", "ManagedServiceIdentity"):
             auth_block = textwrap.dedent(f"""\
@@ -363,7 +365,7 @@ _JDBC_SOURCE_TYPES = {
 _REST_SOURCE_TYPES = {"RestSource", "HttpSource"}
 
 
-def generate_copy_notebook(activity: CopyActivity) -> str:
+def generate_copy_notebook(activity: CopyActivity, *, scope: str = "") -> str:
     """Generate a notebook for copy operations (Auto Loader, COPY INTO, or JDBC).
 
     The ingestion strategy is chosen based on the source type string:
@@ -376,6 +378,7 @@ def generate_copy_notebook(activity: CopyActivity) -> str:
 
     Args:
         activity: The CopyActivity IR node.
+        scope: Secret scope name (defaults to task_key if empty).
 
     Returns:
         Complete notebook source code as a string.
@@ -386,7 +389,7 @@ def generate_copy_notebook(activity: CopyActivity) -> str:
     if source_type in _FILE_SOURCE_TYPES:
         body = _generate_autoloader_body(activity)
     elif source_type in _JDBC_SOURCE_TYPES:
-        body = _generate_jdbc_body(activity)
+        body = _generate_jdbc_body(activity, scope=scope)
     elif source_type in _REST_SOURCE_TYPES:
         body = _generate_rest_copy_body(activity)
     else:
@@ -502,7 +505,7 @@ def _generate_autoloader_body(activity: CopyActivity) -> str:
     """)
 
 
-def _generate_jdbc_body(activity: CopyActivity) -> str:
+def _generate_jdbc_body(activity: CopyActivity, *, scope: str = "") -> str:
     """Generate JDBC ingestion body for database sources.
 
     When the SQL query contains an ADF expression like
@@ -510,7 +513,7 @@ def _generate_jdbc_body(activity: CopyActivity) -> str:
     the notebook is parameterized to accept an ``item`` widget (passed from
     a ForEach task via ``{{input}}``) and build the query dynamically.
     """
-    scope = f"orchestra-{activity.task_key}"
+    scope = scope or activity.task_key
     src_props = activity.source_properties or {}
     sink_props = activity.sink_properties or {}
 

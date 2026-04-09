@@ -12,7 +12,7 @@ if TYPE_CHECKING:
     from orchestra.models.ir import SetVariableActivity
 
 
-def prepare(activity: SetVariableActivity) -> PreparedActivity:
+def prepare(activity: SetVariableActivity, *, scope: str = "") -> PreparedActivity:
     """Convert a SetVariableActivity into a notebook_task that sets a task value.
 
     Databricks jobs use ``dbutils.jobs.taskValues.set()`` as the equivalent

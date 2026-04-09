@@ -10,7 +10,7 @@ if TYPE_CHECKING:
     from orchestra.models.ir import IfConditionActivity
 
 
-def prepare(activity: IfConditionActivity) -> PreparedActivity:
+def prepare(activity: IfConditionActivity, *, scope: str = "") -> PreparedActivity:
     """Convert an IfConditionActivity into a DAB condition_task definition.
 
     Recursively prepares both the true-branch and false-branch activities.
@@ -30,7 +30,7 @@ def prepare(activity: IfConditionActivity) -> PreparedActivity:
 
     if_true_tasks = []
     for child in activity.if_true_activities:
-        prepared = prepare_activity(child)
+        prepared = prepare_activity(child, scope=scope)
         if_true_tasks.append(prepared.task)
         all_notebooks.extend(prepared.notebooks)
         all_secrets.extend(prepared.secrets)
@@ -38,7 +38,7 @@ def prepare(activity: IfConditionActivity) -> PreparedActivity:
 
     if_false_tasks = []
     for child in activity.if_false_activities:
-        prepared = prepare_activity(child)
+        prepared = prepare_activity(child, scope=scope)
         if_false_tasks.append(prepared.task)
         all_notebooks.extend(prepared.notebooks)
         all_secrets.extend(prepared.secrets)

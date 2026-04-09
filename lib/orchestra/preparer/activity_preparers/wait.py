@@ -12,7 +12,7 @@ if TYPE_CHECKING:
     from orchestra.models.ir import WaitActivity
 
 
-def prepare(activity: WaitActivity) -> PreparedActivity:
+def prepare(activity: WaitActivity, *, scope: str = "") -> PreparedActivity:
     """Convert a WaitActivity into a notebook_task that sleeps for N seconds.
 
     Args:

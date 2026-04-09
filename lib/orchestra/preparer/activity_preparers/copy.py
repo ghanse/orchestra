@@ -78,7 +78,7 @@ def _extract_volume_info(source_properties: dict) -> dict | None:
     }
 
 
-def prepare(activity: CopyActivity) -> PreparedActivity:
+def prepare(activity: CopyActivity, *, scope: str = "") -> PreparedActivity:
     """Convert a CopyActivity into a notebook_task with a generated copy notebook.
 
     The ingestion strategy is determined by the source type string:
@@ -144,7 +144,7 @@ def prepare(activity: CopyActivity) -> PreparedActivity:
                 column_mapping=activity.column_mapping,
             )
 
-    content = generate_copy_notebook(activity)
+    content = generate_copy_notebook(activity, scope=scope)
 
     task = _build_common_task_fields(activity)
     task["notebook_task"] = {
@@ -176,27 +176,27 @@ def prepare(activity: CopyActivity) -> PreparedActivity:
     setup_tasks: list[SetupTask] = []
 
     if source_type in _DB_SOURCE_TYPES:
-        scope = f"orchestra-{activity.task_key}"
+        scope_name = scope or activity.task_key
         secrets.append(
             SecretInstruction(
-                scope=scope,
+                scope=scope_name,
                 key="jdbc-url",
                 value_source=f"JDBC URL for {source_type} source in activity '{activity.name}'",
             )
         )
         secrets.append(
             SecretInstruction(
-                scope=scope,
+                scope=scope_name,
                 key="jdbc-password",
                 value_source=f"JDBC password for {source_type} source in activity '{activity.name}'",
             )
         )
     elif source_type in _FILE_SOURCE_TYPES:
         if src_props.get("connection_string") or src_props.get("sasUri"):
-            scope = f"orchestra-{activity.task_key}"
+            scope_name = scope or activity.task_key
             secrets.append(
                 SecretInstruction(
-                    scope=scope,
+                    scope=scope_name,
                     key="connection-string",
                     value_source=f"Connection string for {source_type} source in activity '{activity.name}'",
                 )

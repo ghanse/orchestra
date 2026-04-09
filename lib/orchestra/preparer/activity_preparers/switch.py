@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     from orchestra.models.ir import SwitchActivity
 
 
-def prepare(activity: SwitchActivity) -> PreparedActivity:
+def prepare(activity: SwitchActivity, *, scope: str = "") -> PreparedActivity:
     """Convert a SwitchActivity into a chain of condition_task definitions.
 
     Each case becomes a ``condition_task`` that checks equality between
@@ -42,7 +42,7 @@ def prepare(activity: SwitchActivity) -> PreparedActivity:
     for case in activity.cases:
         case_tasks = []
         for child in case.activities:
-            prepared = prepare_activity(child)
+            prepared = prepare_activity(child, scope=scope)
             case_tasks.append(prepared.task)
             all_notebooks.extend(prepared.notebooks)
             all_secrets.extend(prepared.secrets)
@@ -57,7 +57,7 @@ def prepare(activity: SwitchActivity) -> PreparedActivity:
     # Prepare default branch
     default_tasks = []
     for child in activity.default_activities:
-        prepared = prepare_activity(child)
+        prepared = prepare_activity(child, scope=scope)
         default_tasks.append(prepared.task)
         all_notebooks.extend(prepared.notebooks)
         all_secrets.extend(prepared.secrets)

@@ -11,7 +11,7 @@ if TYPE_CHECKING:
     from orchestra.models.ir import ExecutePipelineActivity
 
 
-def prepare(activity: ExecutePipelineActivity) -> PreparedActivity:
+def prepare(activity: ExecutePipelineActivity, *, scope: str = "") -> PreparedActivity:
     """Convert an ExecutePipelineActivity into a DAB run_job_task definition.
 
     The referenced pipeline is expected to exist as another job in the same

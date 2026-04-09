@@ -69,7 +69,7 @@ def _inject_input_parameter(inner_task: dict) -> dict:
     return inner_task
 
 
-def prepare(activity: ForEachActivity) -> PreparedActivity:
+def prepare(activity: ForEachActivity, *, scope: str = "") -> PreparedActivity:
     """Convert a ForEachActivity into a DAB for_each_task definition.
 
     Recursively prepares the child activity and wraps it in the for_each_task
@@ -89,7 +89,7 @@ def prepare(activity: ForEachActivity) -> PreparedActivity:
     inner_prepared: PreparedActivity | None = None
     inner_task: dict = {}
     if activity.child_activity is not None:
-        inner_prepared = prepare_activity(activity.child_activity)
+        inner_prepared = prepare_activity(activity.child_activity, scope=scope)
         inner_task = _inject_input_parameter(inner_prepared.task)
 
     concurrency = activity.concurrency if activity.concurrency is not None else 20

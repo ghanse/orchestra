@@ -23,7 +23,7 @@ _DB_SOURCE_TYPES = {
 }
 
 
-def prepare(activity: LookupActivity) -> PreparedActivity:
+def prepare(activity: LookupActivity, *, scope: str = "") -> PreparedActivity:
     """Convert a LookupActivity into a notebook_task with a generated lookup notebook.
 
     Args:
@@ -34,7 +34,7 @@ def prepare(activity: LookupActivity) -> PreparedActivity:
     """
     notebook_name = f"{activity.task_key}.py"
     notebook_path = f"notebooks/{notebook_name}"
-    content = generate_lookup_notebook(activity)
+    content = generate_lookup_notebook(activity, scope=scope)
 
     task = _build_common_task_fields(activity)
     task["notebook_task"] = {
@@ -54,17 +54,17 @@ def prepare(activity: LookupActivity) -> PreparedActivity:
     secrets: list[SecretInstruction] = []
     source_type = activity.source_type or ""
     if source_type in _DB_SOURCE_TYPES:
-        scope = f"orchestra-{activity.task_key}"
+        scope_name = scope or activity.task_key
         secrets.append(
             SecretInstruction(
-                scope=scope,
+                scope=scope_name,
                 key="jdbc-url",
                 value_source=f"JDBC URL for {source_type} lookup in activity '{activity.name}'",
             )
         )
         secrets.append(
             SecretInstruction(
-                scope=scope,
+                scope=scope_name,
                 key="jdbc-password",
                 value_source=f"JDBC password for {source_type} lookup in activity '{activity.name}'",
             )

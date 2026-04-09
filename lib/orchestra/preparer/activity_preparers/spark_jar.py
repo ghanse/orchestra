@@ -37,7 +37,7 @@ def _jar_placeholder(libraries: list[dict] | None, activity_name: str) -> str:
     )
 
 
-def prepare(activity: SparkJarActivity) -> PreparedActivity:
+def prepare(activity: SparkJarActivity, *, scope: str = "") -> PreparedActivity:
     """Convert a SparkJarActivity into a DAB spark_jar_task definition.
 
     Rewrites JAR library paths to bundle-relative paths and creates

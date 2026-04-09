@@ -12,7 +12,7 @@ if TYPE_CHECKING:
     from orchestra.models.ir import DeleteActivity
 
 
-def prepare(activity: DeleteActivity) -> PreparedActivity:
+def prepare(activity: DeleteActivity, *, scope: str = "") -> PreparedActivity:
     """Convert a DeleteActivity into a notebook_task with a generated delete notebook.
 
     Args:

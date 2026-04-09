@@ -10,7 +10,7 @@ if TYPE_CHECKING:
     from orchestra.models.ir import RunJobActivity
 
 
-def prepare(activity: RunJobActivity) -> PreparedActivity:
+def prepare(activity: RunJobActivity, *, scope: str = "") -> PreparedActivity:
     """Convert a RunJobActivity into a DAB run_job_task definition.
 
     If the activity specifies an ``existing_job_id``, it is used directly.

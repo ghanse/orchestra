@@ -102,11 +102,13 @@ def _build_common_task_fields(activity: Activity) -> dict[str, Any]:
     return task
 
 
-def prepare_activity(activity: Activity) -> PreparedActivity:
+def prepare_activity(activity: Activity, *, scope: str = "") -> PreparedActivity:
     """Dispatch to the appropriate activity preparer based on type.
 
     Args:
         activity: An IR activity node of any concrete type.
+        scope: Secret scope name (typically the pipeline/job name).  Passed
+            through to activity preparers that create secret instructions.
 
     Returns:
         A PreparedActivity with the task dict and any associated artifacts.
@@ -163,7 +165,7 @@ def prepare_activity(activity: Activity) -> PreparedActivity:
             f"No preparer registered for activity type {type(activity).__name__} (task_key={activity.task_key!r})"
         )
 
-    return preparer_fn(activity)
+    return preparer_fn(activity, scope=scope)
 
 
 def _prepare_placeholder(activity: Activity) -> PreparedActivity:
@@ -233,8 +235,10 @@ def prepare_workflow(pipeline: Pipeline) -> PreparedWorkflow:
     all_secrets: list[SecretInstruction] = []
     all_setup_tasks: list[SetupTask] = []
 
+    scope = pipeline.name
+
     for activity in pipeline.tasks:
-        prepared = prepare_activity(activity)
+        prepared = prepare_activity(activity, scope=scope)
         all_tasks.append(prepared.task)
         all_notebooks.extend(prepared.notebooks)
         all_secrets.extend(prepared.secrets)

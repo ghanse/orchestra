@@ -75,7 +75,7 @@ def _resolve_base_parameters(params: dict[str, str]) -> dict[str, str]:
     return resolved
 
 
-def prepare(activity: NotebookActivity) -> PreparedActivity:
+def prepare(activity: NotebookActivity, *, scope: str = "") -> PreparedActivity:
     """Convert a NotebookActivity into a DAB notebook_task definition.
 
     Rewrites the notebook_path to a bundle-relative path and creates a
