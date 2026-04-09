@@ -458,8 +458,16 @@ def _generate_autoloader_body(activity: CopyActivity) -> str:
         ),
     )
     sink_table = sink_props.get("table", sink_props.get("tableName", f"{activity.task_key}_raw"))
-    checkpoint = f"/tmp/checkpoints/{activity.task_key}"
     file_format = _infer_file_format(activity.source_type, src_props)
+
+    # Use the volume for checkpoints and schema evolution storage instead of
+    # /tmp.  This ensures state persists across cluster restarts and is
+    # visible in Unity Catalog.
+    volume_base = src_props.get("volume_base", "")
+    if volume_base:
+        checkpoint = f"{volume_base}/_checkpoints/{activity.task_key}"
+    else:
+        checkpoint = f"/tmp/checkpoints/{activity.task_key}"
 
     return textwrap.dedent(f"""\
         # Parameters
