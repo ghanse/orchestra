@@ -1,0 +1,246 @@
+"""Convert a translated Pipeline IR into a PreparedWorkflow.
+
+The PreparedWorkflow contains task dicts, generated notebooks, secret
+instructions, and setup tasks ready for the DAB bundle writer.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any
+
+from orchestra.models.dab import DabNotebook, SecretInstruction, SetupTask
+from orchestra.models.ir import (
+    Activity,
+    CopyActivity,
+    DeleteActivity,
+    ExecutePipelineActivity,
+    ForEachActivity,
+    IfConditionActivity,
+    LookupActivity,
+    NotebookActivity,
+    Pipeline,
+    PlaceholderActivity,
+    RunJobActivity,
+    SetVariableActivity,
+    SparkJarActivity,
+    SparkPythonActivity,
+    UnsupportedActivity,
+    WebActivity,
+)
+
+
+@dataclass(slots=True, kw_only=True)
+class PreparedActivity:
+    """Result of preparing a single activity for DAB deployment.
+
+    Attributes:
+        task: The DAB task dict ready for inclusion in a job definition.
+        notebooks: Generated notebooks this task depends on.
+        secrets: Secret creation instructions required by this task.
+        setup_tasks: One-time setup tasks required before this task can run.
+    """
+
+    task: dict[str, Any]
+    notebooks: list[DabNotebook] = field(default_factory=list)
+    secrets: list[SecretInstruction] = field(default_factory=list)
+    setup_tasks: list[SetupTask] = field(default_factory=list)
+
+
+@dataclass(slots=True, kw_only=True)
+class PreparedWorkflow:
+    """A fully prepared workflow ready for DAB bundle generation.
+
+    Attributes:
+        name: Human-readable workflow name.
+        tasks: Ordered list of DAB task dicts.
+        notebooks: All generated notebooks needed by the workflow.
+        secrets: All secret instructions aggregated across tasks.
+        setup_tasks: All one-time setup tasks aggregated across tasks.
+        inner_workflows: Nested workflows (from ExecutePipeline activities).
+    """
+
+    name: str
+    tasks: list[dict[str, Any]]
+    notebooks: list[DabNotebook]
+    secrets: list[SecretInstruction]
+    setup_tasks: list[SetupTask]
+    inner_workflows: list[PreparedWorkflow] = field(default_factory=list)
+
+
+def _build_common_task_fields(activity: Activity) -> dict[str, Any]:
+    """Build the common task-level fields shared by all task types.
+
+    Args:
+        activity: Any IR activity node.
+
+    Returns:
+        A dict with ``task_key``, ``depends_on``, ``timeout_seconds``, and
+        retry fields populated from the activity.
+    """
+    task: dict[str, Any] = {"task_key": activity.task_key}
+
+    if activity.depends_on:
+        task["depends_on"] = [{"task_key": dep.task_key} for dep in activity.depends_on]
+
+    if activity.timeout_seconds is not None and activity.timeout_seconds > 0:
+        task["timeout_seconds"] = activity.timeout_seconds
+
+    if activity.max_retries is not None and activity.max_retries > 0:
+        task["retry_on_timeout"] = True
+        task["max_retries"] = activity.max_retries
+        if activity.min_retry_interval_millis is not None:
+            task["min_retry_interval_millis"] = activity.min_retry_interval_millis
+
+    if activity.description:
+        task["description"] = activity.description
+
+    return task
+
+
+def prepare_activity(activity: Activity) -> PreparedActivity:
+    """Dispatch to the appropriate activity preparer based on type.
+
+    Args:
+        activity: An IR activity node of any concrete type.
+
+    Returns:
+        A PreparedActivity with the task dict and any associated artifacts.
+
+    Raises:
+        ValueError: If the activity type has no registered preparer.
+    """
+    # Import activity preparers lazily to avoid circular imports
+    from orchestra.preparer.activity_preparers import (
+        copy,
+        databricks_job,
+        delete,
+        execute_pipeline,
+        for_each,
+        if_condition,
+        lookup,
+        notebook,
+        set_variable,
+        spark_jar,
+        spark_python,
+        web_activity,
+    )
+
+    dispatch: dict[type, Any] = {
+        NotebookActivity: notebook.prepare,
+        SparkJarActivity: spark_jar.prepare,
+        SparkPythonActivity: spark_python.prepare,
+        CopyActivity: copy.prepare,
+        LookupActivity: lookup.prepare,
+        WebActivity: web_activity.prepare,
+        DeleteActivity: delete.prepare,
+        SetVariableActivity: set_variable.prepare,
+        ForEachActivity: for_each.prepare,
+        IfConditionActivity: if_condition.prepare,
+        ExecutePipelineActivity: execute_pipeline.prepare,
+        RunJobActivity: databricks_job.prepare,
+    }
+
+    preparer_fn = dispatch.get(type(activity))
+
+    # Handle placeholder and unsupported activities with a generic notebook
+    if preparer_fn is None:
+        if isinstance(activity, (PlaceholderActivity, UnsupportedActivity)):
+            return _prepare_placeholder(activity)
+        raise ValueError(
+            f"No preparer registered for activity type {type(activity).__name__} (task_key={activity.task_key!r})"
+        )
+
+    return preparer_fn(activity)
+
+
+def _prepare_placeholder(activity: Activity) -> PreparedActivity:
+    """Create a placeholder notebook task for unsupported or agentic activities.
+
+    Args:
+        activity: A PlaceholderActivity or UnsupportedActivity.
+
+    Returns:
+        A PreparedActivity with a stub notebook.
+    """
+    task = _build_common_task_fields(activity)
+
+    if isinstance(activity, PlaceholderActivity):
+        comment = activity.comment or "This activity requires manual implementation."
+        original_type = activity.original_type
+    elif isinstance(activity, UnsupportedActivity):
+        comment = activity.reason or "This activity type is not supported."
+        original_type = activity.original_type
+    else:
+        comment = "Unknown activity type."
+        original_type = type(activity).__name__
+
+    notebook_name = f"{activity.task_key}.py"
+    notebook_path = f"notebooks/{notebook_name}"
+
+    content = (
+        "# Databricks notebook source\n"
+        "# MAGIC %md\n"
+        f"# MAGIC # Placeholder: {activity.name}\n"
+        "# MAGIC\n"
+        f"# MAGIC Original ADF activity type: **{original_type}**\n"
+        "# MAGIC\n"
+        f"# MAGIC {comment}\n"
+        "\n# COMMAND ----------\n\n"
+        f"raise NotImplementedError(\"Activity '{activity.name}' ({original_type}) requires manual implementation.\")\n"
+    )
+
+    task["notebook_task"] = {
+        "notebook_path": f"../src/{notebook_path}",
+    }
+
+    notebook = DabNotebook(
+        relative_path=notebook_path,
+        content=content,
+    )
+
+    return PreparedActivity(task=task, notebooks=[notebook])
+
+
+def prepare_workflow(pipeline: Pipeline) -> PreparedWorkflow:
+    """Convert a Pipeline IR into a PreparedWorkflow.
+
+    Iterates over all tasks in the pipeline, dispatches each to the
+    appropriate activity preparer, and aggregates the results into a
+    single PreparedWorkflow containing all task dicts, notebooks,
+    secrets, and setup tasks.
+
+    Args:
+        pipeline: The translated Pipeline IR to prepare.
+
+    Returns:
+        A PreparedWorkflow ready for the DAB bundle writer.
+    """
+    all_tasks: list[dict[str, Any]] = []
+    all_notebooks: list[DabNotebook] = []
+    all_secrets: list[SecretInstruction] = []
+    all_setup_tasks: list[SetupTask] = []
+
+    for activity in pipeline.tasks:
+        prepared = prepare_activity(activity)
+        all_tasks.append(prepared.task)
+        all_notebooks.extend(prepared.notebooks)
+        all_secrets.extend(prepared.secrets)
+        all_setup_tasks.extend(prepared.setup_tasks)
+
+    # Deduplicate secrets by (scope, key)
+    seen_secrets: set[tuple[str, str]] = set()
+    unique_secrets: list[SecretInstruction] = []
+    for secret in all_secrets:
+        secret_id = (secret.scope, secret.key)
+        if secret_id not in seen_secrets:
+            seen_secrets.add(secret_id)
+            unique_secrets.append(secret)
+
+    return PreparedWorkflow(
+        name=pipeline.name,
+        tasks=all_tasks,
+        notebooks=all_notebooks,
+        secrets=unique_secrets,
+        setup_tasks=all_setup_tasks,
+    )

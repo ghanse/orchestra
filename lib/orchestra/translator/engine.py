@@ -1,0 +1,674 @@
+"""Core translation engine for ADF-to-Databricks pipeline conversion.
+
+Translates an :class:`AdfPipeline` AST into a :class:`Pipeline` IR by visiting
+activities in topological (dependency-first) order and dispatching each to the
+appropriate deterministic translator or recording it as an agentic gap.
+
+The engine follows a registry-dispatch pattern:
+
+1. **Topological sort** — activities are visited in dependency-first order so
+   that upstream outputs are available when translating downstream activities.
+2. **Registry dispatch** — leaf activity types are looked up in
+   ``TRANSLATOR_REGISTRY``.  Control-flow types (ForEach, IfCondition,
+   SetVariable) are handled inline because they thread translation context.
+3. **Gap recording** — unknown or agentic types produce a
+   :class:`PlaceholderActivity` and an :class:`AgenticGap` entry.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import logging
+import re
+import sys
+from collections import defaultdict
+from dataclasses import asdict
+from pathlib import Path
+from types import MappingProxyType
+from typing import Any, Callable
+
+from orchestra.models.adf_ast import (
+    AdfActivity,
+    AdfDefinitions,
+    AdfPipeline,
+    TranslationStrategy,
+)
+from orchestra.models.ir import (
+    Activity,
+    AgenticGap,
+    Dependency,
+    ForEachActivity,
+    IfConditionActivity,
+    Pipeline,
+    PlaceholderActivity,
+    SetVariableActivity,
+    TranslationContext,
+    TranslationReport,
+    UnsupportedActivity,
+)
+from orchestra.parser.adf_loader import AGENTIC_TYPES, DETERMINISTIC_TYPES, classify_activity
+from orchestra.translator.activity_translators import (
+    copy,
+    databricks_job,
+    delete,
+    execute_pipeline,
+    for_each,
+    if_condition,
+    lookup,
+    notebook,
+    set_variable,
+    spark_jar,
+    spark_python,
+    web_activity,
+)
+
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Translator registry — leaf activity types
+# ---------------------------------------------------------------------------
+
+TRANSLATOR_REGISTRY: dict[str, Callable[..., Activity]] = {
+    "Copy": copy.translate,
+    "DatabricksNotebook": notebook.translate,
+    "DatabricksSparkJar": spark_jar.translate,
+    "DatabricksSparkPython": spark_python.translate,
+    "Lookup": lookup.translate,
+    "WebActivity": web_activity.translate,
+    "Delete": delete.translate,
+    "ExecutePipeline": execute_pipeline.translate,
+    "DatabricksJob": databricks_job.translate,
+}
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+
+def translate_pipeline(pipeline: AdfPipeline, definitions: AdfDefinitions) -> TranslationReport:
+    """Translate an ADF pipeline into a Databricks pipeline IR.
+
+    Visits all activities in topological order, dispatching each to its
+    deterministic translator or recording an agentic gap.
+
+    Args:
+        pipeline: Parsed ADF pipeline AST.
+        definitions: Full ADF definitions for cross-referencing datasets,
+            linked services, etc.
+
+    Returns:
+        :class:`TranslationReport` containing the translated :class:`Pipeline`
+        and any gaps encountered.
+    """
+    context = TranslationContext(
+        activity_cache=MappingProxyType({}),
+        registry=MappingProxyType(TRANSLATOR_REGISTRY),
+        variable_cache=MappingProxyType({}),
+    )
+
+    gaps: list[AgenticGap] = []
+    warnings: list[str] = []
+
+    # Topological visit
+    sorted_activities = _topological_visit(pipeline.activities)
+    translated_activities: list[Activity] = []
+    deterministic_count = 0
+    agentic_count = 0
+    unsupported_count = 0
+
+    for adf_activity in sorted_activities:
+        activity_ir, context = _dispatch_activity(adf_activity, context, definitions)
+        translated_activities.append(activity_ir)
+
+        # Track counts and gaps
+        strategy, skill = classify_activity(adf_activity.type)
+        if strategy is TranslationStrategy.DETERMINISTIC:
+            deterministic_count += 1
+        elif strategy is TranslationStrategy.AGENTIC:
+            agentic_count += 1
+            gaps.append(AgenticGap(
+                activity_name=adf_activity.name,
+                activity_type=adf_activity.type,
+                recommended_skill=skill,
+                raw_definition=adf_activity.type_properties,
+            ))
+        else:
+            unsupported_count += 1
+            gaps.append(AgenticGap(
+                activity_name=adf_activity.name,
+                activity_type=adf_activity.type,
+                recommended_skill=None,
+                raw_definition=adf_activity.type_properties,
+            ))
+            warnings.append(
+                f"Activity '{adf_activity.name}' (type={adf_activity.type}) has no translation path."
+            )
+
+    # Build parameters dict from pipeline definition
+    parameters: dict[str, Any] = {}
+    if pipeline.parameters:
+        for pname, pdef in pipeline.parameters.items():
+            parameters[pname] = pdef.default_value
+
+    pipeline_ir = Pipeline(
+        name=pipeline.name,
+        parameters=[{"name": k, "default": v} for k, v in parameters.items()] if parameters else None,
+        tasks=translated_activities,
+        tags={"source": "adf", "pipeline": pipeline.name},
+    )
+
+    return TranslationReport(
+        pipeline=pipeline_ir,
+        deterministic_count=deterministic_count,
+        agentic_count=agentic_count,
+        unsupported_count=unsupported_count,
+        gaps=gaps,
+        warnings=warnings,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Activity dispatch
+# ---------------------------------------------------------------------------
+
+
+def _dispatch_activity(
+    activity: AdfActivity,
+    context: TranslationContext,
+    definitions: AdfDefinitions,
+) -> tuple[Activity, TranslationContext]:
+    """Dispatch a single activity to its translator.
+
+    Control-flow types (ForEach, IfCondition, SetVariable) are handled inline
+    because they thread context.  Leaf types are looked up in
+    ``TRANSLATOR_REGISTRY``.  Unknown or agentic types produce a
+    :class:`PlaceholderActivity`.
+
+    Args:
+        activity: ADF activity AST node.
+        context: Current translation context.
+        definitions: Full ADF definitions.
+
+    Returns:
+        Tuple of ``(translated_activity, updated_context)``.
+    """
+    base_kwargs = _build_base_kwargs(activity, definitions)
+
+    match activity.type:
+        # ---------------------------------------------------------------
+        # Control-flow types that thread context
+        # ---------------------------------------------------------------
+        case "ForEach":
+            result, context = for_each.translate(
+                activity, base_kwargs, context, definitions,
+                translate_activities_fn=_translate_activity_list,
+            )
+            context = context.with_activity(activity.name, result)
+            return result, context
+
+        case "IfCondition":
+            result, context = if_condition.translate(
+                activity, base_kwargs, context, definitions,
+                translate_activities_fn=_translate_activity_list,
+            )
+            context = context.with_activity(activity.name, result)
+            return result, context
+
+        case "SetVariable":
+            result, context = set_variable.translate(
+                activity, base_kwargs, context, definitions,
+            )
+            context = context.with_activity(activity.name, result)
+            return result, context
+
+        # ---------------------------------------------------------------
+        # Leaf types from the registry
+        # ---------------------------------------------------------------
+        case atype if atype in TRANSLATOR_REGISTRY:
+            translator_fn = TRANSLATOR_REGISTRY[atype]
+            result = translator_fn(activity, base_kwargs, context, definitions)
+            context = context.with_activity(activity.name, result)
+            return result, context
+
+        # ---------------------------------------------------------------
+        # Unknown / agentic types -> placeholder
+        # ---------------------------------------------------------------
+        case _:
+            strategy, skill = classify_activity(activity.type)
+            reason = f"Agentic skill: {skill}" if skill else f"No translator for type '{activity.type}'"
+            placeholder = PlaceholderActivity(
+                **base_kwargs,
+                original_type=activity.type,
+                comment=reason,
+            )
+            context = context.with_activity(activity.name, placeholder)
+            return placeholder, context
+
+
+def _translate_activity_list(
+    activities: list[AdfActivity],
+    context: TranslationContext,
+    definitions: AdfDefinitions,
+) -> tuple[list[Activity], TranslationContext]:
+    """Translate a list of ADF activities, threading context through each.
+
+    Used as a callback by control-flow translators (ForEach, IfCondition) to
+    recursively translate their inner activities.
+
+    Args:
+        activities: List of ADF activity AST nodes.
+        context: Current translation context.
+        definitions: Full ADF definitions.
+
+    Returns:
+        Tuple of ``(translated_activities, final_context)``.
+    """
+    sorted_activities = _topological_visit(activities)
+    results: list[Activity] = []
+
+    for adf_activity in sorted_activities:
+        activity_ir, context = _dispatch_activity(adf_activity, context, definitions)
+        results.append(activity_ir)
+
+    return results, context
+
+
+# ---------------------------------------------------------------------------
+# Topological sort
+# ---------------------------------------------------------------------------
+
+
+def _topological_visit(activities: list[AdfActivity]) -> list[AdfActivity]:
+    """Return activities in dependency-first (topological) order.
+
+    Uses Kahn's algorithm.  Activities with no dependencies come first.
+    If a cycle is detected, the remaining activities are appended in their
+    original order with a warning.
+
+    Args:
+        activities: Flat list of ADF activities at one nesting level.
+
+    Returns:
+        Activities reordered so that dependencies are visited first.
+    """
+    if not activities:
+        return []
+
+    # Build adjacency structures
+    name_to_activity: dict[str, AdfActivity] = {a.name: a for a in activities}
+    in_degree: dict[str, int] = {a.name: 0 for a in activities}
+    dependents: dict[str, list[str]] = defaultdict(list)
+
+    for activity in activities:
+        if activity.depends_on:
+            for dep in activity.depends_on:
+                dep_name = dep.activity
+                # Only count dependencies within the same level
+                if dep_name in name_to_activity:
+                    in_degree[activity.name] += 1
+                    dependents[dep_name].append(activity.name)
+
+    # Kahn's algorithm
+    queue: list[str] = [name for name, deg in in_degree.items() if deg == 0]
+    result: list[AdfActivity] = []
+
+    while queue:
+        # Sort for deterministic output
+        queue.sort()
+        current = queue.pop(0)
+        result.append(name_to_activity[current])
+        for dependent in dependents.get(current, []):
+            in_degree[dependent] -= 1
+            if in_degree[dependent] == 0:
+                queue.append(dependent)
+
+    # Handle cycles — append remaining in original order
+    if len(result) < len(activities):
+        visited = {a.name for a in result}
+        for activity in activities:
+            if activity.name not in visited:
+                logger.warning("Cycle detected: activity '%s' has unresolved dependencies.", activity.name)
+                result.append(activity)
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Base kwargs builder
+# ---------------------------------------------------------------------------
+
+
+_TIMEOUT_RE = re.compile(r"(?:(\d+)\.)?(\d{2}):(\d{2}):(\d{2})")
+
+
+def _build_base_kwargs(activity: AdfActivity, definitions: AdfDefinitions) -> dict[str, Any]:
+    """Extract common fields shared by all Activity IR subclasses.
+
+    Args:
+        activity: ADF activity AST node.
+        definitions: Full ADF definitions for linked-service cluster config.
+
+    Returns:
+        Dictionary with keys: ``name``, ``task_key``, ``timeout_seconds``,
+        ``max_retries``, ``depends_on``, ``cluster``.
+    """
+    task_key = _sanitize_task_key(activity.name)
+
+    # Timeout
+    timeout_seconds: int | None = None
+    if activity.policy and activity.policy.timeout:
+        timeout_seconds = _parse_adf_timeout(activity.policy.timeout)
+
+    # Retries
+    max_retries: int | None = None
+    if activity.policy and activity.policy.retry is not None:
+        max_retries = activity.policy.retry
+
+    # Retry interval
+    min_retry_interval_millis: int | None = None
+    if activity.policy and activity.policy.retry_interval_in_seconds is not None:
+        min_retry_interval_millis = activity.policy.retry_interval_in_seconds * 1000
+
+    # Dependencies
+    depends_on: list[Dependency] | None = None
+    if activity.depends_on:
+        depends_on = []
+        for dep in activity.depends_on:
+            outcome = dep.dependency_conditions[0] if dep.dependency_conditions else None
+            depends_on.append(Dependency(
+                task_key=_sanitize_task_key(dep.activity),
+                outcome=outcome,
+            ))
+
+    # Cluster config from linked service
+    cluster: dict[str, Any] | None = None
+    if activity.linked_service_name:
+        ls_name = activity.linked_service_name.reference_name
+        ls_def = definitions.linked_services.get(ls_name)
+        if ls_def:
+            cluster = _extract_cluster_config(ls_def.properties)
+
+    return {
+        "name": activity.name,
+        "task_key": task_key,
+        "description": None,
+        "timeout_seconds": timeout_seconds,
+        "max_retries": max_retries,
+        "min_retry_interval_millis": min_retry_interval_millis,
+        "depends_on": depends_on,
+        "cluster": cluster,
+    }
+
+
+def _sanitize_task_key(name: str) -> str:
+    """Convert an ADF activity name to a valid Databricks task key.
+
+    Task keys must be alphanumeric plus underscores and hyphens.
+
+    Args:
+        name: ADF activity name.
+
+    Returns:
+        Sanitised task key string.
+    """
+    # Replace spaces and special characters with underscores
+    key = re.sub(r"[^a-zA-Z0-9_-]", "_", name)
+    # Collapse multiple underscores
+    key = re.sub(r"_+", "_", key)
+    # Strip leading/trailing underscores
+    key = key.strip("_")
+    return key or "unnamed"
+
+
+def _parse_adf_timeout(timeout_str: str) -> int | None:
+    """Parse an ADF timeout string to total seconds.
+
+    Args:
+        timeout_str: Timeout in ``"d.hh:mm:ss"`` or ``"hh:mm:ss"`` format.
+
+    Returns:
+        Total seconds, or ``None`` if the format is unrecognised.
+    """
+    m = _TIMEOUT_RE.match(timeout_str)
+    if not m:
+        return None
+    days = int(m.group(1) or 0)
+    hours = int(m.group(2))
+    minutes = int(m.group(3))
+    seconds = int(m.group(4))
+    return days * 86400 + hours * 3600 + minutes * 60 + seconds
+
+
+def _extract_cluster_config(ls_properties: dict[str, Any]) -> dict[str, Any] | None:
+    """Extract Databricks cluster configuration from a linked-service properties dict.
+
+    Args:
+        ls_properties: Full properties bag from the linked service JSON.
+
+    Returns:
+        Cluster configuration dict, or ``None`` if not a Databricks linked service.
+    """
+    type_props = ls_properties.get("typeProperties", {})
+    if not type_props:
+        return None
+
+    config: dict[str, Any] = {}
+
+    # Existing cluster ID
+    existing_cluster_id = type_props.get("existingClusterId")
+    if existing_cluster_id:
+        config["existing_cluster_id"] = existing_cluster_id
+
+    # New cluster configuration
+    new_cluster = type_props.get("newClusterVersion") or type_props.get("newClusterSparkVersion")
+    if new_cluster:
+        config["spark_version"] = new_cluster
+        config["num_workers"] = type_props.get("newClusterNumOfWorker", 1)
+        config["node_type_id"] = type_props.get("newClusterNodeType", "Standard_DS3_v2")
+        spark_conf = type_props.get("newClusterSparkConf")
+        if spark_conf:
+            config["spark_conf"] = spark_conf
+
+    return config if config else None
+
+
+# ---------------------------------------------------------------------------
+# CLI entry point
+# ---------------------------------------------------------------------------
+
+
+if __name__ == "__main__":
+    from orchestra.parser.adf_loader import load_adf_definitions
+
+    parser = argparse.ArgumentParser(description="Translate ADF pipelines to Databricks IR.")
+    parser.add_argument("--source-dir", required=True, type=Path, help="Root directory containing ADF JSON exports.")
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path("./orchestra_output/translate"),
+        help="Directory to write translation results into.",
+    )
+    parser.add_argument(
+        "--pipeline",
+        type=str,
+        default=None,
+        help="Translate only the named pipeline (default: all).",
+    )
+    args = parser.parse_args()
+
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+
+    definitions = load_adf_definitions(args.source_dir)
+    logger.info("Loaded %d pipeline(s) from %s", len(definitions.pipelines), args.source_dir)
+
+    output_dir: Path = args.output_dir.resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    total_det = 0
+    total_agentic = 0
+    total_unsupported = 0
+    all_gaps: list[dict[str, Any]] = []
+
+    for pipeline in definitions.pipelines:
+        if args.pipeline and pipeline.name != args.pipeline:
+            continue
+
+        report = translate_pipeline(pipeline, definitions)
+        total_det += report.deterministic_count
+        total_agentic += report.agentic_count
+        total_unsupported += report.unsupported_count
+
+        # Write pipeline IR
+        pipeline_file = output_dir / f"{_sanitize_task_key(pipeline.name)}.json"
+        pipeline_dict = _pipeline_to_dict(report.pipeline)
+        pipeline_file.write_text(json.dumps(pipeline_dict, indent=2, default=str), encoding="utf-8")
+        logger.info("Wrote pipeline IR to %s", pipeline_file)
+
+        # Collect gaps
+        for gap in report.gaps:
+            all_gaps.append(asdict(gap))
+
+        if report.warnings:
+            for w in report.warnings:
+                logger.warning(w)
+
+    # Write gaps
+    if all_gaps:
+        gaps_file = output_dir / "gaps.json"
+        gaps_file.write_text(json.dumps(all_gaps, indent=2, default=str), encoding="utf-8")
+        logger.info("Wrote %d gap(s) to %s", len(all_gaps), gaps_file)
+
+    # Summary
+    total = total_det + total_agentic + total_unsupported
+    print(f"\nTranslation Summary")
+    print(f"===================")
+    print(f"Deterministic:    {total_det}")
+    print(f"Agentic:          {total_agentic}")
+    print(f"Unsupported:      {total_unsupported}")
+    print(f"Total:            {total}")
+
+
+def _pipeline_to_dict(pipeline: Pipeline) -> dict[str, Any]:
+    """Serialise a Pipeline IR to a JSON-friendly dictionary.
+
+    Args:
+        pipeline: The translated pipeline IR.
+
+    Returns:
+        Dictionary suitable for ``json.dumps``.
+    """
+    tasks: list[dict[str, Any]] = []
+    for task in pipeline.tasks:
+        task_dict: dict[str, Any] = {
+            "name": task.name,
+            "task_key": task.task_key,
+            "type": type(task).__name__,
+        }
+        if task.description:
+            task_dict["description"] = task.description
+        if task.timeout_seconds:
+            task_dict["timeout_seconds"] = task.timeout_seconds
+        if task.max_retries:
+            task_dict["max_retries"] = task.max_retries
+        if task.depends_on:
+            task_dict["depends_on"] = [
+                {"task_key": d.task_key, "outcome": d.outcome} for d in task.depends_on
+            ]
+        if task.cluster:
+            task_dict["cluster"] = task.cluster
+
+        # Type-specific fields
+        extra = _activity_extra_fields(task)
+        task_dict.update(extra)
+        tasks.append(task_dict)
+
+    return {
+        "name": pipeline.name,
+        "parameters": pipeline.parameters,
+        "schedule": pipeline.schedule,
+        "tags": pipeline.tags,
+        "tasks": tasks,
+    }
+
+
+def _activity_extra_fields(activity: Activity) -> dict[str, Any]:
+    """Extract type-specific fields from an Activity subclass.
+
+    Args:
+        activity: Any Activity IR node.
+
+    Returns:
+        Dictionary of extra fields beyond the base Activity.
+    """
+    from orchestra.models.ir import (
+        CopyActivity,
+        DeleteActivity,
+        ExecutePipelineActivity,
+        NotebookActivity,
+        RunJobActivity,
+        SparkJarActivity,
+        SparkPythonActivity,
+        WebActivity,
+    )
+
+    extra: dict[str, Any] = {}
+
+    match activity:
+        case NotebookActivity():
+            extra["notebook_path"] = activity.notebook_path
+            if activity.base_parameters:
+                extra["base_parameters"] = activity.base_parameters
+        case CopyActivity():
+            extra["source_type"] = activity.source_type
+            extra["sink_type"] = activity.sink_type
+            if activity.source_properties:
+                extra["source_properties"] = activity.source_properties
+            if activity.sink_properties:
+                extra["sink_properties"] = activity.sink_properties
+            if activity.column_mapping:
+                extra["column_mapping"] = activity.column_mapping
+        case ForEachActivity():
+            extra["items_expression"] = activity.items_expression
+            extra["concurrency"] = activity.concurrency
+        case IfConditionActivity():
+            extra["op"] = activity.op
+            extra["left"] = activity.left
+            extra["right"] = activity.right
+        case SetVariableActivity():
+            extra["variable_name"] = activity.variable_name
+            extra["variable_value"] = activity.variable_value
+        case SparkJarActivity():
+            extra["main_class_name"] = activity.main_class_name
+            if activity.parameters:
+                extra["parameters"] = activity.parameters
+            if activity.libraries:
+                extra["libraries"] = activity.libraries
+        case SparkPythonActivity():
+            extra["python_file"] = activity.python_file
+            if activity.parameters:
+                extra["parameters"] = activity.parameters
+        case WebActivity():
+            extra["url"] = activity.url
+            extra["method"] = activity.method
+        case DeleteActivity():
+            extra["dataset_name"] = activity.dataset_name
+            extra["recursive"] = activity.recursive
+        case ExecutePipelineActivity():
+            extra["pipeline_name"] = activity.pipeline_name
+            extra["wait_on_completion"] = activity.wait_on_completion
+            if activity.parameters:
+                extra["parameters"] = activity.parameters
+        case RunJobActivity():
+            extra["job_name"] = activity.job_name
+            if activity.existing_job_id:
+                extra["existing_job_id"] = activity.existing_job_id
+        case PlaceholderActivity():
+            extra["original_type"] = activity.original_type
+            extra["comment"] = activity.comment
+        case UnsupportedActivity():
+            extra["original_type"] = activity.original_type
+            extra["reason"] = activity.reason
+
+    return extra
