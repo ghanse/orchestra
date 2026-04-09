@@ -13,7 +13,6 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any, TypeAlias
 
-
 # ---------------------------------------------------------------------------
 # Dependency
 # ---------------------------------------------------------------------------
@@ -403,15 +402,9 @@ class TranslationContext:
             of the tasks that set them.
     """
 
-    activity_cache: MappingProxyType[str, Activity] = field(
-        default_factory=lambda: MappingProxyType({})
-    )
-    registry: MappingProxyType[str, Any] = field(
-        default_factory=lambda: MappingProxyType({})
-    )
-    variable_cache: MappingProxyType[str, str] = field(
-        default_factory=lambda: MappingProxyType({})
-    )
+    activity_cache: MappingProxyType[str, Activity] = field(default_factory=lambda: MappingProxyType({}))
+    registry: MappingProxyType[str, Any] = field(default_factory=lambda: MappingProxyType({}))
+    variable_cache: MappingProxyType[str, str] = field(default_factory=lambda: MappingProxyType({}))
 
     def with_activity(self, name: str, activity: Activity) -> TranslationContext:
         """Return a new context with *activity* added to the cache.

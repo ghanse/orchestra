@@ -49,12 +49,14 @@ def translate(
             source_col = mapping.get("source", {})
             sink_col = mapping.get("sink", {})
             if source_col and sink_col:
-                column_mapping.append({
-                    "source_name": source_col.get("name", ""),
-                    "source_type": source_col.get("type", ""),
-                    "sink_name": sink_col.get("name", ""),
-                    "sink_type": sink_col.get("type", ""),
-                })
+                column_mapping.append(
+                    {
+                        "source_name": source_col.get("name", ""),
+                        "source_type": source_col.get("type", ""),
+                        "sink_name": sink_col.get("name", ""),
+                        "sink_type": sink_col.get("type", ""),
+                    }
+                )
 
     return CopyActivity(
         **base_kwargs,

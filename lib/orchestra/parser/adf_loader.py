@@ -19,9 +19,6 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import re
-import sys
-from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -690,11 +687,11 @@ if __name__ == "__main__":
 
     # Summary
     summary = inventory_dict["summary"]
-    print(f"\nADF Ingestion Summary")
-    print(f"=====================")
+    print("\nADF Ingestion Summary")
+    print("=====================")
     print(f"Pipelines parsed:     {summary['pipeline_count']}")
     print(f"Total activities:     {summary['activity_count']}")
-    print(f"\nStrategy Breakdown:")
+    print("\nStrategy Breakdown:")
     print(f"  Deterministic:      {summary['deterministic_count']}")
     print(f"  Agentic:            {summary['agentic_count']}")
     print(f"  Unsupported:        {summary['unsupported_count']}")

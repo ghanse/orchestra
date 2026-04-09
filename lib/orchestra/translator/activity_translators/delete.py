@@ -41,7 +41,6 @@ def translate(
     # Also check storeSettings for wildcard paths
     store_settings = tp.get("storeSettings", {})
     wildcard_folder_path = store_settings.get("wildcardFolderPath")
-    wildcard_filename = store_settings.get("wildcardFileName")
 
     # Build folder path from available data
     effective_folder = folder_path or wildcard_folder_path

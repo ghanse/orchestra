@@ -12,7 +12,6 @@ from typing import Any
 from orchestra.models.adf_ast import AdfActivity, AdfDefinitions
 from orchestra.models.ir import Activity, IfConditionActivity, TranslationContext
 
-
 # Common ADF comparison functions
 _COMPARISON_RE = re.compile(
     r"""(equals|greater|greaterOrEquals|less|lessOrEquals|not|and|or|contains|startsWith|endsWith|empty)\s*\((.+)\)""",

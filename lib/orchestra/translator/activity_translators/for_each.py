@@ -53,7 +53,6 @@ def translate(
     child_adf_activities = activity.activities or []
 
     if translate_activities_fn and child_adf_activities:
-        inner_prefix = context.task_key_prefix + activity.name + "__" if context.task_key_prefix else activity.name + "__"
         child_context = TranslationContext(
             activity_cache=context.activity_cache,
             registry=context.registry,
@@ -64,7 +63,11 @@ def translate(
     foreach_activity = ForEachActivity(
         **base_kwargs,
         items_expression=items_expression,
-        child_activity=inner_activities[0] if len(inner_activities) == 1 else inner_activities[0] if inner_activities else Activity(name="noop", task_key="noop"),
+        child_activity=inner_activities[0]
+        if len(inner_activities) == 1
+        else inner_activities[0]
+        if inner_activities
+        else Activity(name="noop", task_key="noop"),
         concurrency=batch_count,
     )
 

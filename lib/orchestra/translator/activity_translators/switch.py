@@ -58,7 +58,9 @@ def translate(
         case_translated: list[Activity] = []
         if translate_activities_fn and case_adf_activities:
             case_translated, _ = translate_activities_fn(
-                case_adf_activities, context, definitions,
+                case_adf_activities,
+                context,
+                definitions,
             )
 
         cases.append(SwitchCase(value=case_value, activities=case_translated))
@@ -69,7 +71,9 @@ def translate(
     default_adf_activities = _ensure_adf_activities(default_raw)
     if translate_activities_fn and default_adf_activities:
         default_activities, _ = translate_activities_fn(
-            default_adf_activities, context, definitions,
+            default_adf_activities,
+            context,
+            definitions,
         )
 
     switch_activity = SwitchActivity(

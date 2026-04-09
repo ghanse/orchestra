@@ -10,8 +10,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from orchestra.models.dab import DabNotebook
-from orchestra.preparer.code_generator import _command_separator, _notebook_header
 from orchestra.preparer.workflow_preparer import PreparedActivity, _build_common_task_fields, prepare_activity
 
 if TYPE_CHECKING:
@@ -49,10 +47,12 @@ def prepare(activity: SwitchActivity) -> PreparedActivity:
             all_notebooks.extend(prepared.notebooks)
             all_secrets.extend(prepared.secrets)
             all_setup_tasks.extend(prepared.setup_tasks)
-        case_branches.append({
-            "value": case.value,
-            "tasks": case_tasks,
-        })
+        case_branches.append(
+            {
+                "value": case.value,
+                "tasks": case_tasks,
+            }
+        )
 
     # Prepare default branch
     default_tasks = []
