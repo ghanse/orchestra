@@ -43,16 +43,20 @@ from orchestra.models.ir import (
     Pipeline,
     PlaceholderActivity,
     SetVariableActivity,
+    SwitchActivity,
     TranslationContext,
     TranslationReport,
     UnsupportedActivity,
+    WaitActivity,
 )
 from orchestra.parser.adf_loader import AGENTIC_TYPES, DETERMINISTIC_TYPES, classify_activity
 from orchestra.translator.activity_translators import (
+    append_variable,
     copy,
     databricks_job,
     delete,
     execute_pipeline,
+    filter,
     for_each,
     if_condition,
     lookup,
@@ -60,6 +64,8 @@ from orchestra.translator.activity_translators import (
     set_variable,
     spark_jar,
     spark_python,
+    switch,
+    wait,
     web_activity,
 )
 
@@ -79,6 +85,8 @@ TRANSLATOR_REGISTRY: dict[str, Callable[..., Activity]] = {
     "Delete": delete.translate,
     "ExecutePipeline": execute_pipeline.translate,
     "DatabricksJob": databricks_job.translate,
+    "Wait": wait.translate,
+    "Filter": filter.translate,
 }
 
 
@@ -219,6 +227,21 @@ def _dispatch_activity(
         case "SetVariable":
             result, context = set_variable.translate(
                 activity, base_kwargs, context, definitions,
+            )
+            context = context.with_activity(activity.name, result)
+            return result, context
+
+        case "AppendVariable":
+            result, context = append_variable.translate(
+                activity, base_kwargs, context, definitions,
+            )
+            context = context.with_activity(activity.name, result)
+            return result, context
+
+        case "Switch":
+            result, context = switch.translate(
+                activity, base_kwargs, context, definitions,
+                translate_activities_fn=_translate_activity_list,
             )
             context = context.with_activity(activity.name, result)
             return result, context
@@ -603,13 +626,16 @@ def _activity_extra_fields(activity: Activity) -> dict[str, Any]:
         Dictionary of extra fields beyond the base Activity.
     """
     from orchestra.models.ir import (
+        AppendVariableActivity,
         CopyActivity,
         DeleteActivity,
         ExecutePipelineActivity,
+        FilterActivity,
         NotebookActivity,
         RunJobActivity,
         SparkJarActivity,
         SparkPythonActivity,
+        SwitchCase,
         WebActivity,
     )
 
@@ -639,6 +665,21 @@ def _activity_extra_fields(activity: Activity) -> dict[str, Any]:
         case SetVariableActivity():
             extra["variable_name"] = activity.variable_name
             extra["variable_value"] = activity.variable_value
+        case FilterActivity():
+            extra["items_expression"] = activity.items_expression
+            extra["condition_expression"] = activity.condition_expression
+        case AppendVariableActivity():
+            extra["variable_name"] = activity.variable_name
+            extra["append_value"] = activity.append_value
+        case SwitchActivity():
+            extra["on_expression"] = activity.on_expression
+            extra["cases"] = [
+                {"value": c.value, "activities": len(c.activities)}
+                for c in activity.cases
+            ]
+            extra["default_activities_count"] = len(activity.default_activities)
+        case WaitActivity():
+            extra["wait_time_seconds"] = activity.wait_time_seconds
         case SparkJarActivity():
             extra["main_class_name"] = activity.main_class_name
             if activity.parameters:

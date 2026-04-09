@@ -257,6 +257,80 @@ class SparkPythonActivity(Activity):
 
 
 @dataclass(slots=True, kw_only=True)
+class SwitchCase:
+    """A single case branch within a SwitchActivity.
+
+    Attributes:
+        value: The literal value to compare against the switch expression.
+        activities: Activities to execute when this case matches.
+    """
+
+    value: str
+    activities: list[Activity] = field(default_factory=list)
+
+
+@dataclass(slots=True, kw_only=True)
+class SwitchActivity(Activity):
+    """Switch (multi-branch) activity.
+
+    Evaluates an expression and routes to the matching case branch,
+    falling back to default activities if no case matches.
+
+    Attributes:
+        on_expression: The ADF expression to evaluate.
+        cases: Ordered list of case branches.
+        default_activities: Activities to run when no case matches.
+    """
+
+    on_expression: str
+    cases: list[SwitchCase] = field(default_factory=list)
+    default_activities: list[Activity] = field(default_factory=list)
+
+
+@dataclass(slots=True, kw_only=True)
+class WaitActivity(Activity):
+    """Wait / sleep activity.
+
+    Pauses pipeline execution for a specified number of seconds.
+
+    Attributes:
+        wait_time_seconds: Duration to wait in seconds.
+    """
+
+    wait_time_seconds: int
+
+
+@dataclass(slots=True, kw_only=True)
+class FilterActivity(Activity):
+    """Filter activity.
+
+    Applies a condition to an input array, returning only matching items.
+
+    Attributes:
+        items_expression: ADF expression for the input array.
+        condition_expression: ADF expression for the filter condition.
+    """
+
+    items_expression: str
+    condition_expression: str
+
+
+@dataclass(slots=True, kw_only=True)
+class AppendVariableActivity(Activity):
+    """Append variable activity.
+
+    Adds a value to an existing array variable.
+
+    Attributes:
+        variable_name: Name of the array variable.
+        append_value: Expression string that evaluates to the value to append.
+    """
+
+    variable_name: str
+    append_value: str
+
+
+@dataclass(slots=True, kw_only=True)
 class UnsupportedActivity(Activity):
     """Sentinel for activities that could not be translated.
 

@@ -24,12 +24,12 @@ This reference defines the mapping between Azure Data Factory activity types and
 | Delete | Deterministic | `delete.py` | `notebook_task` (`dbutils.fs.rm`) |
 | ExecutePipeline | Deterministic | `execute_pipeline.py` | `run_job_task` |
 | DatabricksJob | Deterministic | `databricks_job.py` | `run_job_task` |
+| Switch | Deterministic | `switch.py` | chained `condition_task`s |
+| Wait | Deterministic | `wait.py` | `notebook_task` (`time.sleep`) |
 | ExecuteDataFlow | Agentic | `adf-to-databricks:adf-dataflow-converter` | DLT pipeline or PySpark notebook |
-| Switch | Agentic | `adf-to-databricks:adf-pipeline-converter` | chained `condition_task`s |
 | Until | Agentic | `adf-to-databricks:adf-pipeline-converter` | while-loop notebook |
-| Wait | Agentic | `adf-to-databricks:adf-pipeline-converter` | `time.sleep` notebook |
-| Filter | Agentic | `adf-to-databricks:adf-pipeline-converter` | filter notebook |
-| AppendVariable | Agentic | `adf-to-databricks:adf-pipeline-converter` | task values notebook |
+| Filter | Deterministic | `filter.py` | `notebook_task` (filter array + task values) |
+| AppendVariable | Deterministic | `append_variable.py` | `notebook_task` (append to array task value) |
 | SqlServerStoredProcedure | Agentic | `adf-to-databricks:adf-pipeline-converter` | SQL notebook |
 | AzureFunction | Agentic | `adf-to-databricks:adf-pipeline-converter` | webhook/REST notebook |
 | WebHook | Agentic | `adf-to-databricks:adf-pipeline-converter` | REST notebook |
@@ -119,6 +119,35 @@ Maps to `run_job_task`:
 Maps to `run_job_task`:
 - Existing Databricks job reference preserved
 - Parameters forwarded
+
+### Switch (`switch.py`)
+
+Maps to chained `condition_task` nodes:
+- `typeProperties.on.value` expression evaluated against each case value
+- Each case becomes an equality check in a nested condition chain
+- Default activities fire when no case matches (the final `if_false` branch)
+- Child activities within each case are translated recursively
+
+### Wait (`wait.py`)
+
+Maps to a `notebook_task` with a `time.sleep()` call:
+- `typeProperties.waitTimeInSeconds` becomes the sleep duration
+- Generated notebook accepts a `wait_seconds` widget parameter for runtime override
+
+### Filter (`filter.py`)
+
+Maps to a `notebook_task` that filters an array:
+- `typeProperties.items.value` expression provides the input array
+- `typeProperties.condition.value` expression provides the filter predicate
+- Generated notebook evaluates the array, applies the condition, and stores the filtered result as a task value via `dbutils.jobs.taskValues.set()`
+
+### AppendVariable (`append_variable.py`)
+
+Maps to a `notebook_task` that appends a value to an array variable:
+- `typeProperties.variableName` identifies the target array variable
+- `typeProperties.value` expression provides the value to append
+- Threads context like SetVariable, registering the variable mapping
+- Generated notebook reads the current array from a task value, appends the new value, and writes the updated array back via `dbutils.jobs.taskValues.set()`
 
 ## Agentic Translation Notes
 

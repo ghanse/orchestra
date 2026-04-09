@@ -16,10 +16,13 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from orchestra.models.ir import (
+        AppendVariableActivity,
         CopyActivity,
         DeleteActivity,
+        FilterActivity,
         LookupActivity,
         SetVariableActivity,
+        WaitActivity,
         WebActivity,
     )
 
@@ -284,6 +287,42 @@ def generate_set_variable_notebook(activity: SetVariableActivity) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Wait notebook
+# ---------------------------------------------------------------------------
+
+
+def generate_wait_notebook(activity: WaitActivity) -> str:
+    """Generate a notebook that sleeps for a specified duration.
+
+    ADF Wait activities pause pipeline execution for N seconds.  The
+    Databricks equivalent is a simple ``time.sleep()`` call inside a
+    generated notebook.
+
+    Args:
+        activity: The WaitActivity IR node.
+
+    Returns:
+        Complete notebook source code as a string.
+    """
+    header = _notebook_header(f"Wait: {activity.name}")
+
+    body = textwrap.dedent(f"""\
+        import time
+
+        # Parameters
+        wait_seconds = int(dbutils.widgets.get("wait_seconds")) if dbutils.widgets.get("wait_seconds") else {activity.wait_time_seconds}
+
+        print(f"Waiting for {{wait_seconds}} seconds...")
+        time.sleep(wait_seconds)
+        print("Wait complete.")
+
+        dbutils.notebook.exit(f"Waited {{wait_seconds}} seconds")
+    """)
+
+    return header + _command_separator() + body
+
+
+# ---------------------------------------------------------------------------
 # Copy notebook
 # ---------------------------------------------------------------------------
 
@@ -516,3 +555,123 @@ def _generate_generic_copy_body(activity: CopyActivity) -> str:
         print(f"Copy complete: {{df.count()}} rows written to {{target_table}}")
         dbutils.notebook.exit(f"Rows written: {{df.count()}}")
     """)
+
+
+# ---------------------------------------------------------------------------
+# Filter notebook
+# ---------------------------------------------------------------------------
+
+
+def generate_filter_notebook(activity: FilterActivity) -> str:
+    """Generate a notebook that filters an array and stores the result as a task value.
+
+    The notebook reads the input array from a task value or parameter, applies
+    the filter condition, and writes the filtered result via
+    ``dbutils.jobs.taskValues.set()``.
+
+    Args:
+        activity: The FilterActivity IR node.
+
+    Returns:
+        Complete notebook source code as a string.
+    """
+    header = _notebook_header(f"Filter: {activity.name}")
+
+    body = textwrap.dedent(f"""\
+        import json
+
+        # Parameters
+        items_expression = dbutils.widgets.get("items_expression") or '''{activity.items_expression}'''
+        condition_expression = dbutils.widgets.get("condition_expression") or '''{activity.condition_expression}'''
+
+        # Evaluate the input array
+        # If the items expression is a task value reference, evaluate it;
+        # otherwise treat it as a JSON-encoded list.
+        try:
+            items = eval(items_expression)
+        except Exception:
+            items = json.loads(items_expression)
+
+        if not isinstance(items, list):
+            items = list(items) if hasattr(items, '__iter__') else [items]
+
+        # Apply the filter condition
+        # The condition expression should be a Python lambda or expression string.
+        # For ADF @equals(item().status, 'active') style conditions, we wrap in a
+        # lambda that receives each item.
+        try:
+            filter_fn = eval(f"lambda item: {{condition_expression}}")
+            filtered = [item for item in items if filter_fn(item)]
+        except Exception:
+            # Fallback: keep all items if the condition cannot be evaluated
+            print(f"WARNING: Could not evaluate filter condition: {{condition_expression}}")
+            print("Returning all items unfiltered. Please review the condition expression.")
+            filtered = items
+
+        # Set the filtered result as a task value for downstream tasks
+        result = json.dumps(filtered)
+        dbutils.jobs.taskValues.set(key="output", value=result)
+        print(f"Filtered {{len(items)}} items to {{len(filtered)}} items")
+
+        dbutils.notebook.exit(result)
+    """)
+
+    return header + _command_separator() + body
+
+
+# ---------------------------------------------------------------------------
+# Append variable notebook
+# ---------------------------------------------------------------------------
+
+
+def generate_append_variable_notebook(activity: AppendVariableActivity) -> str:
+    """Generate a notebook that appends a value to an array task value.
+
+    Reads the current array from a task value (or initialises an empty list),
+    appends the new value, and writes the updated array back via
+    ``dbutils.jobs.taskValues.set()``.
+
+    Args:
+        activity: The AppendVariableActivity IR node.
+
+    Returns:
+        Complete notebook source code as a string.
+    """
+    header = _notebook_header(f"Append Variable: {activity.name}")
+
+    body = textwrap.dedent(f"""\
+        import json
+
+        # Parameters
+        variable_name = dbutils.widgets.get("variable_name") or "{activity.variable_name}"
+        value = dbutils.widgets.get("value") or '''{activity.append_value}'''
+
+        # Read the current array from task values (or start with empty list)
+        try:
+            current_raw = dbutils.jobs.taskValues.get(taskKey=dbutils.widgets.get("task_key", ""), key=variable_name)
+            if isinstance(current_raw, str):
+                current = json.loads(current_raw)
+            else:
+                current = current_raw
+        except Exception:
+            current = []
+
+        if not isinstance(current, list):
+            current = [current] if current else []
+
+        # Evaluate the value to append
+        try:
+            append_val = json.loads(value) if isinstance(value, str) and value.startswith(('{{', '[', '"')) else value
+        except (json.JSONDecodeError, ValueError):
+            append_val = value
+
+        # Append and write back
+        current.append(append_val)
+        result = json.dumps(current)
+        dbutils.jobs.taskValues.set(key=variable_name, value=result)
+        print(f"Appended to '{{variable_name}}': array now has {{len(current)}} item(s)")
+
+        dbutils.notebook.exit(result)
+    """)
+
+    return header + _command_separator() + body

@@ -12,9 +12,11 @@ from typing import Any
 from orchestra.models.dab import DabNotebook, SecretInstruction, SetupTask
 from orchestra.models.ir import (
     Activity,
+    AppendVariableActivity,
     CopyActivity,
     DeleteActivity,
     ExecutePipelineActivity,
+    FilterActivity,
     ForEachActivity,
     IfConditionActivity,
     LookupActivity,
@@ -25,7 +27,9 @@ from orchestra.models.ir import (
     SetVariableActivity,
     SparkJarActivity,
     SparkPythonActivity,
+    SwitchActivity,
     UnsupportedActivity,
+    WaitActivity,
     WebActivity,
 )
 
@@ -112,10 +116,12 @@ def prepare_activity(activity: Activity) -> PreparedActivity:
     """
     # Import activity preparers lazily to avoid circular imports
     from orchestra.preparer.activity_preparers import (
+        append_variable,
         copy,
         databricks_job,
         delete,
         execute_pipeline,
+        filter,
         for_each,
         if_condition,
         lookup,
@@ -123,6 +129,8 @@ def prepare_activity(activity: Activity) -> PreparedActivity:
         set_variable,
         spark_jar,
         spark_python,
+        switch,
+        wait,
         web_activity,
     )
 
@@ -135,10 +143,14 @@ def prepare_activity(activity: Activity) -> PreparedActivity:
         WebActivity: web_activity.prepare,
         DeleteActivity: delete.prepare,
         SetVariableActivity: set_variable.prepare,
+        FilterActivity: filter.prepare,
+        AppendVariableActivity: append_variable.prepare,
         ForEachActivity: for_each.prepare,
         IfConditionActivity: if_condition.prepare,
         ExecutePipelineActivity: execute_pipeline.prepare,
         RunJobActivity: databricks_job.prepare,
+        SwitchActivity: switch.prepare,
+        WaitActivity: wait.prepare,
     }
 
     preparer_fn = dispatch.get(type(activity))
