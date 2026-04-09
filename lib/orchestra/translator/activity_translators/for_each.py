@@ -12,6 +12,7 @@ from typing import Any
 from orchestra.models.adf_ast import AdfActivity, AdfDefinitions
 from orchestra.models.ir import Activity, ForEachActivity, TranslationContext
 from orchestra.parser.expression_parser import resolve_expression
+from orchestra.translator.activity_translators._resolve import resolve_field_int
 
 
 def translate(
@@ -52,8 +53,9 @@ def translate(
             items_expression = ""
 
     is_sequential = tp.get("isSequential", False)
+    default_batch = 1 if is_sequential else 20
     batch_count_raw = tp.get("batchCount")
-    batch_count = int(batch_count_raw) if batch_count_raw is not None else (1 if is_sequential else 20)
+    batch_count = resolve_field_int(batch_count_raw, context, default=default_batch) if batch_count_raw is not None else default_batch
 
     # Translate inner activities
     inner_activities: list[Activity] = []

@@ -6,6 +6,7 @@ from typing import Any
 
 from orchestra.models.adf_ast import AdfActivity, AdfDefinitions
 from orchestra.models.ir import Activity, LookupActivity, TranslationContext
+from orchestra.translator.activity_translators._resolve import resolve_field
 
 
 def translate(
@@ -34,9 +35,10 @@ def translate(
     source_properties = {k: v for k, v in source_raw.items() if k != "type"} if source_raw else {}
 
     # The query can be in source.query, source.sqlReaderQuery, or source.sqlReaderStoredProcedureName
-    source_query = (
+    source_query_raw = (
         source_raw.get("query") or source_raw.get("sqlReaderQuery") or source_raw.get("sqlReaderStoredProcedureName")
     )
+    source_query = resolve_field(source_query_raw, context) if source_query_raw is not None else None
 
     first_row_only = tp.get("firstRowOnly", True)
 

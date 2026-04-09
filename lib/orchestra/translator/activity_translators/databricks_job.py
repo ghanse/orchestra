@@ -6,6 +6,7 @@ from typing import Any
 
 from orchestra.models.adf_ast import AdfActivity, AdfDefinitions
 from orchestra.models.ir import Activity, RunJobActivity, TranslationContext
+from orchestra.translator.activity_translators._resolve import resolve_dict_values, resolve_field
 
 
 def translate(
@@ -29,13 +30,14 @@ def translate(
     """
     tp = activity.type_properties or {}
 
-    job_name = tp.get("jobName") or tp.get("jobId")
+    job_name_raw = tp.get("jobName") or tp.get("jobId")
+    job_name = resolve_field(job_name_raw, context) if job_name_raw else activity.name
     existing_job_id = tp.get("jobId")
-    job_parameters = tp.get("jobParameters") or tp.get("baseParameters")
+    job_parameters = resolve_dict_values(tp.get("jobParameters") or tp.get("baseParameters"), context) or None
 
     return RunJobActivity(
         **base_kwargs,
-        job_name=str(job_name) if job_name else activity.name,
+        job_name=job_name,
         existing_job_id=str(existing_job_id) if existing_job_id else None,
         job_parameters=job_parameters,
     )

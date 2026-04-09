@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 from orchestra.models.dab import DabNotebook
 from orchestra.models.ir import TranslationContext
-from orchestra.parser.expression_parser import resolve_expression
+from orchestra.parser.expression_parser import resolve_expression, resolve_interpolated_string
 from orchestra.preparer.workflow_preparer import PreparedActivity, _build_common_task_fields
 
 if TYPE_CHECKING:
@@ -88,6 +88,25 @@ def _resolve_base_parameters(
     return resolved
 
 
+def _resolve_notebook_path(path: str) -> str:
+    """Resolve any ADF expressions remaining in a notebook path.
+
+    Args:
+        path: Notebook workspace path that may contain ADF expressions.
+
+    Returns:
+        Resolved path string.
+    """
+    ctx = TranslationContext()
+    if "@{" in path:
+        return resolve_interpolated_string(path, ctx)
+    if path.startswith("@"):
+        result = resolve_expression(path, ctx)
+        if result is not None and result.kind in ("dab_ref", "literal"):
+            return result.value
+    return path
+
+
 def prepare(
     activity: NotebookActivity,
     *,
@@ -108,13 +127,16 @@ def prepare(
     sanitized = activity.task_key
     notebook_rel_path = f"notebooks/{sanitized}.py"
 
+    # Resolve any remaining ADF expressions in notebook_path
+    resolved_path = _resolve_notebook_path(activity.notebook_path)
+
     # Try to download the actual notebook from the workspace
     from orchestra.preparer.workspace_downloader import download_notebook
 
-    content = download_notebook(activity.notebook_path)
+    content = download_notebook(resolved_path)
     if content is None:
         # Fall back to placeholder with export instructions
-        content = _notebook_placeholder(activity.notebook_path, activity.name, f"{sanitized}.py")
+        content = _notebook_placeholder(resolved_path, activity.name, f"{sanitized}.py")
 
     task = _build_common_task_fields(activity)
     task["notebook_task"] = {

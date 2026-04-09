@@ -55,7 +55,7 @@ def prepare(activity: DeleteActivity, *, scope: str = "") -> PreparedActivity:
     task["notebook_task"] = {
         "notebook_path": f"../src/{notebook_path}",
         "base_parameters": {
-            "dataset_name": activity.dataset_name,
+            "dataset_name": _resolve_param_value(activity.dataset_name),
             "recursive": str(activity.recursive).lower(),
         },
     }

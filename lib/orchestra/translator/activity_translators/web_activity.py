@@ -7,6 +7,7 @@ from typing import Any
 from orchestra.models.adf_ast import AdfActivity, AdfDefinitions
 from orchestra.models.ir import Activity, TranslationContext
 from orchestra.models.ir import WebActivity as WebActivityIR
+from orchestra.translator.activity_translators._resolve import resolve_dict_values, resolve_field
 
 
 def translate(
@@ -30,9 +31,9 @@ def translate(
     """
     tp = activity.type_properties or {}
 
-    url = tp.get("url", "")
+    url = resolve_field(tp.get("url", ""), context)
     method = tp.get("method", "GET")
-    headers = tp.get("headers")
+    headers = resolve_dict_values(tp.get("headers"), context) or None
     body = tp.get("body")
     authentication = tp.get("authentication")
     disable_cert_validation = tp.get("disableCertValidation", False)

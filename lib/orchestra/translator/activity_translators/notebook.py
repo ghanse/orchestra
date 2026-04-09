@@ -6,6 +6,7 @@ from typing import Any
 
 from orchestra.models.adf_ast import AdfActivity, AdfDefinitions
 from orchestra.models.ir import Activity, NotebookActivity, TranslationContext
+from orchestra.translator.activity_translators._resolve import resolve_field
 
 
 def translate(
@@ -27,7 +28,7 @@ def translate(
     """
     tp = activity.type_properties or {}
 
-    notebook_path = tp.get("notebookPath", "")
+    notebook_path = resolve_field(tp.get("notebookPath", ""), context)
     base_parameters = tp.get("baseParameters") or {}
 
     return NotebookActivity(

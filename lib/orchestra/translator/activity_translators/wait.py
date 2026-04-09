@@ -10,6 +10,7 @@ from typing import Any
 
 from orchestra.models.adf_ast import AdfActivity, AdfDefinitions
 from orchestra.models.ir import Activity, TranslationContext, WaitActivity
+from orchestra.translator.activity_translators._resolve import resolve_field_int
 
 
 def translate(
@@ -31,11 +32,7 @@ def translate(
     """
     tp = activity.type_properties or {}
 
-    wait_time_raw = tp.get("waitTimeInSeconds", 0)
-    try:
-        wait_time_seconds = int(wait_time_raw)
-    except (TypeError, ValueError):
-        wait_time_seconds = 0
+    wait_time_seconds = resolve_field_int(tp.get("waitTimeInSeconds", 0), context, default=0)
 
     return WaitActivity(
         **base_kwargs,

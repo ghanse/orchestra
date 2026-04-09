@@ -12,6 +12,7 @@ from typing import Any
 from orchestra.models.adf_ast import AdfActivity, AdfDefinitions
 from orchestra.models.ir import Activity, SwitchActivity, SwitchCase, TranslationContext
 from orchestra.parser.expression_parser import resolve_expression, resolve_interpolated_string
+from orchestra.translator.activity_translators._resolve import resolve_field
 
 
 def _resolve_on_expression(on_expression: str, context: TranslationContext) -> str:
@@ -79,7 +80,7 @@ def translate(
     cases: list[SwitchCase] = []
     raw_cases = tp.get("cases", [])
     for raw_case in raw_cases:
-        case_value = raw_case.get("value", "")
+        case_value = resolve_field(raw_case.get("value", ""), context)
         case_activities_raw = raw_case.get("activities", [])
 
         # Parse raw activity dicts into AdfActivity nodes if needed

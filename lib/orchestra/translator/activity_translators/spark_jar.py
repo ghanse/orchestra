@@ -7,6 +7,7 @@ from typing import Any
 from orchestra.models.adf_ast import AdfActivity, AdfDefinitions
 from orchestra.models.ir import Activity, SparkJarActivity, TranslationContext
 from orchestra.parser.expression_parser import resolve_expression, resolve_interpolated_string
+from orchestra.translator.activity_translators._resolve import resolve_field
 
 
 def _resolve_parameter(param: str, context: TranslationContext) -> str:
@@ -56,7 +57,7 @@ def translate(
     """
     tp = activity.type_properties or {}
 
-    main_class_name = tp.get("mainClassName", "")
+    main_class_name = resolve_field(tp.get("mainClassName", ""), context)
     raw_parameters = tp.get("parameters") or []
     libraries = tp.get("libraries") or []
 

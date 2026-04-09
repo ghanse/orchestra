@@ -5,10 +5,31 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from orchestra.models.dab import DabNotebook
+from orchestra.models.ir import TranslationContext
+from orchestra.parser.expression_parser import resolve_expression, resolve_interpolated_string
 from orchestra.preparer.workflow_preparer import PreparedActivity, _build_common_task_fields
 
 if TYPE_CHECKING:
     from orchestra.models.ir import SparkJarActivity
+
+
+def _resolve_param_value(value: str) -> str:
+    """Resolve an ADF expression parameter value to a DAB ref.
+
+    Args:
+        value: A parameter value string that may contain ADF expressions.
+
+    Returns:
+        Resolved value string.
+    """
+    ctx = TranslationContext()
+    if "@{" in value:
+        return resolve_interpolated_string(value, ctx)
+    if value.startswith("@"):
+        result = resolve_expression(value, ctx)
+        if result is not None and result.kind in ("dab_ref", "literal"):
+            return result.value
+    return value
 
 
 def _jar_placeholder(libraries: list[dict] | None, activity_name: str) -> str:
@@ -90,8 +111,9 @@ def prepare(activity: SparkJarActivity, *, scope: str = "") -> PreparedActivity:
                 )
             )
 
+    resolved_main_class = _resolve_param_value(activity.main_class_name) if activity.main_class_name else ""
     task["spark_jar_task"] = {
-        "main_class_name": activity.main_class_name,
+        "main_class_name": resolved_main_class,
     }
     if activity.parameters:
         task["spark_jar_task"]["parameters"] = list(activity.parameters)

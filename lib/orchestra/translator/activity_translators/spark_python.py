@@ -7,6 +7,7 @@ from typing import Any
 from orchestra.models.adf_ast import AdfActivity, AdfDefinitions
 from orchestra.models.ir import Activity, SparkPythonActivity, TranslationContext
 from orchestra.parser.expression_parser import resolve_expression, resolve_interpolated_string
+from orchestra.translator.activity_translators._resolve import resolve_field
 
 
 def _resolve_parameter(param: str, context: TranslationContext) -> str:
@@ -56,7 +57,7 @@ def translate(
     """
     tp = activity.type_properties or {}
 
-    python_file = tp.get("pythonFile", "")
+    python_file = resolve_field(tp.get("pythonFile", ""), context)
     raw_parameters = tp.get("parameters") or []
 
     # Resolve each parameter through the expression parser

@@ -56,7 +56,7 @@ def prepare(activity: WebActivity, *, scope: str = "") -> PreparedActivity:
         "notebook_path": f"../src/{notebook_path}",
         "base_parameters": {
             "url": _resolve_param_value(activity.url),
-            "method": activity.method,
+            "method": _resolve_param_value(activity.method),
         },
     }
 

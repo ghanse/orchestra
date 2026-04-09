@@ -6,6 +6,7 @@ from typing import Any
 
 from orchestra.models.adf_ast import AdfActivity, AdfDefinitions
 from orchestra.models.ir import Activity, ExecutePipelineActivity, TranslationContext
+from orchestra.translator.activity_translators._resolve import resolve_dict_values, resolve_field
 
 
 def translate(
@@ -31,9 +32,9 @@ def translate(
 
     # Pipeline reference
     pipeline_ref = tp.get("pipeline", {})
-    pipeline_name = pipeline_ref.get("referenceName", "") if isinstance(pipeline_ref, dict) else str(pipeline_ref)
+    pipeline_name = resolve_field(pipeline_ref.get("referenceName", ""), context) if isinstance(pipeline_ref, dict) else str(pipeline_ref)
 
-    parameters = tp.get("parameters") or {}
+    parameters = resolve_dict_values(tp.get("parameters"), context) or {}
     wait_on_completion = tp.get("waitOnCompletion", True)
 
     return ExecutePipelineActivity(

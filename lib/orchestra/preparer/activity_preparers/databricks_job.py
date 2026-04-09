@@ -4,10 +4,36 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from orchestra.models.ir import TranslationContext
+from orchestra.parser.expression_parser import resolve_expression, resolve_interpolated_string
 from orchestra.preparer.workflow_preparer import PreparedActivity, _build_common_task_fields
 
 if TYPE_CHECKING:
     from orchestra.models.ir import RunJobActivity
+
+
+def _resolve_param_value(value: str) -> str:
+    """Resolve an ADF expression parameter value to a DAB ref.
+
+    Args:
+        value: A parameter value string that may contain ADF expressions.
+
+    Returns:
+        Resolved value string.
+    """
+    ctx = TranslationContext()
+
+    # Try @{...} interpolation
+    if "@{" in value:
+        return resolve_interpolated_string(value, ctx)
+
+    # Try @expr style
+    if value.startswith("@"):
+        result = resolve_expression(value, ctx)
+        if result is not None and result.kind in ("dab_ref", "literal"):
+            return result.value
+
+    return value
 
 
 def prepare(activity: RunJobActivity, *, scope: str = "") -> PreparedActivity:
@@ -31,7 +57,7 @@ def prepare(activity: RunJobActivity, *, scope: str = "") -> PreparedActivity:
         run_job["job_id"] = f"${{resources.jobs.{activity.job_name}.id}}"
 
     if activity.job_parameters:
-        run_job["job_parameters"] = {k: str(v) for k, v in activity.job_parameters.items()}
+        run_job["job_parameters"] = {k: _resolve_param_value(str(v)) for k, v in activity.job_parameters.items()}
 
     task["run_job_task"] = run_job
     return PreparedActivity(task=task)
