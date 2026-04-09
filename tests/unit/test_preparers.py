@@ -226,11 +226,47 @@ class TestSetVariablePreparer:
         activity = SetVariableActivity(
             **_make_base("Set Var", "set_var"),
             variable_name="status",
-            variable_value="'completed'",
+            variable_value="completed",
+            value_kind="literal",
         )
         prepared = prepare_activity(activity)
         assert "notebook_task" in prepared.task
         assert len(prepared.notebooks) == 1
+        # Literal value should be in base_parameters
+        params = prepared.task["notebook_task"]["base_parameters"]
+        assert params["value"] == "completed"
+
+    def test_prepare_set_variable_dab_ref(self):
+        activity = SetVariableActivity(
+            **_make_base("Set Env", "set_env"),
+            variable_name="env",
+            variable_value="{{job.parameters.environment}}",
+            value_kind="dab_ref",
+        )
+        prepared = prepare_activity(activity)
+        params = prepared.task["notebook_task"]["base_parameters"]
+        assert params["value"] == "{{job.parameters.environment}}"
+
+    def test_prepare_set_variable_notebook_code_not_in_params(self):
+        """notebook_code values must NOT appear in base_parameters."""
+        activity = SetVariableActivity(
+            **_make_base("Set Date", "set_date"),
+            variable_name="runDate",
+            variable_value="datetime.now(timezone.utc).strftime('%Y-%m-%d')",
+            value_kind="notebook_code",
+            notebook_code="datetime.now(timezone.utc).strftime('%Y-%m-%d')",
+            notebook_imports=["from datetime import datetime, timezone"],
+        )
+        prepared = prepare_activity(activity)
+        params = prepared.task["notebook_task"]["base_parameters"]
+        # Should NOT have 'value' key with Python code
+        assert "value" not in params
+        # But should have variable_name
+        assert params["variable_name"] == "runDate"
+        # Notebook should contain the code
+        content = prepared.notebooks[0].content
+        assert "strftime" in content
+        assert "datetime" in content
 
 
 class TestAppendVariablePreparer:
@@ -238,11 +274,28 @@ class TestAppendVariablePreparer:
         activity = AppendVariableActivity(
             **_make_base("Append Var", "append_var"),
             variable_name="logEntries",
-            append_value="'step1 done'",
+            append_value="step1 done",
+            value_kind="literal",
         )
         prepared = prepare_activity(activity)
         assert "notebook_task" in prepared.task
         assert len(prepared.notebooks) == 1
+        params = prepared.task["notebook_task"]["base_parameters"]
+        assert params["value"] == "step1 done"
+
+    def test_prepare_append_variable_notebook_code_not_in_params(self):
+        """notebook_code values must NOT appear in base_parameters."""
+        activity = AppendVariableActivity(
+            **_make_base("Append TS", "append_ts"),
+            variable_name="timestamps",
+            append_value="datetime.now(timezone.utc).isoformat()",
+            value_kind="notebook_code",
+            notebook_code="datetime.now(timezone.utc).isoformat()",
+            notebook_imports=["from datetime import datetime, timezone"],
+        )
+        prepared = prepare_activity(activity)
+        params = prepared.task["notebook_task"]["base_parameters"]
+        assert "value" not in params
 
 
 class TestFilterPreparer:
@@ -352,8 +405,12 @@ class TestNotebookContentValidity:
             LookupActivity(**_make_base("l", "l"), source_type="AzureSqlSource", first_row_only=True),
             WebActivity(**_make_base("w", "w"), url="https://example.com", method="GET"),
             DeleteActivity(**_make_base("d", "d"), dataset_name="ds", recursive=True),
-            SetVariableActivity(**_make_base("sv", "sv"), variable_name="x", variable_value="completed"),
-            AppendVariableActivity(**_make_base("av", "av"), variable_name="arr", append_value="step1_done"),
+            SetVariableActivity(
+                **_make_base("sv", "sv"), variable_name="x", variable_value="completed", value_kind="literal"
+            ),
+            AppendVariableActivity(
+                **_make_base("av", "av"), variable_name="arr", append_value="step1_done", value_kind="literal"
+            ),
             FilterActivity(
                 **_make_base("f", "f"), items_expression="@vars('list')", condition_expression="@not(empty(item()))"
             ),

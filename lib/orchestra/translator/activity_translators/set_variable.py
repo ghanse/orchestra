@@ -11,7 +11,7 @@ from typing import Any
 
 from orchestra.models.adf_ast import AdfActivity, AdfDefinitions
 from orchestra.models.ir import Activity, SetVariableActivity, TranslationContext
-from orchestra.parser.expression_parser import parse_expression
+from orchestra.parser.expression_parser import resolve_expression
 
 
 def translate(
@@ -37,21 +37,33 @@ def translate(
     variable_name = tp.get("variableName", "")
     value_raw = tp.get("value", "")
 
-    # Try deterministic expression translation
-    variable_value = parse_expression(value_raw, context)
-    if variable_value is None:
-        # Unwrap expression-type dicts to at least preserve the expression string
+    # Resolve via unified expression resolver
+    expr_result = resolve_expression(value_raw, context)
+
+    if expr_result is not None:
+        variable_value = expr_result.value
+        value_kind = expr_result.kind
+        notebook_code = expr_result.value if expr_result.kind == "notebook_code" else None
+        notebook_imports = list(expr_result.imports) if expr_result.kind == "notebook_code" else []
+    else:
+        # Fallback: unwrap expression-type dicts to at least preserve the string
         if isinstance(value_raw, dict) and value_raw.get("type") == "Expression":
             variable_value = value_raw.get("value", "")
         elif isinstance(value_raw, str):
-            variable_value = repr(value_raw)
+            variable_value = value_raw
         else:
             variable_value = str(value_raw)
+        value_kind = "literal"
+        notebook_code = None
+        notebook_imports = []
 
     set_var_activity = SetVariableActivity(
         **base_kwargs,
         variable_name=variable_name,
         variable_value=variable_value,
+        value_kind=value_kind,
+        notebook_code=notebook_code,
+        notebook_imports=notebook_imports,
     )
 
     # Register variable -> task_key mapping in context

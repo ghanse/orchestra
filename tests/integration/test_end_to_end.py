@@ -189,7 +189,7 @@ class TestActivityTypeTranslation:
         foreach_tasks = [t for t in report.pipeline.tasks if isinstance(t, ForEachActivity)]
         assert len(foreach_tasks) == 1
         fe = foreach_tasks[0]
-        assert "@activity('Get Table List').output.value" in fe.items_expression
+        assert "{{tasks.Get_Table_List.values.result}}" == fe.items_expression
 
     def test_switch_cases_translation(self, adf_definitions, pipeline_by_name):
         """Switch cases produce correct case branches."""

@@ -276,8 +276,11 @@ def generate_set_variable_notebook(activity: SetVariableActivity) -> str:
     of ADF pipeline variables, allowing downstream tasks to read values via
     ``dbutils.jobs.taskValues.get()`` or ``{{tasks.<key>.values.<name>}}``.
 
-    The variable expression is evaluated at runtime so that functions like
-    ``datetime.utcnow()`` and task value references produce live values.
+    When ``value_kind`` is ``"literal"`` or ``"dab_ref"`` the value is read
+    from the ``value`` widget parameter (passed via ``base_parameters``).
+
+    When ``value_kind`` is ``"notebook_code"`` the Python code is embedded
+    directly in the notebook body -- no executable code in parameters.
 
     Args:
         activity: The SetVariableActivity IR node.
@@ -287,25 +290,48 @@ def generate_set_variable_notebook(activity: SetVariableActivity) -> str:
     """
     header = _notebook_header(f"Set Variable: {activity.name}")
 
-    expr = activity.variable_value
+    if activity.value_kind == "notebook_code" and activity.notebook_code:
+        # Embed imports and Python code directly in the notebook
+        import_lines = "\n".join(activity.notebook_imports) if activity.notebook_imports else ""
+        if import_lines:
+            import_block = import_lines + "\n"
+        else:
+            import_block = ""
 
-    body = textwrap.dedent(f"""\
-        import json
-        from datetime import datetime
+        body = textwrap.dedent(f"""\
+            import json
+            {import_block}
+            variable_name = "{activity.variable_name}"
 
-        variable_name = "{activity.variable_name}"
+            # Compute value at runtime.
+            # Original ADF expression resolved to notebook code.
+            value = {activity.notebook_code}
 
-        # Evaluate the variable expression at runtime.
-        # Original expression: {expr}
-        value = {expr}
+            # Set task value so downstream tasks can reference it via
+            # {{{{tasks.{activity.task_key}.values.{activity.variable_name}}}}}.
+            dbutils.jobs.taskValues.set(key=variable_name, value=value)
+            print(f"Set task value '{{variable_name}}' = '{{value}}'")
 
-        # Set task value so downstream tasks can reference it via
-        # {{{{tasks.{activity.task_key}.values.{activity.variable_name}}}}}.
-        dbutils.jobs.taskValues.set(key=variable_name, value=value)
-        print(f"Set task value '{{variable_name}}' = '{{value}}'")
+            dbutils.notebook.exit(json.dumps({{"variable_name": variable_name, "value": str(value)}}))
+        """)
+    else:
+        # literal or dab_ref: read from widget parameter
+        body = textwrap.dedent(f"""\
+            import json
 
-        dbutils.notebook.exit(json.dumps({{"variable_name": variable_name, "value": str(value)}}))
-    """)
+            variable_name = "{activity.variable_name}"
+
+            # Read value from widget parameter (set via base_parameters).
+            # DAB resolves dynamic references (e.g. {{{{job.run_id}}}}) before passing.
+            value = dbutils.widgets.get("value")
+
+            # Set task value so downstream tasks can reference it via
+            # {{{{tasks.{activity.task_key}.values.{activity.variable_name}}}}}.
+            dbutils.jobs.taskValues.set(key=variable_name, value=value)
+            print(f"Set task value '{{variable_name}}' = '{{value}}'")
+
+            dbutils.notebook.exit(json.dumps({{"variable_name": variable_name, "value": str(value)}}))
+        """)
 
     return header + _command_separator() + body
 
@@ -774,6 +800,9 @@ def generate_append_variable_notebook(activity: AppendVariableActivity) -> str:
     appends the new value, and writes the updated array back via
     ``dbutils.jobs.taskValues.set()``.
 
+    When ``value_kind`` is ``"notebook_code"`` the Python code is embedded
+    directly -- no executable code in parameters.
+
     Args:
         activity: The AppendVariableActivity IR node.
 
@@ -782,39 +811,80 @@ def generate_append_variable_notebook(activity: AppendVariableActivity) -> str:
     """
     header = _notebook_header(f"Append Variable: {activity.name}")
 
-    body = textwrap.dedent(f"""\
-        import json
+    if activity.value_kind == "notebook_code" and activity.notebook_code:
+        import_lines = "\n".join(activity.notebook_imports) if activity.notebook_imports else ""
+        if import_lines:
+            import_block = import_lines + "\n"
+        else:
+            import_block = ""
 
-        # Parameters
-        variable_name = dbutils.widgets.get("variable_name") or "{activity.variable_name}"
-        value = dbutils.widgets.get("value") or {json.dumps(activity.append_value)}
+        body = textwrap.dedent(f"""\
+            import json
+            {import_block}
+            # Parameters
+            variable_name = dbutils.widgets.get("variable_name") or "{activity.variable_name}"
 
-        # Read the current array from task values (or start with empty list)
-        try:
-            current_raw = dbutils.jobs.taskValues.get(taskKey=dbutils.widgets.get("task_key", ""), key=variable_name)
-            if isinstance(current_raw, str):
-                current = json.loads(current_raw)
-            else:
-                current = current_raw
-        except Exception:
-            current = []
+            # Compute value at runtime.
+            value = {activity.notebook_code}
 
-        if not isinstance(current, list):
-            current = [current] if current else []
+            # Read the current array from task values (or start with empty list)
+            try:
+                tk = dbutils.widgets.get("task_key", "")
+                current_raw = dbutils.jobs.taskValues.get(taskKey=tk, key=variable_name)
+                if isinstance(current_raw, str):
+                    current = json.loads(current_raw)
+                else:
+                    current = current_raw
+            except Exception:
+                current = []
 
-        # Evaluate the value to append
-        try:
-            append_val = json.loads(value) if isinstance(value, str) and value.startswith(('{{', '[', '"')) else value
-        except (json.JSONDecodeError, ValueError):
-            append_val = value
+            if not isinstance(current, list):
+                current = [current] if current else []
 
-        # Append and write back
-        current.append(append_val)
-        result = json.dumps(current)
-        dbutils.jobs.taskValues.set(key=variable_name, value=result)
-        print(f"Appended to '{{variable_name}}': array now has {{len(current)}} item(s)")
+            # Append and write back
+            current.append(value)
+            result = json.dumps(current)
+            dbutils.jobs.taskValues.set(key=variable_name, value=result)
+            print(f"Appended to '{{variable_name}}': array now has {{len(current)}} item(s)")
 
-        dbutils.notebook.exit(result)
-    """)
+            dbutils.notebook.exit(result)
+        """)
+    else:
+        body = textwrap.dedent(f"""\
+            import json
+
+            # Parameters
+            variable_name = dbutils.widgets.get("variable_name") or "{activity.variable_name}"
+            value = dbutils.widgets.get("value") or {json.dumps(activity.append_value)}
+
+            # Read the current array from task values (or start with empty list)
+            try:
+                tk = dbutils.widgets.get("task_key", "")
+                current_raw = dbutils.jobs.taskValues.get(taskKey=tk, key=variable_name)
+                if isinstance(current_raw, str):
+                    current = json.loads(current_raw)
+                else:
+                    current = current_raw
+            except Exception:
+                current = []
+
+            if not isinstance(current, list):
+                current = [current] if current else []
+
+            # Evaluate the value to append
+            try:
+                starts = ('{{', '[', '"')
+                append_val = json.loads(value) if isinstance(value, str) and value.startswith(starts) else value
+            except (json.JSONDecodeError, ValueError):
+                append_val = value
+
+            # Append and write back
+            current.append(append_val)
+            result = json.dumps(current)
+            dbutils.jobs.taskValues.set(key=variable_name, value=result)
+            print(f"Appended to '{{variable_name}}': array now has {{len(current)}} item(s)")
+
+            dbutils.notebook.exit(result)
+        """)
 
     return header + _command_separator() + body

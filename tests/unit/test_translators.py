@@ -456,7 +456,8 @@ class TestForEachTranslator:
         )
         result, ctx = translate(activity, _base_kwargs("Loop_Items"), _context(), _EMPTY_DEFS)
         assert isinstance(result, ForEachActivity)
-        assert result.items_expression == "@activity('GetList').output.value"
+        # The translator now resolves to a DAB ref
+        assert result.items_expression == "{{tasks.GetList.values.result}}"
         assert result.concurrency == 5
 
     def test_translate_foreach_sequential(self):
@@ -534,9 +535,40 @@ class TestSetVariableTranslator:
         result, ctx = translate(activity, _base_kwargs("Set_Status"), _context(), _EMPTY_DEFS)
         assert isinstance(result, SetVariableActivity)
         assert result.variable_name == "status"
-        assert result.variable_value == repr("completed")
+        assert result.variable_value == "completed"
+        assert result.value_kind == "literal"
+        assert result.notebook_code is None
         # Context should have the variable mapped
         assert ctx.get_variable_task_key("status") == "Set_Status"
+
+    def test_translate_set_variable_utcnow(self):
+        from orchestra.translator.activity_translators.set_variable import translate
+
+        activity = _make_activity(
+            "SetRunDate",
+            "SetVariable",
+            {"variableName": "runDate", "value": {"type": "Expression", "value": "@utcNow('yyyy-MM-dd')"}},
+        )
+        result, ctx = translate(activity, _base_kwargs("SetRunDate"), _context(), _EMPTY_DEFS)
+        assert isinstance(result, SetVariableActivity)
+        assert result.value_kind == "notebook_code"
+        assert result.notebook_code is not None
+        assert "strftime" in result.notebook_code
+        assert "datetime" in result.notebook_imports[0]
+
+    def test_translate_set_variable_pipeline_param(self):
+        from orchestra.translator.activity_translators.set_variable import translate
+
+        activity = _make_activity(
+            "Set Env",
+            "SetVariable",
+            {"variableName": "env", "value": "@pipeline().parameters.environment"},
+        )
+        result, ctx = translate(activity, _base_kwargs("Set_Env"), _context(), _EMPTY_DEFS)
+        assert isinstance(result, SetVariableActivity)
+        assert result.value_kind == "dab_ref"
+        assert result.variable_value == "{{job.parameters.environment}}"
+        assert result.notebook_code is None
 
 
 class TestAppendVariableTranslator:
@@ -551,6 +583,8 @@ class TestAppendVariableTranslator:
         result, ctx = translate(activity, _base_kwargs("Append_Log"), _context(), _EMPTY_DEFS)
         assert isinstance(result, AppendVariableActivity)
         assert result.variable_name == "logEntries"
+        assert result.value_kind == "literal"
+        assert result.append_value == "step1 done"
         assert ctx.get_variable_task_key("logEntries") == "Append_Log"
 
 

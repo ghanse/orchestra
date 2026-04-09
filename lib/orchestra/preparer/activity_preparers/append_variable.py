@@ -19,6 +19,10 @@ def prepare(activity: AppendVariableActivity, *, scope: str = "") -> PreparedAct
     initialises an empty list), appends the new value, and writes the
     updated array back via ``dbutils.jobs.taskValues.set()``.
 
+    When ``value_kind`` is ``"literal"`` or ``"dab_ref"``  the value is passed
+    via ``base_parameters``.  When ``"notebook_code"`` the code is embedded
+    directly in the notebook.
+
     Args:
         activity: The translated append-variable activity from the IR.
 
@@ -30,12 +34,15 @@ def prepare(activity: AppendVariableActivity, *, scope: str = "") -> PreparedAct
     content = generate_append_variable_notebook(activity)
 
     task = _build_common_task_fields(activity)
+
+    base_parameters: dict[str, str] = {"variable_name": activity.variable_name}
+
+    if activity.value_kind in ("literal", "dab_ref"):
+        base_parameters["value"] = activity.append_value
+
     task["notebook_task"] = {
         "notebook_path": f"../src/{notebook_path}",
-        "base_parameters": {
-            "variable_name": activity.variable_name,
-            "value": activity.append_value,
-        },
+        "base_parameters": base_parameters,
     }
 
     notebooks = [

@@ -14,6 +14,28 @@ from types import MappingProxyType
 from typing import Any, TypeAlias
 
 # ---------------------------------------------------------------------------
+# Expression result
+# ---------------------------------------------------------------------------
+
+
+@dataclass(slots=True, kw_only=True)
+class ExpressionResult:
+    """Result of resolving an ADF expression.
+
+    kind:
+      - "literal": a plain string/number value for base_parameters
+      - "dab_ref": a DAB dynamic value reference like {{job.run_id}}
+      - "notebook_code": Python code that must go in the notebook body
+    value: the resolved value (literal, DAB ref template, or Python code)
+    imports: Python import statements needed (only for notebook_code)
+    """
+
+    kind: str  # "literal", "dab_ref", "notebook_code"
+    value: str
+    imports: list[str] = field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
 # Dependency
 # ---------------------------------------------------------------------------
 
@@ -136,10 +158,16 @@ class SetVariableActivity(Activity):
     Attributes:
         variable_name: Name of the variable being set.
         variable_value: Expression string that evaluates to the value.
+        value_kind: Kind of the resolved expression ("literal", "dab_ref", "notebook_code").
+        notebook_code: Python code for notebook_code kind values.
+        notebook_imports: Import statements needed for notebook_code.
     """
 
     variable_name: str
     variable_value: str
+    value_kind: str = "literal"  # "literal", "dab_ref", "notebook_code"
+    notebook_code: str | None = None
+    notebook_imports: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True, kw_only=True)
@@ -323,10 +351,16 @@ class AppendVariableActivity(Activity):
     Attributes:
         variable_name: Name of the array variable.
         append_value: Expression string that evaluates to the value to append.
+        value_kind: Kind of the resolved expression ("literal", "dab_ref", "notebook_code").
+        notebook_code: Python code for notebook_code kind values.
+        notebook_imports: Import statements needed for notebook_code.
     """
 
     variable_name: str
     append_value: str
+    value_kind: str = "literal"  # "literal", "dab_ref", "notebook_code"
+    notebook_code: str | None = None
+    notebook_imports: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True, kw_only=True)

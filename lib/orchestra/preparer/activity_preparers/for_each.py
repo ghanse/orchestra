@@ -11,27 +11,21 @@ References:
 
 from __future__ import annotations
 
-import re
 from typing import TYPE_CHECKING
 
+from orchestra.models.ir import TranslationContext
+from orchestra.parser.expression_parser import resolve_expression
 from orchestra.preparer.workflow_preparer import PreparedActivity, _build_common_task_fields, prepare_activity
 
 if TYPE_CHECKING:
     from orchestra.models.ir import ForEachActivity
 
 
-# Regex to match ADF expression: @activity('TaskName').output.value (or .output.firstRow, etc.)
-_ACTIVITY_OUTPUT_RE = re.compile(
-    r"@activity\(\s*'([^']+)'\s*\)\.output(?:\.(\w+))?",
-    re.IGNORECASE,
-)
-
-
 def _resolve_for_each_inputs(items_expression: str) -> str:
     """Convert an ADF items expression to a DAB dynamic value reference.
 
-    ADF ``@activity('LookupTableList').output.value`` maps to the Databricks
-    task values reference ``{{tasks.LookupTableList.values.result}}``.
+    Uses the unified ``resolve_expression()`` to map ADF expressions to DAB
+    refs.  Falls back to the original expression if it cannot be resolved.
 
     Args:
         items_expression: The raw ADF expression for ForEach items.
@@ -40,13 +34,22 @@ def _resolve_for_each_inputs(items_expression: str) -> str:
         A DAB dynamic value reference string, or the original expression if
         it cannot be resolved.
     """
-    m = _ACTIVITY_OUTPUT_RE.match(items_expression)
-    if m:
-        task_name = m.group(1)
-        # Sanitize the task name to match the task_key
-        task_key = re.sub(r"[^a-zA-Z0-9_-]", "_", task_name)
-        task_key = re.sub(r"_+", "_", task_key).strip("_") or "unnamed"
-        return "{{" + f"tasks.{task_key}.values.result" + "}}"
+    # The items_expression may already be a DAB ref (resolved by the translator)
+    if items_expression.startswith("{{"):
+        return items_expression
+
+    # Try to resolve via the unified expression parser
+    context = TranslationContext()
+    result = resolve_expression(items_expression, context)
+    if result is not None and result.kind in ("dab_ref", "literal"):
+        return result.value
+
+    # Also try with @ prefix if not present
+    if not items_expression.startswith("@"):
+        result = resolve_expression("@" + items_expression, context)
+        if result is not None and result.kind in ("dab_ref", "literal"):
+            return result.value
+
     return items_expression
 
 

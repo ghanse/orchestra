@@ -11,6 +11,7 @@ from typing import Any
 
 from orchestra.models.adf_ast import AdfActivity, AdfDefinitions
 from orchestra.models.ir import Activity, ForEachActivity, TranslationContext
+from orchestra.parser.expression_parser import resolve_expression
 
 
 def translate(
@@ -36,12 +37,19 @@ def translate(
     """
     tp = activity.type_properties or {}
 
-    items_expression = ""
     items_raw = tp.get("items")
-    if isinstance(items_raw, dict) and items_raw.get("type") == "Expression":
-        items_expression = items_raw.get("value", "")
-    elif isinstance(items_raw, str):
-        items_expression = items_raw
+    # Resolve the items expression via the unified resolver
+    expr_result = resolve_expression(items_raw, context) if items_raw is not None else None
+    if expr_result is not None and expr_result.kind in ("dab_ref", "literal"):
+        items_expression = expr_result.value
+    else:
+        # Fallback: extract raw string
+        if isinstance(items_raw, dict) and items_raw.get("type") == "Expression":
+            items_expression = items_raw.get("value", "")
+        elif isinstance(items_raw, str):
+            items_expression = items_raw
+        else:
+            items_expression = ""
 
     is_sequential = tp.get("isSequential", False)
     batch_count_raw = tp.get("batchCount")

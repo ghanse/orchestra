@@ -18,6 +18,7 @@ from typing import Any
 
 from orchestra.models.adf_ast import AdfActivity, AdfDefinitions
 from orchestra.models.ir import Activity, IfConditionActivity, TranslationContext
+from orchestra.parser.expression_parser import resolve_expression
 
 # ---------------------------------------------------------------------------
 # ADF comparison function -> Databricks condition_task op mapping
@@ -36,12 +37,6 @@ _OP_MAP: dict[str, str] = {
 _COMPARISON_RE = re.compile(
     r"(equals|greater|greaterOrEquals|less|lessOrEquals|not)\s*\((.+)\)",
     re.IGNORECASE | re.DOTALL,
-)
-
-# Matches: activity('Name').output.firstRow.col  (and variants)
-_ACTIVITY_OUTPUT_RE = re.compile(
-    r"activity\(\s*'([^']+)'\s*\)\.output(?:\.(.+))?",
-    re.IGNORECASE,
 )
 
 
@@ -70,7 +65,7 @@ def translate(
 
     # Parse expression
     expression_raw = tp.get("expression", {})
-    op, left, right = _parse_condition(expression_raw)
+    op, left, right = _parse_condition(expression_raw, context)
 
     # Translate true branch
     if_true_activities: list[Activity] = []
@@ -96,7 +91,7 @@ def translate(
     return if_activity, context
 
 
-def _parse_condition(expression: dict[str, Any] | str) -> tuple[str, str, str]:
+def _parse_condition(expression: dict[str, Any] | str, context: TranslationContext) -> tuple[str, str, str]:
     """Parse an ADF IfCondition expression into ``(op, left, right)``.
 
     The operator is mapped to a Databricks ``condition_task`` operator
@@ -106,6 +101,7 @@ def _parse_condition(expression: dict[str, Any] | str) -> tuple[str, str, str]:
 
     Args:
         expression: Raw ADF expression dict or string.
+        context: Translation context for resolving variables.
 
     Returns:
         Tuple of ``(databricks_op, left_operand, right_operand)``.
@@ -125,17 +121,20 @@ def _parse_condition(expression: dict[str, Any] | str) -> tuple[str, str, str]:
         adf_op = m.group(1).lower()
         op = _OP_MAP.get(adf_op, adf_op.upper())
         args = _split_args(m.group(2).strip())
-        left = _resolve_operand(args[0]) if len(args) > 0 else ""
-        right = _resolve_operand(args[1]) if len(args) > 1 else ""
+        left = _resolve_operand(args[0], context) if len(args) > 0 else ""
+        right = _resolve_operand(args[1], context) if len(args) > 1 else ""
         return op, left, right
 
     # Fallback: treat the whole expression as a truthy check
-    resolved = _resolve_operand(expr_str)
+    resolved = _resolve_operand(expr_str, context)
     return "NOT_EQUAL", resolved, "0"
 
 
-def _resolve_operand(operand: str) -> str:
+def _resolve_operand(operand: str, context: TranslationContext) -> str:
     """Convert an ADF expression operand to a Databricks task value reference.
+
+    Uses the shared ``resolve_expression()`` for activity output, variable,
+    and pipeline property references.
 
     Examples::
 
@@ -150,6 +149,7 @@ def _resolve_operand(operand: str) -> str:
 
     Args:
         operand: A single operand string from the parsed condition.
+        context: Translation context for resolving variables.
 
     Returns:
         A DAB dynamic value reference or literal string.
@@ -164,30 +164,32 @@ def _resolve_operand(operand: str) -> str:
     if operand.lstrip("-").replace(".", "", 1).isdigit():
         return operand
 
-    # Activity output reference
-    m = _ACTIVITY_OUTPUT_RE.match(operand)
-    if m:
-        activity_name = m.group(1)
-        # Sanitize to task_key
-        task_key = re.sub(r"[^a-zA-Z0-9_-]", "_", activity_name)
-        task_key = re.sub(r"_+", "_", task_key).strip("_") or "unnamed"
+    # Strip wrapping functions like int(...) to get the inner expression
+    inner = _unwrap_functions(operand)
 
-        property_path = m.group(2) or ""
-        # Extract the deepest field name for the task value key
-        # e.g., "firstRow.cnt" -> "cnt", "value" -> "result"
-        if property_path:
-            parts = property_path.split(".")
-            # Skip "firstRow" — it's a Lookup wrapper, the actual value key is the column
-            field = parts[-1] if parts[-1] != "firstRow" else "result"
-            if field == "value":
-                field = "result"
-        else:
-            field = "result"
-
-        return "{{" + f"tasks.{task_key}.values.{field}" + "}}"
+    # Try unified expression resolution with @ prefix
+    result = resolve_expression("@" + inner, context)
+    if result is not None and result.kind in ("dab_ref", "literal"):
+        return result.value
 
     # Unrecognised — return as-is
     return operand
+
+
+def _unwrap_functions(expr: str) -> str:
+    """Strip wrapping ADF functions like ``int(...)`` to expose the inner expression.
+
+    Args:
+        expr: Expression that may be wrapped in a type-casting function.
+
+    Returns:
+        The inner expression, or the original if no wrapping detected.
+    """
+    # Match patterns like int(...), string(...), float(...)
+    m = re.match(r"(?:int|string|float|bool)\s*\((.+)\)\s*$", expr, re.IGNORECASE)
+    if m:
+        return m.group(1).strip()
+    return expr
 
 
 def _split_args(args_str: str) -> list[str]:

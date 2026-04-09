@@ -15,7 +15,7 @@ test:
 	PYTHONPATH=lib uv run pytest tests/unit -v
 
 integration:
-	PYTHONPATH=lib uv run pytest tests/integration -v
+	PYTHONPATH=lib uv run pytest tests/integration -v -m "not slow"
 
 fmt:
 	uv run ruff format lib/ tests/

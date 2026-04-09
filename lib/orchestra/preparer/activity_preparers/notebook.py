@@ -5,7 +5,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from orchestra.models.dab import DabNotebook
-from orchestra.parser.expression_parser import parse_expression_for_dab
+from orchestra.models.ir import TranslationContext
+from orchestra.parser.expression_parser import resolve_expression
 from orchestra.preparer.workflow_preparer import PreparedActivity, _build_common_task_fields
 
 if TYPE_CHECKING:
@@ -52,6 +53,10 @@ def _resolve_base_parameters(
 ) -> dict[str, str]:
     """Resolve ADF expression dicts and map to DAB dynamic value references.
 
+    Uses the unified ``resolve_expression()`` to determine parameter values.
+    Only ``literal`` and ``dab_ref`` kinds are placed in base_parameters.
+    ``notebook_code`` kinds are excluded (they must go in the notebook body).
+
     Args:
         params: Raw base_parameters dict from the NotebookActivity.
         variable_task_keys: Mapping of variable names to the task keys that
@@ -60,24 +65,26 @@ def _resolve_base_parameters(
     Returns:
         Resolved dict with DAB dynamic value references where possible.
     """
+    context = TranslationContext()
     resolved: dict[str, str] = {}
     for key, value in params.items():
-        # Handle expression-type dicts: {"type": "Expression", "value": "@..."}
+        result = resolve_expression(value, context, variable_task_keys=variable_task_keys)
+        if result is not None:
+            if result.kind in ("literal", "dab_ref"):
+                resolved[key] = result.value
+                continue
+            # notebook_code: skip -- must not go in base_parameters
+            continue
+
+        # Fallback for unresolvable values: keep as literal string
         if isinstance(value, dict):
             if value.get("type") == "Expression" and "value" in value:
-                value = value["value"]
+                # Keep the raw expression string for manual review
+                resolved[key] = str(value["value"])
             else:
                 resolved[key] = str(value)
-                continue
-
-        # Try to map ADF expression to DAB dynamic value reference
-        if isinstance(value, str) and value.startswith("@"):
-            dab_ref = parse_expression_for_dab(value, variable_task_keys=variable_task_keys)
-            if dab_ref is not None:
-                resolved[key] = dab_ref
-                continue
-
-        resolved[key] = str(value)
+        else:
+            resolved[key] = str(value)
     return resolved
 
 

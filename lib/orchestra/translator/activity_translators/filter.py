@@ -6,7 +6,7 @@ from typing import Any
 
 from orchestra.models.adf_ast import AdfActivity, AdfDefinitions
 from orchestra.models.ir import Activity, FilterActivity, TranslationContext
-from orchestra.parser.expression_parser import parse_expression
+from orchestra.parser.expression_parser import resolve_expression
 
 
 def translate(
@@ -32,18 +32,22 @@ def translate(
     tp = activity.type_properties or {}
 
     items_raw = tp.get("items", {})
-    items_value = items_raw.get("value", "") if isinstance(items_raw, dict) else str(items_raw)
-
     condition_raw = tp.get("condition", {})
-    condition_value = condition_raw.get("value", "") if isinstance(condition_raw, dict) else str(condition_raw)
 
-    # Try deterministic expression translation
-    items_expression = parse_expression(items_value, context)
-    if items_expression is None:
+    # Resolve items expression via unified resolver
+    items_result = resolve_expression(items_raw, context)
+    if items_result is not None:
+        items_expression = items_result.value
+    else:
+        items_value = items_raw.get("value", "") if isinstance(items_raw, dict) else str(items_raw)
         items_expression = items_value
 
-    condition_expression = parse_expression(condition_value, context)
-    if condition_expression is None:
+    # Resolve condition expression via unified resolver
+    condition_result = resolve_expression(condition_raw, context)
+    if condition_result is not None:
+        condition_expression = condition_result.value
+    else:
+        condition_value = condition_raw.get("value", "") if isinstance(condition_raw, dict) else str(condition_raw)
         condition_expression = condition_value
 
     return FilterActivity(
