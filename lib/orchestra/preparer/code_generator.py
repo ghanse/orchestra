@@ -337,6 +337,11 @@ _FILE_SOURCE_TYPES = {
     "SftpSource",
     "HttpSource",
     "AzureBlobStorageSource",
+    "DelimitedTextSource",
+    "JsonSource",
+    "ParquetSource",
+    "AvroSource",
+    "OrcSource",
 }
 
 _JDBC_SOURCE_TYPES = {
@@ -386,28 +391,54 @@ def generate_copy_notebook(activity: CopyActivity) -> str:
     return header + _command_separator() + body
 
 
-def _infer_file_format(source_properties: dict | None) -> str:
-    """Infer the file format from source properties."""
-    if not source_properties:
-        return "parquet"
-    # Check for format settings
-    fmt_settings = source_properties.get("formatSettings", {})
-    fmt_type = fmt_settings.get("type", "")
-    if "Csv" in fmt_type or "Delimited" in fmt_type:
-        return "csv"
-    if "Json" in fmt_type:
-        return "json"
-    if "Parquet" in fmt_type:
-        return "parquet"
-    if "Avro" in fmt_type:
-        return "avro"
-    if "Orc" in fmt_type:
-        return "orc"
-    # Check storeSettings
-    store = source_properties.get("storeSettings", {})
-    store_type = store.get("type", "")
-    if "BinaryRead" in store_type:
-        return "binaryFile"
+def _infer_file_format(source_type: str | None, source_properties: dict | None) -> str:
+    """Infer the file format from the source type string and source properties.
+
+    Checks the source_type string first (most reliable), then falls back to
+    format settings in source_properties.
+
+    Args:
+        source_type: The ADF source type string (e.g. ``"DelimitedTextSource"``).
+        source_properties: The source properties dict from the CopyActivity.
+
+    Returns:
+        File format string (e.g. ``"csv"``, ``"json"``, ``"parquet"``).
+    """
+    # Check source type string first -- most reliable
+    if source_type:
+        type_lower = source_type.lower()
+        if "delimitedtext" in type_lower or "csv" in type_lower:
+            return "csv"
+        if "json" in type_lower:
+            return "json"
+        if "parquet" in type_lower:
+            return "parquet"
+        if "avro" in type_lower:
+            return "avro"
+        if "orc" in type_lower:
+            return "orc"
+
+    # Then check formatSettings in source properties
+    if source_properties:
+        fmt_settings = source_properties.get("formatSettings", {})
+        fmt_type = fmt_settings.get("type", "")
+        if "Csv" in fmt_type or "Delimited" in fmt_type:
+            return "csv"
+        if "Json" in fmt_type:
+            return "json"
+        if "Parquet" in fmt_type:
+            return "parquet"
+        if "Avro" in fmt_type:
+            return "avro"
+        if "Orc" in fmt_type:
+            return "orc"
+        # Check storeSettings
+        store = source_properties.get("storeSettings", {})
+        store_type = store.get("type", "")
+        if "BinaryRead" in store_type:
+            return "binaryFile"
+
+    # Default based on source type
     return "parquet"
 
 
@@ -416,10 +447,14 @@ def _generate_autoloader_body(activity: CopyActivity) -> str:
     src_props = activity.source_properties or {}
     sink_props = activity.sink_properties or {}
 
-    source_path = src_props.get("path", src_props.get("filePath", "/mnt/source"))
+    # Use the resolved path from dataset if available, otherwise fall back
+    source_path = src_props.get(
+        "resolved_path",
+        src_props.get("path", src_props.get("filePath", "/mnt/source")),
+    )
     sink_table = sink_props.get("table", sink_props.get("tableName", f"{activity.task_key}_raw"))
     checkpoint = f"/tmp/checkpoints/{activity.task_key}"
-    file_format = _infer_file_format(src_props)
+    file_format = _infer_file_format(activity.source_type, src_props)
 
     return textwrap.dedent(f"""\
         # Parameters
@@ -539,9 +574,13 @@ def _generate_generic_copy_body(activity: CopyActivity) -> str:
     src_props = activity.source_properties or {}
     sink_props = activity.sink_properties or {}
 
-    source_path = src_props.get("path", src_props.get("filePath", "/mnt/source"))
+    # Use the resolved path from dataset if available, otherwise fall back
+    source_path = src_props.get(
+        "resolved_path",
+        src_props.get("path", src_props.get("filePath", "/mnt/source")),
+    )
     sink_table = sink_props.get("table", sink_props.get("tableName", f"{activity.task_key}_raw"))
-    file_format = _infer_file_format(src_props)
+    file_format = _infer_file_format(activity.source_type, src_props)
 
     return textwrap.dedent(f"""\
         # Parameters

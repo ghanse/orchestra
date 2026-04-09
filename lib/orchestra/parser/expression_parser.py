@@ -1,4 +1,4 @@
-"""Translate ADF expressions to Python expression strings.
+"""Translate ADF expressions to Python expression strings or DAB dynamic values.
 
 Handles the most common ADF expression patterns deterministically.  Anything
 that cannot be resolved is returned as ``None`` so that the caller can route
@@ -261,3 +261,76 @@ def _split_concat_args(inner: str) -> list[str]:
         parts.append("".join(current).strip())
 
     return parts
+
+
+# ---------------------------------------------------------------------------
+# DAB Dynamic Value Reference mode
+# ---------------------------------------------------------------------------
+
+# Matches: pipeline().parameters.ParamName
+_PIPELINE_PARAM_RE = re.compile(
+    r"""pipeline\(\s*\)\.parameters\.(\w+)""",
+    re.IGNORECASE,
+)
+
+# Map well-known pipeline() properties to DAB dynamic value references
+# See https://docs.databricks.com/aws/en/jobs/dynamic-value-references
+_DAB_PIPELINE_PROPERTY_MAP: dict[str, str] = {
+    "RunId": "{{job.run_id}}",
+    "GroupId": "{{job.run_id}}",
+    "TriggerTime": "{{job.start_time.iso_datetime}}",
+    "Pipeline": "{{job.name}}",
+    "TriggerName": "{{job.trigger.type}}",
+    "DataFactory": "{{job.run_id}}",
+}
+
+
+def parse_expression_for_dab(value: str | dict[str, Any] | int | float | bool) -> str | None:
+    """Translate an ADF expression to a DAB dynamic value reference.
+
+    This is an alternative to :func:`parse_expression` that outputs Lakeflow
+    dynamic value references (``{{job.run_id}}``, ``{{job.parameters.X}}``, etc.)
+    instead of Python code.  Intended for use in ``base_parameters`` of
+    ``notebook_task`` definitions in the DAB YAML.
+
+    Args:
+        value: The ADF expression value.  May be a plain scalar, an
+            ``@``-prefixed expression string, or an ``{"type": "Expression",
+            "value": "..."}`` dict.
+
+    Returns:
+        A DAB dynamic value reference string, or ``None`` if the expression
+        cannot be mapped.
+    """
+    # Unwrap expression-type dicts
+    if isinstance(value, dict):
+        if value.get("type") == "Expression" and "value" in value:
+            return parse_expression_for_dab(value["value"])
+        return None
+
+    # Non-string values have no DAB mapping
+    if not isinstance(value, str):
+        return None
+
+    # Non-expression strings are literal values — no mapping needed
+    if not value.startswith("@"):
+        return None
+
+    expr = value[1:]  # strip leading @
+
+    # --- Pipeline parameters ---
+    m = _PIPELINE_PARAM_RE.match(expr)
+    if m is not None:
+        param_name = m.group(1)
+        return "{{" + f"job.parameters.{param_name}" + "}}"
+
+    # --- Pipeline properties ---
+    m = _PIPELINE_PROPERTY_RE.match(expr)
+    if m is not None:
+        prop = m.group(1)
+        dab_ref = _DAB_PIPELINE_PROPERTY_MAP.get(prop)
+        if dab_ref is not None:
+            return dab_ref
+
+    # No mapping found
+    return None

@@ -69,9 +69,14 @@ class TestNotebookPreparer:
         assert isinstance(prepared, PreparedActivity)
         assert prepared.task["task_key"] == "run_nb"
         assert "notebook_task" in prepared.task
-        assert prepared.task["notebook_task"]["notebook_path"] == "/Shared/ETL/transform"
+        # Path is now bundle-relative
+        assert prepared.task["notebook_task"]["notebook_path"] == "../src/notebooks/run_nb.py"
         assert prepared.task["notebook_task"]["base_parameters"] == {"env": "dev"}
-        assert len(prepared.notebooks) == 0  # notebook already exists, not generated
+        # Placeholder notebook is now generated
+        assert len(prepared.notebooks) == 1
+        assert prepared.notebooks[0].relative_path == "notebooks/run_nb.py"
+        assert "Export notebook from workspace" in prepared.notebooks[0].content
+        assert "/Shared/ETL/transform" in prepared.notebooks[0].content
 
     def test_prepare_notebook_no_params(self):
         activity = NotebookActivity(
@@ -81,6 +86,25 @@ class TestNotebookPreparer:
         )
         prepared = prepare_activity(activity)
         assert "base_parameters" not in prepared.task.get("notebook_task", {})
+        # Placeholder notebook is generated
+        assert len(prepared.notebooks) == 1
+
+    def test_prepare_notebook_resolves_expression_params(self):
+        """ADF expression params are mapped to DAB dynamic value references."""
+        activity = NotebookActivity(
+            **_make_base("Expr NB", "expr_nb"),
+            notebook_path="/Shared/nb",
+            base_parameters={
+                "run_id": "@pipeline().RunId",
+                "env": "dev",
+                "trigger_time": {"type": "Expression", "value": "@pipeline().TriggerTime"},
+            },
+        )
+        prepared = prepare_activity(activity)
+        params = prepared.task["notebook_task"]["base_parameters"]
+        assert params["run_id"] == "{{job.run_id}}"
+        assert params["env"] == "dev"
+        assert params["trigger_time"] == "{{job.start_time.iso_datetime}}"
 
 
 class TestCopyPreparer:
@@ -122,6 +146,11 @@ class TestSparkJarPreparer:
         prepared = prepare_activity(activity)
         assert "spark_jar_task" in prepared.task
         assert prepared.task["spark_jar_task"]["main_class_name"] == "com.example.Main"
+        # Libraries are rewritten to bundle-relative paths
+        assert prepared.task["libraries"] == [{"jar": "../lib/my.jar"}]
+        # Placeholder readme is generated
+        assert len(prepared.notebooks) == 1
+        assert "jar_task_README.txt" in prepared.notebooks[0].relative_path
 
 
 class TestSparkPythonPreparer:
@@ -133,7 +162,12 @@ class TestSparkPythonPreparer:
         )
         prepared = prepare_activity(activity)
         assert "spark_python_task" in prepared.task
-        assert prepared.task["spark_python_task"]["python_file"] == "dbfs:/scripts/etl.py"
+        # Path is rewritten to bundle-relative
+        assert prepared.task["spark_python_task"]["python_file"] == "../src/scripts/etl.py"
+        # Placeholder script is generated
+        assert len(prepared.notebooks) == 1
+        assert "scripts/etl.py" in prepared.notebooks[0].relative_path
+        assert "dbfs:/scripts/etl.py" in prepared.notebooks[0].content
 
 
 class TestLookupPreparer:
@@ -373,7 +407,7 @@ class TestPrepareWorkflow:
         assert isinstance(wf, PreparedWorkflow)
         assert wf.name == "test_pipeline"
         assert len(wf.tasks) == 3
-        assert len(wf.notebooks) >= 2  # copy and wait generate notebooks
+        assert len(wf.notebooks) >= 3  # copy, wait, and notebook all generate notebooks
 
     def test_prepare_workflow_deduplicates_secrets(self):
         """Duplicate secrets across tasks are deduplicated."""
