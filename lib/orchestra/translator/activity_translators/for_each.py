@@ -55,7 +55,11 @@ def translate(
     is_sequential = tp.get("isSequential", False)
     default_batch = 1 if is_sequential else 20
     batch_count_raw = tp.get("batchCount")
-    batch_count = resolve_field_int(batch_count_raw, context, default=default_batch) if batch_count_raw is not None else default_batch
+    batch_count = (
+        resolve_field_int(batch_count_raw, context, default=default_batch)
+        if batch_count_raw is not None
+        else default_batch
+    )
 
     # Translate inner activities
     inner_activities: list[Activity] = []

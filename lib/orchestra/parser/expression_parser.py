@@ -627,9 +627,7 @@ def _resolve_function_call(
             continue
 
         # String literal (single or double quoted)
-        if (raw_arg.startswith("'") and raw_arg.endswith("'")) or (
-            raw_arg.startswith('"') and raw_arg.endswith('"')
-        ):
+        if (raw_arg.startswith("'") and raw_arg.endswith("'")) or (raw_arg.startswith('"') and raw_arg.endswith('"')):
             resolved_args.append(ExpressionResult(kind="literal", value=raw_arg[1:-1]))
         # Numeric literal
         elif _is_numeric(raw_arg):

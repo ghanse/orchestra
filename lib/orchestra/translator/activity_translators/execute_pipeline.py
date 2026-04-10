@@ -32,7 +32,11 @@ def translate(
 
     # Pipeline reference
     pipeline_ref = tp.get("pipeline", {})
-    pipeline_name = resolve_field(pipeline_ref.get("referenceName", ""), context) if isinstance(pipeline_ref, dict) else str(pipeline_ref)
+    pipeline_name = (
+        resolve_field(pipeline_ref.get("referenceName", ""), context)
+        if isinstance(pipeline_ref, dict)
+        else str(pipeline_ref)
+    )
 
     parameters = resolve_dict_values(tp.get("parameters"), context) or {}
     wait_on_completion = tp.get("waitOnCompletion", True)

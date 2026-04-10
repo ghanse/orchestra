@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 import textwrap
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from orchestra.models.ir import (
@@ -477,9 +477,9 @@ def generate_set_variable_notebook(activity: SetVariableActivity) -> str:
         lines.append("# Set task value so downstream tasks can reference it via")
         lines.append(f"# {{{{tasks.{activity.task_key}.values.{activity.variable_name}}}}}.")
         lines.append("dbutils.jobs.taskValues.set(key=variable_name, value=value)")
-        lines.append('print(f"Set task value \'{variable_name}\' = \'{value}\'")')
+        lines.append("print(f\"Set task value '{variable_name}' = '{value}'\")")
         lines.append("")
-        lines.append(f'dbutils.notebook.exit(json.dumps({{"variable_name": variable_name, "value": str(value)}}))')
+        lines.append('dbutils.notebook.exit(json.dumps({"variable_name": variable_name, "value": str(value)}))')
         body = "\n".join(lines) + "\n"
     else:
         # literal or dab_ref: read from widget parameter
@@ -1023,7 +1023,7 @@ def generate_append_variable_notebook(activity: AppendVariableActivity) -> str:
         lines.append("current.append(value)")
         lines.append("result = json.dumps(current)")
         lines.append("dbutils.jobs.taskValues.set(key=variable_name, value=result)")
-        lines.append('print(f"Appended to \'{variable_name}\': array now has {len(current)} item(s)")')
+        lines.append("print(f\"Appended to '{variable_name}': array now has {len(current)} item(s)\")")
         lines.append("")
         lines.append("dbutils.notebook.exit(result)")
         body = "\n".join(lines) + "\n"

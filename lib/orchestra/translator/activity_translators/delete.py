@@ -43,7 +43,9 @@ def translate(
     # Also check storeSettings for wildcard paths
     store_settings = tp.get("storeSettings", {})
     wildcard_folder_path_raw = store_settings.get("wildcardFolderPath")
-    wildcard_folder_path = resolve_field(wildcard_folder_path_raw, context) if wildcard_folder_path_raw is not None else None
+    wildcard_folder_path = (
+        resolve_field(wildcard_folder_path_raw, context) if wildcard_folder_path_raw is not None else None
+    )
 
     # Build folder path from available data
     effective_folder = folder_path or wildcard_folder_path
