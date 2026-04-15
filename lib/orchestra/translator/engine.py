@@ -161,6 +161,22 @@ def translate_pipeline(pipeline: AdfPipeline, definitions: AdfDefinitions) -> Tr
         tags={"source": "adf", "pipeline": pipeline.name},
     )
 
+    # Motif detection and collapsing: scan for known multi-activity patterns
+    # and replace matched groups with single MotifActivity nodes.
+    from orchestra.motifs.collapser import collapse_motifs
+    from orchestra.motifs.detector import detect_motifs
+
+    detected_motifs = detect_motifs(pipeline, definitions)
+    if detected_motifs:
+        pipeline_ir = collapse_motifs(pipeline_ir, detected_motifs)
+        for motif in detected_motifs:
+            logger.info(
+                "Collapsed motif '%s': %d activities -> %s",
+                motif.definition.display_name,
+                len(motif.matched_activities),
+                motif.definition.databricks_replacement,
+            )
+
     return TranslationReport(
         pipeline=pipeline_ir,
         deterministic_count=deterministic_count,
@@ -555,6 +571,7 @@ def _activity_extra_fields(activity: Activity) -> dict[str, Any]:
         ExecutePipelineActivity,
         FilterActivity,
         LookupActivity,
+        MotifActivity,
         NotebookActivity,
         RunJobActivity,
         SparkJarActivity,
@@ -656,6 +673,17 @@ def _activity_extra_fields(activity: Activity) -> dict[str, Any]:
             extra["job_name"] = activity.job_name
             if activity.existing_job_id:
                 extra["existing_job_id"] = activity.existing_job_id
+        case MotifActivity():
+            extra["motif_id"] = activity.motif_id
+            extra["display_name"] = activity.display_name
+            extra["databricks_replacement"] = activity.databricks_replacement
+            extra["matched_activity_names"] = activity.matched_activity_names
+            if activity.source_type_hint:
+                extra["source_type_hint"] = activity.source_type_hint
+            if activity.confidence_notes:
+                extra["confidence_notes"] = activity.confidence_notes
+            if activity.notebook_template:
+                extra["notebook_template"] = activity.notebook_template
         case PlaceholderActivity():
             extra["original_type"] = activity.original_type
             extra["comment"] = activity.comment

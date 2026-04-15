@@ -383,6 +383,38 @@ class PlaceholderActivity(Activity):
 
 
 @dataclass(slots=True, kw_only=True)
+class MotifActivity(Activity):
+    """Activity produced by collapsing a detected motif pattern.
+
+    Replaces a group of ADF activities that form a recognised pattern
+    (e.g. watermark-based incremental load) with a single Databricks-native
+    construct.
+
+    Attributes:
+        motif_id: Identifier of the matched motif definition.
+        display_name: Human-readable motif name.
+        databricks_replacement: Target Databricks construct
+            (e.g. ``"auto_loader"``, ``"dlt_apply_changes"``).
+        matched_activity_names: Original ADF activity names that were collapsed.
+        source_type_hint: Inferred source type (``"files"``, ``"database"``,
+            ``"rest_api"``) or ``None``.
+        confidence_notes: Detector notes explaining the match rationale.
+        original_activities: The original translated Activity IR nodes that
+            were replaced, preserved for reference and fallback.
+        notebook_template: Name of the code generator template, if any.
+    """
+
+    motif_id: str
+    display_name: str
+    databricks_replacement: str
+    matched_activity_names: list[str]
+    source_type_hint: str | None = None
+    confidence_notes: list[str] = field(default_factory=list)
+    original_activities: list[Activity] = field(default_factory=list)
+    notebook_template: str | None = None
+
+
+@dataclass(slots=True, kw_only=True)
 class Pipeline:
     """Top-level workflow container produced by the translator.
 
