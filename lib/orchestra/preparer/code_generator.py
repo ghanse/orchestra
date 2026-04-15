@@ -73,8 +73,18 @@ def generate_lookup_notebook(activity: LookupActivity, *, scope: str = "") -> st
     source_type = activity.source_type or ""
     query = activity.source_query or ""
 
+    # Determine whether the query is static SQL or computed Python code
+    # (e.g. contains dbutils.widgets.get() calls from expression resolution).
+    is_dynamic_query = "dbutils.widgets.get" in query or "dbutils.jobs.taskValues" in query
+
     if source_type in _DB_SOURCE_TYPES:
         scope = scope or activity.task_key
+
+        if is_dynamic_query:
+            query_assignment = f"query = {query}"
+        else:
+            query_assignment = f'query = """{query}"""'
+
         body = textwrap.dedent(f"""\
             import json
 
@@ -87,7 +97,7 @@ def generate_lookup_notebook(activity: LookupActivity, *, scope: str = "") -> st
             jdbc_user = dbutils.secrets.get(scope="{scope}", key="jdbc-user")
 
             # Execute lookup query
-            query = \"\"\"{query}\"\"\"
+            {query_assignment}
 
             df = (
                 spark.read.format("jdbc")
@@ -208,11 +218,21 @@ def _resolve_body(body: Any) -> str:
             return f"f{repr(resolved_str)}"
         if body.startswith("@"):
             result = resolve_expression(body, ctx)
-            if result and result.kind == "literal":
-                return repr(result.value)
+            if result is not None:
+                if result.kind == "literal":
+                    return repr(result.value)
+                if result.kind == "notebook_code":
+                    return result.value
+                if result.kind == "dab_ref":
+                    return repr(result.value)
         return repr(body)
 
     if isinstance(body, dict):
+        # Unwrap {"type": "Expression", "value": "@..."} — the body itself
+        # is an ADF expression, not a plain dict with keys "type" and "value".
+        if body.get("type") == "Expression" and "value" in body:
+            return _resolve_body(body["value"])
+
         # Check if any values need runtime resolution (DAB refs or expressions).
         # If so, build the dict as a Python expression using f-strings.
         needs_fstring = False
@@ -355,21 +375,39 @@ def generate_web_activity_notebook(activity: WebActivity, *, scope: str = "") ->
     body_block = ""
     request_call = ""
     if activity.method in ("POST", "PUT", "PATCH"):
-        body_str = _resolve_body(activity.body)
-        body_block = textwrap.dedent(f"""\
-            body = dbutils.widgets.get("body") if dbutils.widgets.get("body") else {body_str}
-        """)
-        request_call = "response = requests.request(method, url, headers=headers, data=body, timeout=300)\n"
+        raw_body = activity.body
+        # If the body was pre-resolved to Python code by the translator
+        # (contains function calls like __import__ or json.loads), embed directly.
+        if isinstance(raw_body, str) and ("__import__" in raw_body or "json.loads" in raw_body):
+            body_block = f"body = {raw_body}\n"
+        else:
+            body_str = _resolve_body(raw_body)
+            body_block = textwrap.dedent(f"""\
+                body = dbutils.widgets.get("body") if dbutils.widgets.get("body") else {body_str}
+            """)
+        request_call = "response = requests.request(method, url, headers=headers, json=body, timeout=300)\n"
     else:
         request_call = "response = requests.request(method, url, headers=headers, timeout=300)\n"
+
+    # When the URL is a DAB dynamic ref ({{...}}), it will be resolved and
+    # passed via base_parameters at runtime — just read from the widget.
+    if "{{" in activity.url:
+        url_line = 'url = dbutils.widgets.get("url")'
+    else:
+        url_line = f'url = dbutils.widgets.get("url") or "{activity.url}"'
+
+    if "{{" in activity.method:
+        method_line = 'method = dbutils.widgets.get("method")'
+    else:
+        method_line = f'method = dbutils.widgets.get("method") or "{activity.method}"'
 
     body = textwrap.dedent(f"""\
         import json
         import requests
 
         # Parameters
-        url = dbutils.widgets.get("url") or "{activity.url}"
-        method = dbutils.widgets.get("method") or "{activity.method}"
+        {url_line}
+        {method_line}
         headers = {headers_literal}
 
     """)

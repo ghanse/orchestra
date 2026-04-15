@@ -7,6 +7,7 @@ from typing import Any
 from orchestra.models.adf_ast import AdfActivity, AdfDefinitions
 from orchestra.models.ir import Activity, TranslationContext
 from orchestra.models.ir import WebActivity as WebActivityIR
+from orchestra.parser.expression_parser import resolve_expression
 from orchestra.translator.activity_translators._resolve import resolve_dict_values, resolve_field
 
 
@@ -34,7 +35,7 @@ def translate(
     url = resolve_field(tp.get("url", ""), context)
     method = tp.get("method", "GET")
     headers = resolve_dict_values(tp.get("headers"), context) or None
-    body = tp.get("body")
+    body = _resolve_body(tp.get("body"), context)
     authentication = tp.get("authentication")
     disable_cert_validation = tp.get("disableCertValidation", False)
     http_request_timeout = tp.get("httpRequestTimeout")
@@ -54,6 +55,39 @@ def translate(
         disable_cert_validation=disable_cert_validation,
         http_request_timeout_seconds=timeout_seconds,
     )
+
+
+def _resolve_body(body: Any, context: TranslationContext) -> Any:
+    """Pre-resolve ADF expressions in the request body at translate time.
+
+    When the body is an ``{"type": "Expression", "value": "@..."}`` dict,
+    resolve the inner expression via the full translation context (which
+    carries variable_value_cache for inlining DAB refs like
+    ``{{job.start_time.iso_datetime}}``).
+
+    If the expression resolves to ``notebook_code``, store the code string
+    directly so the code generator can embed it.  Otherwise return the raw
+    body for downstream handling.
+
+    Args:
+        body: Raw body from the ADF typeProperties.
+        context: Current translation context with variable caches.
+
+    Returns:
+        Resolved body — either a Python code string (for notebook_code),
+        the original body dict, or ``None``.
+    """
+    if body is None:
+        return None
+
+    if isinstance(body, dict) and body.get("type") == "Expression" and "value" in body:
+        result = resolve_expression(body, context)
+        if result is not None and result.kind == "notebook_code":
+            return result.value
+        if result is not None and result.kind == "literal":
+            return result.value
+
+    return body
 
 
 def _parse_timeout_to_seconds(timeout_str: str) -> int | None:

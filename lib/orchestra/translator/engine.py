@@ -529,36 +529,49 @@ def _pipeline_to_dict(pipeline: Pipeline) -> dict[str, Any]:
     Returns:
         Dictionary suitable for ``json.dumps``.
     """
-    tasks: list[dict[str, Any]] = []
-    for task in pipeline.tasks:
-        task_dict: dict[str, Any] = {
-            "name": task.name,
-            "task_key": task.task_key,
-            "type": type(task).__name__,
-        }
-        if task.description:
-            task_dict["description"] = task.description
-        if task.timeout_seconds:
-            task_dict["timeout_seconds"] = task.timeout_seconds
-        if task.max_retries:
-            task_dict["max_retries"] = task.max_retries
-        if task.depends_on:
-            task_dict["depends_on"] = [{"task_key": d.task_key, "outcome": d.outcome} for d in task.depends_on]
-        if task.cluster:
-            task_dict["cluster"] = task.cluster
-
-        # Type-specific fields
-        extra = _activity_extra_fields(task)
-        task_dict.update(extra)
-        tasks.append(task_dict)
-
     return {
         "name": pipeline.name,
         "parameters": pipeline.parameters,
         "schedule": pipeline.schedule,
         "tags": pipeline.tags,
-        "tasks": tasks,
+        "tasks": [_activity_to_dict(task) for task in pipeline.tasks],
     }
+
+
+def _activity_to_dict(task: Activity) -> dict[str, Any]:
+    """Serialise a single Activity IR node to a JSON-friendly dictionary.
+
+    Handles common fields and delegates type-specific fields to
+    ``_activity_extra_fields``.
+
+    Args:
+        task: Any Activity IR node.
+
+    Returns:
+        Dictionary suitable for ``json.dumps``.
+    """
+    task_dict: dict[str, Any] = {
+        "name": task.name,
+        "task_key": task.task_key,
+        "type": type(task).__name__,
+    }
+    if task.description:
+        task_dict["description"] = task.description
+    if task.timeout_seconds:
+        task_dict["timeout_seconds"] = task.timeout_seconds
+    if task.max_retries:
+        task_dict["max_retries"] = task.max_retries
+    if task.min_retry_interval_millis:
+        task_dict["min_retry_interval_millis"] = task.min_retry_interval_millis
+    if task.depends_on:
+        task_dict["depends_on"] = [{"task_key": d.task_key, "outcome": d.outcome} for d in task.depends_on]
+    if task.cluster:
+        task_dict["cluster"] = task.cluster
+
+    # Type-specific fields
+    extra = _activity_extra_fields(task)
+    task_dict.update(extra)
+    return task_dict
 
 
 def _activity_extra_fields(activity: Activity) -> dict[str, Any]:
@@ -576,6 +589,7 @@ def _activity_extra_fields(activity: Activity) -> dict[str, Any]:
         DeleteActivity,
         ExecutePipelineActivity,
         FilterActivity,
+        LookupActivity,
         NotebookActivity,
         RunJobActivity,
         SparkJarActivity,
@@ -602,23 +616,45 @@ def _activity_extra_fields(activity: Activity) -> dict[str, Any]:
         case ForEachActivity():
             extra["items_expression"] = activity.items_expression
             extra["concurrency"] = activity.concurrency
+            extra["inner_activities"] = [_activity_to_dict(a) for a in activity.inner_activities]
         case IfConditionActivity():
             extra["op"] = activity.op
             extra["left"] = activity.left
             extra["right"] = activity.right
+            extra["if_true_activities"] = [_activity_to_dict(a) for a in activity.if_true_activities]
+            extra["if_false_activities"] = [_activity_to_dict(a) for a in activity.if_false_activities]
+        case LookupActivity():
+            extra["source_type"] = activity.source_type
+            if activity.source_properties:
+                extra["source_properties"] = activity.source_properties
+            extra["first_row_only"] = activity.first_row_only
+            if activity.source_query:
+                extra["source_query"] = activity.source_query
         case SetVariableActivity():
             extra["variable_name"] = activity.variable_name
             extra["variable_value"] = activity.variable_value
+            extra["value_kind"] = activity.value_kind
+            if activity.notebook_code:
+                extra["notebook_code"] = activity.notebook_code
+            if activity.notebook_imports:
+                extra["notebook_imports"] = activity.notebook_imports
         case FilterActivity():
             extra["items_expression"] = activity.items_expression
             extra["condition_expression"] = activity.condition_expression
         case AppendVariableActivity():
             extra["variable_name"] = activity.variable_name
             extra["append_value"] = activity.append_value
+            extra["value_kind"] = activity.value_kind
+            if activity.notebook_code:
+                extra["notebook_code"] = activity.notebook_code
+            if activity.notebook_imports:
+                extra["notebook_imports"] = activity.notebook_imports
         case SwitchActivity():
             extra["on_expression"] = activity.on_expression
-            extra["cases"] = [{"value": c.value, "activities": len(c.activities)} for c in activity.cases]
-            extra["default_activities_count"] = len(activity.default_activities)
+            extra["cases"] = [
+                {"value": c.value, "activities": [_activity_to_dict(a) for a in c.activities]} for c in activity.cases
+            ]
+            extra["default_activities"] = [_activity_to_dict(a) for a in activity.default_activities]
         case WaitActivity():
             extra["wait_time_seconds"] = activity.wait_time_seconds
         case SparkJarActivity():
@@ -634,8 +670,16 @@ def _activity_extra_fields(activity: Activity) -> dict[str, Any]:
         case WebActivity():
             extra["url"] = activity.url
             extra["method"] = activity.method
+            if activity.body is not None:
+                extra["body"] = activity.body
+            if activity.headers:
+                extra["headers"] = activity.headers
+            if activity.authentication:
+                extra["authentication"] = activity.authentication
         case DeleteActivity():
             extra["dataset_name"] = activity.dataset_name
+            if activity.folder_path:
+                extra["folder_path"] = activity.folder_path
             extra["recursive"] = activity.recursive
         case ExecutePipelineActivity():
             extra["pipeline_name"] = activity.pipeline_name
@@ -654,6 +698,88 @@ def _activity_extra_fields(activity: Activity) -> dict[str, Any]:
             extra["reason"] = activity.reason
 
     return extra
+
+
+# ---------------------------------------------------------------------------
+# Debug serialization — full IR dump with all fields
+# ---------------------------------------------------------------------------
+
+
+def _activity_to_debug_dict(activity: Activity) -> dict[str, Any]:
+    """Serialise an Activity to a full debug dict showing all dataclass fields.
+
+    Unlike ``_activity_to_dict`` which selectively emits fields, this dumps
+    every field from every IR subclass so the complete translation state is
+    visible.  Recursive structures (inner_activities, if_true/false, cases)
+    are fully expanded.
+
+    Args:
+        activity: Any Activity IR node.
+
+    Returns:
+        Dict with ``__class__`` plus every dataclass field.
+    """
+    d: dict[str, Any] = {"__class__": type(activity).__name__}
+
+    for f in activity.__dataclass_fields__:
+        value = getattr(activity, f)
+
+        if isinstance(value, Activity):
+            d[f] = _activity_to_debug_dict(value)
+        elif isinstance(value, list) and value and isinstance(value[0], Activity):
+            d[f] = [_activity_to_debug_dict(a) for a in value]
+        elif isinstance(value, list) and value and hasattr(value[0], "__dataclass_fields__"):
+            # SwitchCase, Dependency, etc.
+            d[f] = [_dataclass_to_debug_dict(item) for item in value]
+        else:
+            d[f] = value
+
+    return d
+
+
+def _dataclass_to_debug_dict(obj: Any) -> dict[str, Any]:
+    """Serialise a generic dataclass (SwitchCase, Dependency, etc.) to a debug dict.
+
+    Recursively expands any Activity fields.
+
+    Args:
+        obj: A dataclass instance.
+
+    Returns:
+        Dict with ``__class__`` plus every dataclass field.
+    """
+    d: dict[str, Any] = {"__class__": type(obj).__name__}
+
+    for f in obj.__dataclass_fields__:
+        value = getattr(obj, f)
+
+        if isinstance(value, Activity):
+            d[f] = _activity_to_debug_dict(value)
+        elif isinstance(value, list) and value and isinstance(value[0], Activity):
+            d[f] = [_activity_to_debug_dict(a) for a in value]
+        else:
+            d[f] = value
+
+    return d
+
+
+def _pipeline_to_debug_dict(pipeline: Pipeline) -> dict[str, Any]:
+    """Serialise a Pipeline IR to a full debug dict.
+
+    Args:
+        pipeline: The translated pipeline IR.
+
+    Returns:
+        Dict with every field fully expanded.
+    """
+    return {
+        "__class__": "Pipeline",
+        "name": pipeline.name,
+        "parameters": pipeline.parameters,
+        "schedule": pipeline.schedule,
+        "tags": pipeline.tags,
+        "tasks": [_activity_to_debug_dict(task) for task in pipeline.tasks],
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -677,6 +803,11 @@ if __name__ == "__main__":
         type=str,
         default=None,
         help="Translate only the named pipeline (default: all).",
+    )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Write a full debug IR dump alongside the normal output.",
     )
     args = parser.parse_args()
 
@@ -707,6 +838,13 @@ if __name__ == "__main__":
         pipeline_dict = _pipeline_to_dict(report.pipeline)
         pipeline_file.write_text(json.dumps(pipeline_dict, indent=2, default=str), encoding="utf-8")
         logger.info("Wrote pipeline IR to %s", pipeline_file)
+
+        # Write debug IR if requested
+        if args.debug:
+            debug_file = output_dir / f"{_sanitize_task_key(pipeline.name)}.debug.json"
+            debug_dict = _pipeline_to_debug_dict(report.pipeline)
+            debug_file.write_text(json.dumps(debug_dict, indent=2, default=str), encoding="utf-8")
+            logger.info("Wrote debug IR to %s", debug_file)
 
         # Collect gaps
         for gap in report.gaps:

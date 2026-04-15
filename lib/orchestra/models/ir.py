@@ -121,14 +121,19 @@ class CopyActivity(Activity):
 class ForEachActivity(Activity):
     """ForEach loop activity.
 
+    When multiple inner activities exist, the bundler emits a separate inner
+    job (named ``{task_key}_inner_tasks``) containing the full task graph and
+    the ``for_each_task`` body becomes a ``run_job_task`` that calls it.
+
     Attributes:
         items_expression: ADF expression driving the iteration.
-        child_activity: Activity to execute per item.
-        concurrency: Maximum parallel iterations.
+        inner_activities: Translated activities executed for each item.
+        concurrency: Maximum parallel iterations (maps to Databricks
+            ``for_each_task.concurrency``).
     """
 
     items_expression: str
-    child_activity: Activity
+    inner_activities: list[Activity] = field(default_factory=list)
     concurrency: int | None = None
 
 
@@ -439,6 +444,7 @@ class TranslationContext:
     activity_cache: MappingProxyType[str, Activity] = field(default_factory=lambda: MappingProxyType({}))
     registry: MappingProxyType[str, Any] = field(default_factory=lambda: MappingProxyType({}))
     variable_cache: MappingProxyType[str, str] = field(default_factory=lambda: MappingProxyType({}))
+    variable_value_cache: MappingProxyType[str, str] = field(default_factory=lambda: MappingProxyType({}))
 
     def with_activity(self, name: str, activity: Activity) -> TranslationContext:
         """Return a new context with *activity* added to the cache.
@@ -454,6 +460,7 @@ class TranslationContext:
             activity_cache=MappingProxyType({**self.activity_cache, name: activity}),
             registry=self.registry,
             variable_cache=self.variable_cache,
+            variable_value_cache=self.variable_value_cache,
         )
 
     def get_activity(self, activity_name: str) -> Activity | None:
@@ -467,32 +474,43 @@ class TranslationContext:
         """
         return self.activity_cache.get(activity_name)
 
-    def with_variable(self, variable_name: str, task_key: str) -> TranslationContext:
+    def with_variable(
+        self,
+        variable_name: str,
+        task_key: str,
+        *,
+        dab_ref_value: str | None = None,
+    ) -> TranslationContext:
         """Return a new context with a variable mapping added.
 
         Args:
             variable_name: Variable name.
             task_key: Task key of the task that sets this variable.
+            dab_ref_value: When the variable's value resolves to a DAB
+                dynamic value reference (e.g. ``{{job.start_time.iso_datetime}}``),
+                store it so downstream ``@variables()`` calls can inline the
+                ref instead of routing through the task value.
 
         Returns:
-            New ``TranslationContext`` containing the updated variable cache.
+            New ``TranslationContext`` containing the updated caches.
         """
+        new_vvc = self.variable_value_cache
+        if dab_ref_value is not None:
+            new_vvc = MappingProxyType({**self.variable_value_cache, variable_name: dab_ref_value})
         return TranslationContext(
             activity_cache=self.activity_cache,
             registry=self.registry,
             variable_cache=MappingProxyType({**self.variable_cache, variable_name: task_key}),
+            variable_value_cache=new_vvc,
         )
 
     def get_variable_task_key(self, variable_name: str) -> str | None:
-        """Look up the task key that sets a variable.
-
-        Args:
-            variable_name: Variable name.
-
-        Returns:
-            Cached task key or ``None`` if not found.
-        """
+        """Look up the task key that sets a variable."""
         return self.variable_cache.get(variable_name)
+
+    def get_variable_dab_ref(self, variable_name: str) -> str | None:
+        """Look up the inlined DAB ref value for a variable, if available."""
+        return self.variable_value_cache.get(variable_name)
 
 
 # ---------------------------------------------------------------------------

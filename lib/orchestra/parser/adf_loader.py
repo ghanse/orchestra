@@ -298,6 +298,14 @@ def _parse_pipeline_json(data: dict[str, Any], *, fallback_name: str = "unknown"
 def _parse_activity(data: dict[str, Any]) -> AdfActivity:
     """Parse an activity dict into a typed :class:`AdfActivity` AST node.
 
+    Supports two ADF JSON formats:
+
+    1. **Standard format** — type-specific fields nested under ``typeProperties``.
+    2. **Flattened format** — type-specific fields at the activity top level
+       (produced by some ADF REST API serialisations).  Detected when
+       ``typeProperties`` is absent; remaining non-common keys are collected
+       into ``type_properties``.
+
     Args:
         data: Raw activity JSON dictionary.
 
@@ -331,8 +339,11 @@ def _parse_activity(data: dict[str, Any]) -> AdfActivity:
             secure_output=raw_policy.get("secureOutput", False),
         )
 
-    # Type properties
+    # Type properties — prefer explicit typeProperties; fall back to
+    # collecting non-common top-level keys (flattened format).
     type_properties = data.get("typeProperties")
+    if type_properties is None:
+        type_properties = _collect_type_properties(data)
 
     # Inputs / outputs
     inputs = _parse_dataset_refs(data.get("inputs"))
@@ -376,6 +387,43 @@ def _parse_activity(data: dict[str, Any]) -> AdfActivity:
         if_false_activities=if_false_activities,
         activities=child_activities,
     )
+
+
+# Keys that belong to the common Activity envelope, NOT to typeProperties.
+_COMMON_ACTIVITY_KEYS: frozenset[str] = frozenset(
+    {
+        "name",
+        "type",
+        "dependsOn",
+        "policy",
+        "userProperties",
+        "description",
+        "state",
+        "onInactiveMarkAs",
+        "additionalProperties",
+        "inputs",
+        "outputs",
+        "linkedServiceName",
+        "typeProperties",
+    }
+)
+
+
+def _collect_type_properties(data: dict[str, Any]) -> dict[str, Any] | None:
+    """Collect type-specific fields from a flattened activity dict.
+
+    When the ADF JSON omits the ``typeProperties`` wrapper, activity-specific
+    fields sit alongside common envelope keys.  This function returns the
+    non-common keys as a synthesised ``typeProperties`` dict.
+
+    Args:
+        data: Raw activity JSON dictionary.
+
+    Returns:
+        Synthesised type-properties dict, or ``None`` if no extra keys exist.
+    """
+    tp: dict[str, Any] = {k: v for k, v in data.items() if k not in _COMMON_ACTIVITY_KEYS}
+    return tp if tp else None
 
 
 def _parse_dataset_refs(raw: list[dict[str, Any]] | None) -> list[AdfDatasetReference] | None:

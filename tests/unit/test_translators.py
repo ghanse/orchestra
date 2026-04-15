@@ -621,7 +621,7 @@ class TestSwitchTranslator:
             translate_activities_fn=_mock_translate,
         )
         assert isinstance(result, SwitchActivity)
-        assert result.on_expression == "@item().load_type"
+        assert result.on_expression == "{{input.load_type}}"
         assert len(result.cases) == 2
         assert result.cases[0].value == "full"
         assert result.cases[1].value == "incremental"

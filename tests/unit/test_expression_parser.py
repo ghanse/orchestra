@@ -194,9 +194,8 @@ class TestUtcNow:
     def test_utcnow_no_format(self):
         r = resolve_expression("@utcNow()", _ctx())
         assert r is not None
-        assert r.kind == "notebook_code"
-        assert "isoformat" in r.value
-        assert "from datetime import datetime, timezone" in r.imports
+        assert r.kind == "dab_ref"
+        assert r.value == "{{job.start_time.iso_datetime}}"
 
     def test_utcnow_with_format(self):
         r = resolve_expression("@utcNow('yyyy-MM-dd')", _ctx())
@@ -830,9 +829,9 @@ class TestBackwardCompat:
         result = parse_expression_for_dab("@pipeline().RunId")
         assert result == "{{job.run_id}}"
 
-    def test_parse_expression_for_dab_returns_none_for_notebook_code(self):
+    def test_parse_expression_for_dab_returns_ref_for_utcnow(self):
         result = parse_expression_for_dab("@utcNow()")
-        assert result is None
+        assert result == "{{job.start_time.iso_datetime}}"
 
     def test_parse_expression_for_dab_returns_none_for_non_expression(self):
         result = parse_expression_for_dab("plain_string")

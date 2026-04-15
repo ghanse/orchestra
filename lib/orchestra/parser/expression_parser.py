@@ -82,12 +82,8 @@ def resolve_expression(
     m = _ITEM_FIELD_RE.match(expr)
     if m:
         field_name = m.group(1)
-        # item().field requires notebook code to parse the JSON item
-        return ExpressionResult(
-            kind="notebook_code",
-            value=f"__import__('json').loads(dbutils.widgets.get('item'))['{field_name}']",
-            imports=["import json"],
-        )
+        # item().field maps to the DAB dynamic value reference {{input.field}}
+        return ExpressionResult(kind="dab_ref", value="{{input." + field_name + "}}")
 
     # --- Pipeline parameters ---
     result = _resolve_pipeline_param(expr)
@@ -409,13 +405,17 @@ def _resolve_variable(
     *,
     variable_task_keys: dict[str, str] | None = None,
 ) -> ExpressionResult | None:
-    """Resolve ``variables('name')`` -> DAB ref."""
+    """Resolve ``variables('name')`` -> task value DAB ref."""
     m = _VARIABLE_RE.match(expr)
     if m is None:
         return None
     var_name = m.group(1)
 
-    # Look up setter task key: explicit mapping takes precedence
+    # Always resolve to the task value reference.  This preserves the
+    # explicit task dependency chain — downstream tasks must depend on the
+    # setter task.  Even when the variable was set to a DAB built-in like
+    # {{job.start_time.iso_datetime}}, the task value is the canonical
+    # source since the setter notebook may transform the value.
     vtk = variable_task_keys or {}
     setter_key = vtk.get(var_name) or context.get_variable_task_key(var_name) or var_name
     return ExpressionResult(kind="dab_ref", value="{{" + f"tasks.{setter_key}.values.{var_name}" + "}}")
@@ -427,19 +427,16 @@ def _resolve_utcnow(expr: str) -> ExpressionResult | None:
     if m is None:
         return None
     fmt = m.group(1)
-    imports = ["from datetime import datetime, timezone"]
     if fmt:
+        # Custom format needs runtime code — no DAB equivalent
         py_fmt = _convert_date_format(fmt)
         return ExpressionResult(
             kind="notebook_code",
             value=f"datetime.now(timezone.utc).strftime('{py_fmt}')",
-            imports=imports,
+            imports=["from datetime import datetime, timezone"],
         )
-    return ExpressionResult(
-        kind="notebook_code",
-        value="datetime.now(timezone.utc).isoformat()",
-        imports=imports,
-    )
+    # Bare utcNow() maps directly to the DAB built-in start time ref
+    return ExpressionResult(kind="dab_ref", value="{{job.start_time.iso_datetime}}")
 
 
 def _convert_date_format(adf_format: str) -> str:

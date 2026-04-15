@@ -3,6 +3,10 @@
 ForEach is a control-flow container that threads context through inner
 activity translation.  It returns a ``(Activity, TranslationContext)`` tuple
 so the engine can propagate any context changes from inner activities.
+
+When the ForEach body contains multiple activities, the bundler creates a
+separate inner job (``{task_key}_inner_tasks``) with the full task graph
+and uses ``for_each_task`` with ``run_job_task`` to call it.
 """
 
 from __future__ import annotations
@@ -24,6 +28,10 @@ def translate(
     translate_activities_fn: Any = None,
 ) -> tuple[Activity, TranslationContext]:
     """Translate a ForEach activity with recursive inner translation.
+
+    All inner activities are preserved in ``inner_activities`` so the
+    bundler can emit them as a proper Databricks task graph (either inline
+    for a single activity or as an inner job for multiple).
 
     Args:
         activity: The ADF activity AST node.
@@ -61,9 +69,8 @@ def translate(
         else default_batch
     )
 
-    # Translate inner activities
+    # Translate inner activities — preserve all of them
     inner_activities: list[Activity] = []
-    inner_context = context
     child_adf_activities = activity.activities or []
 
     if translate_activities_fn and child_adf_activities:
@@ -71,17 +78,14 @@ def translate(
             activity_cache=context.activity_cache,
             registry=context.registry,
             variable_cache=context.variable_cache,
+            variable_value_cache=context.variable_value_cache,
         )
-        inner_activities, inner_context = translate_activities_fn(child_adf_activities, child_context, definitions)
+        inner_activities, _ = translate_activities_fn(child_adf_activities, child_context, definitions)
 
     foreach_activity = ForEachActivity(
         **base_kwargs,
         items_expression=items_expression,
-        child_activity=inner_activities[0]
-        if len(inner_activities) == 1
-        else inner_activities[0]
-        if inner_activities
-        else Activity(name="noop", task_key="noop"),
+        inner_activities=inner_activities,
         concurrency=batch_count,
     )
 

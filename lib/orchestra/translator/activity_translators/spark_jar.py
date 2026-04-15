@@ -10,20 +10,24 @@ from orchestra.parser.expression_parser import resolve_expression, resolve_inter
 from orchestra.translator.activity_translators._resolve import resolve_field
 
 
-def _resolve_parameter(param: str, context: TranslationContext) -> str:
-    """Resolve a single ADF parameter string to a DAB value.
+def _resolve_parameter(param: Any, context: TranslationContext) -> str:
+    """Resolve a single ADF parameter to a DAB value string.
 
-    Handles both ``@expr`` style and ``@{expr}`` string interpolation.
+    Handles expression dicts, ``@expr`` style, and ``@{expr}`` interpolation.
 
     Args:
-        param: A parameter string that may contain ADF expressions.
+        param: A parameter string or ``{"type": "Expression", "value": "..."}`` dict.
         context: Translation context for variable resolution.
 
     Returns:
         Resolved parameter string.
     """
+    # Unwrap expression dicts
+    if isinstance(param, dict) and param.get("type") == "Expression":
+        return _resolve_parameter(param["value"], context)
+
     if not isinstance(param, str):
-        return param
+        return str(param)
 
     # Try @{...} interpolation first
     if "@{" in param:

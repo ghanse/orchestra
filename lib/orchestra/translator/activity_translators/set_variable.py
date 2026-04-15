@@ -66,7 +66,15 @@ def translate(
         notebook_imports=notebook_imports,
     )
 
-    # Register variable -> task_key mapping in context
-    new_context = context.with_variable(variable_name, base_kwargs["task_key"])
+    # Register variable -> task_key mapping in context.
+    # When the value is a DAB ref (e.g. {{job.start_time.iso_datetime}} from
+    # @utcNow()), store it so downstream @variables() calls can inline it
+    # instead of routing through the task value.
+    dab_ref_value = variable_value if value_kind == "dab_ref" else None
+    new_context = context.with_variable(
+        variable_name,
+        base_kwargs["task_key"],
+        dab_ref_value=dab_ref_value,
+    )
 
     return set_var_activity, new_context
