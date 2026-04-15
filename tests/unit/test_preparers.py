@@ -328,7 +328,7 @@ class TestForEachPreparer:
         activity = ForEachActivity(
             **_make_base("Loop", "loop"),
             items_expression="@output.value",
-            child_activity=inner,
+            inner_activities=[inner],
             concurrency=10,
         )
         prepared = prepare_activity(activity)

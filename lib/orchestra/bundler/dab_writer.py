@@ -64,7 +64,7 @@ class _SingleQuotedDumper(yaml.SafeDumper):
     """YAML dumper that single-quotes all string scalar values."""
 
 
-def _str_representer(dumper: yaml.Dumper, data: str) -> yaml.ScalarNode:
+def _str_representer(dumper: _SingleQuotedDumper, data: str) -> yaml.nodes.Node:
     """Force single-quoted style for all strings."""
     return dumper.represent_scalar("tag:yaml.org,2002:str", data, style="'")
 
