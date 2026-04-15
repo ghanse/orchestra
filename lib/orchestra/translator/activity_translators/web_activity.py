@@ -30,15 +30,15 @@ def translate(
     Returns:
         A :class:`WebActivity` IR node.
     """
-    tp = activity.type_properties or {}
+    type_properties = activity.type_properties or {}
 
-    url = resolve_field(tp.get("url", ""), context)
-    method = tp.get("method", "GET")
-    headers = resolve_dict_values(tp.get("headers"), context) or None
-    body = _resolve_body(tp.get("body"), context)
-    authentication = tp.get("authentication")
-    disable_cert_validation = tp.get("disableCertValidation", False)
-    http_request_timeout = tp.get("httpRequestTimeout")
+    url = resolve_field(type_properties.get("url", ""), context)
+    method = type_properties.get("method", "GET")
+    headers = resolve_dict_values(type_properties.get("headers"), context) or None
+    body = _resolve_body(type_properties.get("body"), context)
+    authentication = type_properties.get("authentication")
+    disable_cert_validation = type_properties.get("disableCertValidation", False)
+    http_request_timeout = type_properties.get("httpRequestTimeout")
 
     # Convert ADF timeout format to seconds if present
     timeout_seconds: int | None = None

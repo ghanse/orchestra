@@ -27,9 +27,78 @@ from typing import Any
 
 from orchestra.models.ir import ExpressionResult, TranslationContext
 
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
+_ITEM_RE = re.compile(r"item\(\s*\)$", re.IGNORECASE)
+
+_ITEM_FIELD_RE = re.compile(r"item\(\s*\)\.(\w+)", re.IGNORECASE)
+
+_ACTIVITY_OUTPUT_RE = re.compile(
+    r"""activity\(\s*'([^']+)'\s*\)\.output(?:\.(.+))?""",
+    re.IGNORECASE,
+)
+
+_PIPELINE_PARAM_RE = re.compile(
+    r"""pipeline\(\s*\)\.parameters\.(\w+)""",
+    re.IGNORECASE,
+)
+
+_PIPELINE_PROPERTY_RE = re.compile(
+    r"""pipeline\(\s*\)\.(\w+)""",
+    re.IGNORECASE,
+)
+
+_VARIABLE_RE = re.compile(
+    r"""variables\(\s*'([^']+)'\s*\)""",
+    re.IGNORECASE,
+)
+
+_CONCAT_RE = re.compile(
+    r"""concat\((.+)\)""",
+    re.IGNORECASE | re.DOTALL,
+)
+
+_UTCNOW_RE = re.compile(
+    r"""utcNow\(\s*(?:'([^']*)')?\s*\)""",
+    re.IGNORECASE,
+)
+
+_DATE_FORMAT_MAP: dict[str, str] = {
+    "yyyy": "%Y",
+    "yy": "%y",
+    "MM": "%m",
+    "dd": "%d",
+    "HH": "%H",
+    "hh": "%I",
+    "mm": "%M",
+    "ss": "%S",
+    "fff": "%f",
+    "tt": "%p",
+}
+
+_DAB_PIPELINE_PROPERTY_MAP: dict[str, str] = {
+    "RunId": "{{job.run_id}}",
+    "GroupId": "{{job.run_id}}",
+    "TriggerTime": "{{job.start_time.iso_datetime}}",
+    "Pipeline": "{{job.name}}",
+    "TriggerName": "{{job.trigger.type}}",
+    "DataFactory": "{{job.run_id}}",
+}
+
+_INTERPOLATION_RE = re.compile(r"@\{(.+?)\}")
+
+_FUNCTION_CALL_RE = re.compile(
+    r"([a-zA-Z_]\w*)\((.*)?\)$",
+    re.IGNORECASE | re.DOTALL,
+)
+
+_DATETIME_IMPORTS = ["from datetime import datetime, timezone, timedelta"]
+
+_TIME_UNIT_MAP: dict[str, str] = {
+    "Second": "seconds",
+    "Minute": "minutes",
+    "Hour": "hours",
+    "Day": "days",
+    "Week": "weeks",
+}
 
 
 def resolve_expression(
@@ -53,79 +122,61 @@ def resolve_expression(
         An :class:`ExpressionResult`, or ``None`` if the expression is too
         complex for deterministic translation.
     """
-    # Unwrap expression-type dicts
     if isinstance(value, dict):
         if value.get("type") == "Expression" and "value" in value:
             return resolve_expression(value["value"], context, variable_task_keys=variable_task_keys)
         return None
 
-    # Numeric and boolean literals
     if isinstance(value, bool):
         return ExpressionResult(kind="literal", value=str(value))
     if isinstance(value, (int, float)):
         return ExpressionResult(kind="literal", value=str(value))
 
-    # From here on, value must be a string
     if not isinstance(value, str):
         return None
 
-    # Non-expression strings are literal values
     if not value.startswith("@"):
         return ExpressionResult(kind="literal", value=value)
 
     expr = value[1:]  # strip leading @
 
-    # --- item() and item().field ---
     if _ITEM_RE.match(expr):
         return ExpressionResult(kind="dab_ref", value="{{input}}")
 
-    m = _ITEM_FIELD_RE.match(expr)
-    if m:
-        field_name = m.group(1)
-        # item().field maps to the DAB dynamic value reference {{input.field}}
+    match = _ITEM_FIELD_RE.match(expr)
+    if match:
+        field_name = match.group(1)
         return ExpressionResult(kind="dab_ref", value="{{input." + field_name + "}}")
 
-    # --- Pipeline parameters ---
     result = _resolve_pipeline_param(expr)
     if result is not None:
         return result
 
-    # --- Pipeline properties ---
     result = _resolve_pipeline_property(expr)
     if result is not None:
         return result
 
-    # --- Activity output references ---
     result = _resolve_activity_output(expr)
     if result is not None:
         return result
 
-    # --- Variables ---
     result = _resolve_variable(expr, context, variable_task_keys=variable_task_keys)
     if result is not None:
         return result
 
-    # --- utcNow / utcnow ---
     result = _resolve_utcnow(expr)
     if result is not None:
         return result
 
-    # --- Concat ---
     result = _resolve_concat(expr, context, variable_task_keys=variable_task_keys)
     if result is not None:
         return result
 
-    # --- Generic function dispatch (all 84 ADF functions) ---
     result = _resolve_function_call(expr, context, variable_task_keys=variable_task_keys)
     if result is not None:
         return result
 
-    # Unsupported expression
     return None
-
-
-# Matches @{...} interpolation tokens
-_INTERPOLATION_RE = re.compile(r"@\{(.+?)\}")
 
 
 def resolve_interpolated_string(
@@ -157,17 +208,15 @@ def resolve_interpolated_string(
     if not isinstance(value, str):
         return value
 
-    # Fast path: no interpolation tokens
     if "@{" not in value:
         return value
 
-    def _replace_match(m: re.Match[str]) -> str:
-        inner_expr = m.group(1)
+    def _replace_match(match: re.Match[str]) -> str:
+        inner_expr = match.group(1)
         result = resolve_expression("@" + inner_expr, context, variable_task_keys=variable_task_keys)
         if result is not None and result.kind in ("dab_ref", "literal"):
             return result.value
-        # Cannot resolve — leave token unchanged
-        return m.group(0)
+        return match.group(0)
 
     return _INTERPOLATION_RE.sub(_replace_match, value)
 
@@ -195,38 +244,36 @@ def resolve_interpolated_string_for_notebook(
     if not isinstance(value, str) or "@{" not in value:
         return value
 
-    def _replace_match(m: re.Match[str]) -> str:
-        inner_expr = m.group(1)
+    def _replace_match(match: re.Match[str]) -> str:
+        inner_expr = match.group(1)
         result = resolve_expression("@" + inner_expr, context, variable_task_keys=variable_task_keys)
         if result is None:
-            return m.group(0)
+            return match.group(0)
         if result.kind == "literal":
             return result.value
         if result.kind == "dab_ref":
-            # Convert DAB ref to Python expression for notebook f-strings
             ref = result.value
-            # {{job.parameters.X}} -> dbutils.widgets.get('X')
-            param_m = re.match(r"\{\{job\.parameters\.(\w+)\}\}", ref)
-            if param_m:
-                return "{dbutils.widgets.get('" + param_m.group(1) + "')}"
-            # {{tasks.X.values.Y}} -> dbutils.jobs.taskValues.get(taskKey='X', key='Y')
-            tv_m = re.match(r"\{\{tasks\.([^.]+)\.values\.(\w+)\}\}", ref)
-            if tv_m:
-                return "{dbutils.jobs.taskValues.get(taskKey='" + tv_m.group(1) + "', key='" + tv_m.group(2) + "')}"
-            # {{job.run_id}} -> spark.conf.get('spark.databricks.job.runId', '')
+            param_match = re.match(r"\{\{job\.parameters\.(\w+)\}\}", ref)
+            if param_match:
+                return "{dbutils.widgets.get('" + param_match.group(1) + "')}"
+            task_value_match = re.match(r"\{\{tasks\.([^.]+)\.values\.(\w+)\}\}", ref)
+            if task_value_match:
+                return (
+                    "{dbutils.jobs.taskValues.get(taskKey='"
+                    + task_value_match.group(1)
+                    + "', key='"
+                    + task_value_match.group(2)
+                    + "')}"
+                )
             if ref == "{{job.run_id}}":
                 return "{spark.conf.get('spark.databricks.job.runId', '')}"
-            # {{job.name}} -> spark.conf.get('spark.databricks.job.parentName', '')
             if ref == "{{job.name}}":
                 return "{spark.conf.get('spark.databricks.job.parentName', '')}"
-            # {{job.start_time.iso_datetime}}
             if ref == "{{job.start_time.iso_datetime}}":
                 return "{spark.conf.get('spark.databricks.job.triggerTime', '')}"
-            # {{input}} -> json.loads(dbutils.widgets.get('item'))
             if ref == "{{input}}":
                 return "{dbutils.widgets.get('item')}"
             return ref
-        # notebook_code — embed the Python expression directly
         return "{" + result.value + "}"
 
     return _INTERPOLATION_RE.sub(_replace_match, value)
@@ -272,102 +319,24 @@ def parse_expression_for_dab(
         return None
     if result.kind == "dab_ref":
         return result.value
-    # literals don't need DAB mapping; notebook_code must not be placed in params
     return None
-
-
-# ---------------------------------------------------------------------------
-# Compiled regexes
-# ---------------------------------------------------------------------------
-
-# Matches: item()
-_ITEM_RE = re.compile(r"item\(\s*\)$", re.IGNORECASE)
-
-# Matches: item().fieldName
-_ITEM_FIELD_RE = re.compile(r"item\(\s*\)\.(\w+)", re.IGNORECASE)
-
-# Matches: activity('ActivityName').output.firstRow.col  (and variants)
-_ACTIVITY_OUTPUT_RE = re.compile(
-    r"""activity\(\s*'([^']+)'\s*\)\.output(?:\.(.+))?""",
-    re.IGNORECASE,
-)
-
-# Matches: pipeline().parameters.ParamName
-_PIPELINE_PARAM_RE = re.compile(
-    r"""pipeline\(\s*\)\.parameters\.(\w+)""",
-    re.IGNORECASE,
-)
-
-# Matches: pipeline().RunId, pipeline().GroupId, pipeline().TriggerName, etc.
-_PIPELINE_PROPERTY_RE = re.compile(
-    r"""pipeline\(\s*\)\.(\w+)""",
-    re.IGNORECASE,
-)
-
-# Matches: variables('varName')
-_VARIABLE_RE = re.compile(
-    r"""variables\(\s*'([^']+)'\s*\)""",
-    re.IGNORECASE,
-)
-
-# Matches: concat(...)
-_CONCAT_RE = re.compile(
-    r"""concat\((.+)\)""",
-    re.IGNORECASE | re.DOTALL,
-)
-
-# Matches: utcNow(), utcNow('format')
-_UTCNOW_RE = re.compile(
-    r"""utcNow\(\s*(?:'([^']*)')?\s*\)""",
-    re.IGNORECASE,
-)
-
-# ADF .NET date format -> Python strftime mapping
-_DATE_FORMAT_MAP: dict[str, str] = {
-    "yyyy": "%Y",
-    "yy": "%y",
-    "MM": "%m",
-    "dd": "%d",
-    "HH": "%H",
-    "hh": "%I",
-    "mm": "%M",
-    "ss": "%S",
-    "fff": "%f",
-    "tt": "%p",
-}
-
-# Map well-known pipeline() properties to DAB dynamic value references
-_DAB_PIPELINE_PROPERTY_MAP: dict[str, str] = {
-    "RunId": "{{job.run_id}}",
-    "GroupId": "{{job.run_id}}",
-    "TriggerTime": "{{job.start_time.iso_datetime}}",
-    "Pipeline": "{{job.name}}",
-    "TriggerName": "{{job.trigger.type}}",
-    "DataFactory": "{{job.run_id}}",
-}
-
-
-# ---------------------------------------------------------------------------
-# Internal resolvers
-# ---------------------------------------------------------------------------
 
 
 def _resolve_pipeline_param(expr: str) -> ExpressionResult | None:
     """Resolve ``pipeline().parameters.X`` -> DAB ref."""
-    m = _PIPELINE_PARAM_RE.match(expr)
-    if m is None:
+    match = _PIPELINE_PARAM_RE.match(expr)
+    if match is None:
         return None
-    param_name = m.group(1)
+    param_name = match.group(1)
     return ExpressionResult(kind="dab_ref", value="{{" + f"job.parameters.{param_name}" + "}}")
 
 
 def _resolve_pipeline_property(expr: str) -> ExpressionResult | None:
     """Resolve ``pipeline().PropertyName`` -> DAB ref."""
-    m = _PIPELINE_PROPERTY_RE.match(expr)
-    if m is None:
+    match = _PIPELINE_PROPERTY_RE.match(expr)
+    if match is None:
         return None
-    prop = m.group(1)
-    # Skip 'parameters' — handled by _resolve_pipeline_param
+    prop = match.group(1)
     if prop == "parameters":
         return None
     dab_ref = _DAB_PIPELINE_PROPERTY_MAP.get(prop)
@@ -378,18 +347,16 @@ def _resolve_pipeline_property(expr: str) -> ExpressionResult | None:
 
 def _resolve_activity_output(expr: str) -> ExpressionResult | None:
     """Resolve ``activity('Name').output...`` -> DAB ref."""
-    m = _ACTIVITY_OUTPUT_RE.match(expr)
-    if m is None:
+    match = _ACTIVITY_OUTPUT_RE.match(expr)
+    if match is None:
         return None
-    activity_name = m.group(1)
-    # Sanitize to task_key
+    activity_name = match.group(1)
     task_key = re.sub(r"[^a-zA-Z0-9_-]", "_", activity_name)
     task_key = re.sub(r"_+", "_", task_key).strip("_") or "unnamed"
 
-    property_path = m.group(2) or ""
+    property_path = match.group(2) or ""
     if property_path:
         parts = property_path.split(".")
-        # Skip "firstRow" — it's a Lookup wrapper, the actual value key is the column
         field = parts[-1] if parts[-1] != "firstRow" else "result"
         if field == "value":
             field = "result"
@@ -406,36 +373,34 @@ def _resolve_variable(
     variable_task_keys: dict[str, str] | None = None,
 ) -> ExpressionResult | None:
     """Resolve ``variables('name')`` -> task value DAB ref."""
-    m = _VARIABLE_RE.match(expr)
-    if m is None:
+    match = _VARIABLE_RE.match(expr)
+    if match is None:
         return None
-    var_name = m.group(1)
+    var_name = match.group(1)
 
     # Always resolve to the task value reference.  This preserves the
     # explicit task dependency chain — downstream tasks must depend on the
     # setter task.  Even when the variable was set to a DAB built-in like
     # {{job.start_time.iso_datetime}}, the task value is the canonical
     # source since the setter notebook may transform the value.
-    vtk = variable_task_keys or {}
-    setter_key = vtk.get(var_name) or context.get_variable_task_key(var_name) or var_name
+    variable_task_keys_map = variable_task_keys or {}
+    setter_key = variable_task_keys_map.get(var_name) or context.get_variable_task_key(var_name) or var_name
     return ExpressionResult(kind="dab_ref", value="{{" + f"tasks.{setter_key}.values.{var_name}" + "}}")
 
 
 def _resolve_utcnow(expr: str) -> ExpressionResult | None:
     """Resolve ``utcNow()`` or ``utcNow('format')`` -> notebook_code."""
-    m = _UTCNOW_RE.match(expr)
-    if m is None:
+    match = _UTCNOW_RE.match(expr)
+    if match is None:
         return None
-    fmt = m.group(1)
-    if fmt:
-        # Custom format needs runtime code — no DAB equivalent
-        py_fmt = _convert_date_format(fmt)
+    format_string = match.group(1)
+    if format_string:
+        python_format = _convert_date_format(format_string)
         return ExpressionResult(
             kind="notebook_code",
-            value=f"datetime.now(timezone.utc).strftime('{py_fmt}')",
+            value=f"datetime.now(timezone.utc).strftime('{python_format}')",
             imports=["from datetime import datetime, timezone"],
         )
-    # Bare utcNow() maps directly to the DAB built-in start time ref
     return ExpressionResult(kind="dab_ref", value="{{job.start_time.iso_datetime}}")
 
 
@@ -449,9 +414,8 @@ def _convert_date_format(adf_format: str) -> str:
         Python strftime format string (e.g., ``"%Y-%m-%d"``).
     """
     result = adf_format
-    # Replace longest tokens first to avoid partial matches
-    for adf_token, py_token in sorted(_DATE_FORMAT_MAP.items(), key=lambda x: -len(x[0])):
-        result = result.replace(adf_token, py_token)
+    for adf_token, python_token in sorted(_DATE_FORMAT_MAP.items(), key=lambda x: -len(x[0])):
+        result = result.replace(adf_token, python_token)
     return result
 
 
@@ -466,11 +430,11 @@ def _resolve_concat(
     Concat always produces notebook_code because its arguments may include
     DAB refs that need to be read from widget parameters at runtime.
     """
-    m = _CONCAT_RE.match(expr)
-    if m is None:
+    match = _CONCAT_RE.match(expr)
+    if match is None:
         return None
 
-    inner = m.group(1).strip()
+    inner = match.group(1).strip()
     parts: list[str] = _split_concat_args(inner)
     if not parts:
         return None
@@ -483,19 +447,14 @@ def _resolve_concat(
         if not part:
             continue
         if part.startswith("'") and part.endswith("'"):
-            # String literal inside concat
             code_parts.append(repr(part[1:-1]))
         else:
-            # Try to resolve as a sub-expression
             sub_result = resolve_expression("@" + part, context, variable_task_keys=variable_task_keys)
             if sub_result is None:
                 return None
             if sub_result.kind == "literal":
                 code_parts.append(repr(sub_result.value))
             elif sub_result.kind == "dab_ref":
-                # DAB refs will be passed as widget parameters at runtime;
-                # generate code that reads the value from dbutils.widgets
-                # The actual param name is derived from the ref
                 code_parts.append(_dab_ref_to_widget_code(sub_result.value))
             elif sub_result.kind == "notebook_code":
                 code_parts.append(f"str({sub_result.value})")
@@ -504,7 +463,6 @@ def _resolve_concat(
     if not code_parts:
         return None
 
-    # Build Python concatenation expression
     value = " + ".join(code_parts)
     return ExpressionResult(kind="notebook_code", value=value, imports=list(dict.fromkeys(all_imports)))
 
@@ -515,10 +473,6 @@ def _dab_ref_to_widget_code(dab_ref: str) -> str:
     The preparer will ensure the DAB ref is passed as a named parameter,
     so the notebook can read it via ``dbutils.widgets.get(...)``.
     """
-    # Extract a reasonable param name from the DAB ref
-    # {{tasks.SetRunDate.values.runDate}} -> "runDate"
-    # {{job.parameters.X}} -> "X"
-    # {{job.run_id}} -> "run_id"
     inner = dab_ref.strip("{}")
     param_name = inner.split(".")[-1]
     return f"dbutils.widgets.get('{param_name}')"
@@ -550,39 +504,28 @@ def _split_args(inner: str) -> list[str]:
     current: list[str] = []
     in_quote = False
 
-    for ch in inner:
-        if ch == "'" and depth == 0:
+    for char in inner:
+        if char == "'" and depth == 0:
             in_quote = not in_quote
-            current.append(ch)
+            current.append(char)
         elif in_quote:
-            current.append(ch)
-        elif ch == "(":
+            current.append(char)
+        elif char == "(":
             depth += 1
-            current.append(ch)
-        elif ch == ")":
+            current.append(char)
+        elif char == ")":
             depth -= 1
-            current.append(ch)
-        elif ch == "," and depth == 0:
+            current.append(char)
+        elif char == "," and depth == 0:
             parts.append("".join(current).strip())
             current = []
         else:
-            current.append(ch)
+            current.append(char)
 
     if current:
         parts.append("".join(current).strip())
 
     return parts
-
-
-# ---------------------------------------------------------------------------
-# Generic function call resolver
-# ---------------------------------------------------------------------------
-
-# Matches: functionName(...)
-_FUNCTION_CALL_RE = re.compile(
-    r"([a-zA-Z_]\w*)\((.*)?\)$",
-    re.IGNORECASE | re.DOTALL,
-)
 
 
 def _resolve_function_call(
@@ -596,62 +539,54 @@ def _resolve_function_call(
     Matches ``functionName(args...)``, recursively resolves each argument,
     and dispatches to the registered handler.
     """
-    m = _FUNCTION_CALL_RE.match(expr)
-    if m is None:
+    match = _FUNCTION_CALL_RE.match(expr)
+    if match is None:
         return None
 
-    func_name = m.group(1)
-    inner = (m.group(2) or "").strip()
+    func_name = match.group(1)
+    inner = (match.group(2) or "").strip()
 
     handler = _FUNCTION_HANDLERS.get(func_name)
     if handler is None:
-        # Also try case-insensitive lookup
         handler = _FUNCTION_HANDLERS_CI.get(func_name.lower())
     if handler is None:
         return None
 
-    # Parse arguments
     if not inner:
         raw_args: list[str] = []
     else:
         raw_args = _split_args(inner)
 
-    # Resolve each argument
     resolved_args: list[ExpressionResult] = []
     for raw_arg in raw_args:
         raw_arg = raw_arg.strip()
         if not raw_arg:
             continue
 
-        # String literal (single or double quoted)
         if (raw_arg.startswith("'") and raw_arg.endswith("'")) or (raw_arg.startswith('"') and raw_arg.endswith('"')):
             resolved_args.append(ExpressionResult(kind="literal", value=raw_arg[1:-1]))
-        # Numeric literal
         elif _is_numeric(raw_arg):
             resolved_args.append(ExpressionResult(kind="literal", value=raw_arg))
-        # Boolean literal
         elif raw_arg.lower() in ("true", "false"):
             resolved_args.append(
                 ExpressionResult(kind="literal", value="True" if raw_arg.lower() == "true" else "False")
             )
-        # Null literal
         elif raw_arg.lower() == "null":
             resolved_args.append(ExpressionResult(kind="literal", value="None"))
         else:
-            # Try to resolve as a sub-expression (add @ prefix if needed)
             sub_expr = raw_arg if raw_arg.startswith("@") else "@" + raw_arg
             sub_result = resolve_expression(sub_expr, context, variable_task_keys=variable_task_keys)
             if sub_result is None:
-                return None  # If any argument is unresolvable, bail out
+                return None
             resolved_args.append(sub_result)
 
     return handler(resolved_args)
 
 
-def _is_numeric(s: str) -> bool:
+def _is_numeric(text: str) -> bool:
     """Check if a string is a numeric literal."""
     try:
-        float(s)
+        float(text)
         return True
     except ValueError:
         return False
@@ -660,7 +595,6 @@ def _is_numeric(s: str) -> bool:
 def _arg_to_code(arg: ExpressionResult) -> str:
     """Convert a resolved argument to a Python code snippet."""
     if arg.kind == "literal":
-        # Check if it's a Python keyword/value that should not be quoted
         if arg.value in ("True", "False", "None") or _is_numeric(arg.value):
             return arg.value
         return repr(arg.value)
@@ -677,11 +611,6 @@ def _collect_imports(*args: ExpressionResult) -> list[str]:
     for arg in args:
         imports.extend(arg.imports)
     return list(dict.fromkeys(imports))
-
-
-# ---------------------------------------------------------------------------
-# String function handlers
-# ---------------------------------------------------------------------------
 
 
 def _handle_concat(args: list[ExpressionResult]) -> ExpressionResult | None:
@@ -719,7 +648,6 @@ def _handle_guid(args: list[ExpressionResult]) -> ExpressionResult | None:
             kind="notebook_code",
             value="str(__import__('uuid').uuid4()).replace('-', '')",
         )
-    # Default: no format spec
     return ExpressionResult(
         kind="notebook_code",
         value="str(__import__('uuid').uuid4())",
@@ -785,12 +713,12 @@ def _handle_substring(args: list[ExpressionResult]) -> ExpressionResult | None:
     """substring(text, start, length) -> str(text)[int(start):int(start)+int(length)]"""
     if len(args) != 3:
         return None
-    s = _arg_to_code(args[0])
+    text = _arg_to_code(args[0])
     start = _arg_to_code(args[1])
     length = _arg_to_code(args[2])
     return ExpressionResult(
         kind="notebook_code",
-        value=f"str({s})[int({start}):int({start})+int({length})]",
+        value=f"str({text})[int({start}):int({start})+int({length})]",
         imports=_collect_imports(*args),
     )
 
@@ -826,11 +754,6 @@ def _handle_trim(args: list[ExpressionResult]) -> ExpressionResult | None:
         value=f"str({_arg_to_code(args[0])}).strip()",
         imports=_collect_imports(*args),
     )
-
-
-# ---------------------------------------------------------------------------
-# Collection function handlers
-# ---------------------------------------------------------------------------
 
 
 def _handle_contains(args: list[ExpressionResult]) -> ExpressionResult | None:
@@ -945,11 +868,6 @@ def _handle_union(args: list[ExpressionResult]) -> ExpressionResult | None:
     )
 
 
-# ---------------------------------------------------------------------------
-# Logical function handlers
-# ---------------------------------------------------------------------------
-
-
 def _handle_and(args: list[ExpressionResult]) -> ExpressionResult | None:
     """and(a, b) -> (a and b)"""
     if len(args) != 2:
@@ -1047,11 +965,6 @@ def _handle_or(args: list[ExpressionResult]) -> ExpressionResult | None:
         value=f"({_arg_to_code(args[0])} or {_arg_to_code(args[1])})",
         imports=_collect_imports(*args),
     )
-
-
-# ---------------------------------------------------------------------------
-# Conversion function handlers
-# ---------------------------------------------------------------------------
 
 
 def _handle_array(args: list[ExpressionResult]) -> ExpressionResult | None:
@@ -1213,11 +1126,6 @@ def _handle_string(args: list[ExpressionResult]) -> ExpressionResult | None:
     )
 
 
-# ---------------------------------------------------------------------------
-# Math function handlers
-# ---------------------------------------------------------------------------
-
-
 def _handle_add(args: list[ExpressionResult]) -> ExpressionResult | None:
     """add(a, b) -> (a + b)"""
     if len(args) != 2:
@@ -1321,32 +1229,16 @@ def _handle_sub(args: list[ExpressionResult]) -> ExpressionResult | None:
     )
 
 
-# ---------------------------------------------------------------------------
-# Date/time function handlers
-# ---------------------------------------------------------------------------
-
-_DATETIME_IMPORTS = ["from datetime import datetime, timezone, timedelta"]
-
-# ADF time unit to Python timedelta keyword
-_TIME_UNIT_MAP: dict[str, str] = {
-    "Second": "seconds",
-    "Minute": "minutes",
-    "Hour": "hours",
-    "Day": "days",
-    "Week": "weeks",
-}
-
-
 def _handle_add_days(args: list[ExpressionResult]) -> ExpressionResult | None:
     """addDays(ts, days, fmt?) -> (datetime.fromisoformat(ts) + timedelta(days=days)).strftime(fmt)"""
     if len(args) < 2 or len(args) > 3:
         return None
-    ts = _arg_to_code(args[0])
+    timestamp = _arg_to_code(args[0])
     days = _arg_to_code(args[1])
-    fmt = _get_format_arg(args, 2)
+    format_string = _get_format_arg(args, 2)
     return ExpressionResult(
         kind="notebook_code",
-        value=f"(datetime.fromisoformat({ts}) + timedelta(days={days})).strftime({fmt})",
+        value=f"(datetime.fromisoformat({timestamp}) + timedelta(days={days})).strftime({format_string})",
         imports=_DATETIME_IMPORTS + _collect_imports(*args),
     )
 
@@ -1355,12 +1247,12 @@ def _handle_add_hours(args: list[ExpressionResult]) -> ExpressionResult | None:
     """addHours(ts, hours, fmt?) -> (datetime.fromisoformat(ts) + timedelta(hours=hours)).strftime(fmt)"""
     if len(args) < 2 or len(args) > 3:
         return None
-    ts = _arg_to_code(args[0])
+    timestamp = _arg_to_code(args[0])
     hours = _arg_to_code(args[1])
-    fmt = _get_format_arg(args, 2)
+    format_string = _get_format_arg(args, 2)
     return ExpressionResult(
         kind="notebook_code",
-        value=f"(datetime.fromisoformat({ts}) + timedelta(hours={hours})).strftime({fmt})",
+        value=f"(datetime.fromisoformat({timestamp}) + timedelta(hours={hours})).strftime({format_string})",
         imports=_DATETIME_IMPORTS + _collect_imports(*args),
     )
 
@@ -1369,12 +1261,12 @@ def _handle_add_minutes(args: list[ExpressionResult]) -> ExpressionResult | None
     """addMinutes(ts, minutes, fmt?)"""
     if len(args) < 2 or len(args) > 3:
         return None
-    ts = _arg_to_code(args[0])
+    timestamp = _arg_to_code(args[0])
     minutes = _arg_to_code(args[1])
-    fmt = _get_format_arg(args, 2)
+    format_string = _get_format_arg(args, 2)
     return ExpressionResult(
         kind="notebook_code",
-        value=f"(datetime.fromisoformat({ts}) + timedelta(minutes={minutes})).strftime({fmt})",
+        value=f"(datetime.fromisoformat({timestamp}) + timedelta(minutes={minutes})).strftime({format_string})",
         imports=_DATETIME_IMPORTS + _collect_imports(*args),
     )
 
@@ -1383,12 +1275,12 @@ def _handle_add_seconds(args: list[ExpressionResult]) -> ExpressionResult | None
     """addSeconds(ts, seconds, fmt?)"""
     if len(args) < 2 or len(args) > 3:
         return None
-    ts = _arg_to_code(args[0])
+    timestamp = _arg_to_code(args[0])
     seconds = _arg_to_code(args[1])
-    fmt = _get_format_arg(args, 2)
+    format_string = _get_format_arg(args, 2)
     return ExpressionResult(
         kind="notebook_code",
-        value=f"(datetime.fromisoformat({ts}) + timedelta(seconds={seconds})).strftime({fmt})",
+        value=f"(datetime.fromisoformat({timestamp}) + timedelta(seconds={seconds})).strftime({format_string})",
         imports=_DATETIME_IMPORTS + _collect_imports(*args),
     )
 
@@ -1397,19 +1289,21 @@ def _handle_add_to_time(args: list[ExpressionResult]) -> ExpressionResult | None
     """addToTime(ts, interval, unit, fmt?) -> datetime + timedelta."""
     if len(args) < 3 or len(args) > 4:
         return None
-    ts = _arg_to_code(args[0])
+    timestamp = _arg_to_code(args[0])
     interval = _arg_to_code(args[1])
-    # unit is a literal string like 'Day', 'Hour', etc.
     unit_str = args[2].value if args[2].kind == "literal" else None
     if unit_str is None:
         return None
-    td_kwarg = _TIME_UNIT_MAP.get(unit_str)
-    if td_kwarg is None:
+    timedelta_keyword = _TIME_UNIT_MAP.get(unit_str)
+    if timedelta_keyword is None:
         return None
-    fmt = _get_format_arg(args, 3)
+    format_string = _get_format_arg(args, 3)
     return ExpressionResult(
         kind="notebook_code",
-        value=f"(datetime.fromisoformat({ts}) + timedelta({td_kwarg}={interval})).strftime({fmt})",
+        value=(
+            f"(datetime.fromisoformat({timestamp})"
+            f" + timedelta({timedelta_keyword}={interval})).strftime({format_string})"
+        ),
         imports=_DATETIME_IMPORTS + _collect_imports(*args),
     )
 
@@ -1451,17 +1345,17 @@ def _handle_format_date_time(args: list[ExpressionResult]) -> ExpressionResult |
     """formatDateTime(ts, fmt?) -> datetime.fromisoformat(ts).strftime(converted_fmt)"""
     if len(args) < 1 or len(args) > 2:
         return None
-    ts = _arg_to_code(args[0])
+    timestamp = _arg_to_code(args[0])
     if len(args) == 2 and args[1].kind == "literal":
-        py_fmt = _convert_date_format(args[1].value)
+        python_format = _convert_date_format(args[1].value)
         return ExpressionResult(
             kind="notebook_code",
-            value=f"datetime.fromisoformat({ts}).strftime('{py_fmt}')",
+            value=f"datetime.fromisoformat({timestamp}).strftime('{python_format}')",
             imports=_DATETIME_IMPORTS + _collect_imports(*args),
         )
     return ExpressionResult(
         kind="notebook_code",
-        value=f"datetime.fromisoformat({ts}).isoformat()",
+        value=f"datetime.fromisoformat({timestamp}).isoformat()",
         imports=_DATETIME_IMPORTS + _collect_imports(*args),
     )
 
@@ -1474,13 +1368,13 @@ def _handle_get_future_time(args: list[ExpressionResult]) -> ExpressionResult | 
     unit_str = args[1].value if args[1].kind == "literal" else None
     if unit_str is None:
         return None
-    td_kwarg = _TIME_UNIT_MAP.get(unit_str)
-    if td_kwarg is None:
+    timedelta_keyword = _TIME_UNIT_MAP.get(unit_str)
+    if timedelta_keyword is None:
         return None
-    fmt = _get_format_arg(args, 2)
+    format_string = _get_format_arg(args, 2)
     return ExpressionResult(
         kind="notebook_code",
-        value=f"(datetime.now(timezone.utc) + timedelta({td_kwarg}={interval})).strftime({fmt})",
+        value=f"(datetime.now(timezone.utc) + timedelta({timedelta_keyword}={interval})).strftime({format_string})",
         imports=_DATETIME_IMPORTS + _collect_imports(*args),
     )
 
@@ -1493,13 +1387,13 @@ def _handle_get_past_time(args: list[ExpressionResult]) -> ExpressionResult | No
     unit_str = args[1].value if args[1].kind == "literal" else None
     if unit_str is None:
         return None
-    td_kwarg = _TIME_UNIT_MAP.get(unit_str)
-    if td_kwarg is None:
+    timedelta_keyword = _TIME_UNIT_MAP.get(unit_str)
+    if timedelta_keyword is None:
         return None
-    fmt = _get_format_arg(args, 2)
+    format_string = _get_format_arg(args, 2)
     return ExpressionResult(
         kind="notebook_code",
-        value=f"(datetime.now(timezone.utc) - timedelta({td_kwarg}={interval})).strftime({fmt})",
+        value=f"(datetime.now(timezone.utc) - timedelta({timedelta_keyword}={interval})).strftime({format_string})",
         imports=_DATETIME_IMPORTS + _collect_imports(*args),
     )
 
@@ -1508,11 +1402,15 @@ def _handle_start_of_day(args: list[ExpressionResult]) -> ExpressionResult | Non
     """startOfDay(ts, fmt?) -> datetime.fromisoformat(ts).replace(hour=0,...).strftime(fmt)"""
     if len(args) < 1 or len(args) > 2:
         return None
-    ts = _arg_to_code(args[0])
-    fmt = _get_format_arg(args, 1)
+    timestamp = _arg_to_code(args[0])
+    format_string = _get_format_arg(args, 1)
     return ExpressionResult(
         kind="notebook_code",
-        value=(f"datetime.fromisoformat({ts}).replace(hour=0, minute=0, second=0, microsecond=0).strftime({fmt})"),
+        value=(
+            f"datetime.fromisoformat({timestamp})"
+            f".replace(hour=0, minute=0, second=0, microsecond=0)"
+            f".strftime({format_string})"
+        ),
         imports=_DATETIME_IMPORTS + _collect_imports(*args),
     )
 
@@ -1521,11 +1419,13 @@ def _handle_start_of_hour(args: list[ExpressionResult]) -> ExpressionResult | No
     """startOfHour(ts, fmt?) -> datetime.fromisoformat(ts).replace(minute=0,...).strftime(fmt)"""
     if len(args) < 1 or len(args) > 2:
         return None
-    ts = _arg_to_code(args[0])
-    fmt = _get_format_arg(args, 1)
+    timestamp = _arg_to_code(args[0])
+    format_string = _get_format_arg(args, 1)
     return ExpressionResult(
         kind="notebook_code",
-        value=(f"datetime.fromisoformat({ts}).replace(minute=0, second=0, microsecond=0).strftime({fmt})"),
+        value=(
+            f"datetime.fromisoformat({timestamp}).replace(minute=0, second=0, microsecond=0).strftime({format_string})"
+        ),
         imports=_DATETIME_IMPORTS + _collect_imports(*args),
     )
 
@@ -1534,12 +1434,14 @@ def _handle_start_of_month(args: list[ExpressionResult]) -> ExpressionResult | N
     """startOfMonth(ts, fmt?) -> datetime.fromisoformat(ts).replace(day=1,...).strftime(fmt)"""
     if len(args) < 1 or len(args) > 2:
         return None
-    ts = _arg_to_code(args[0])
-    fmt = _get_format_arg(args, 1)
+    timestamp = _arg_to_code(args[0])
+    format_string = _get_format_arg(args, 1)
     return ExpressionResult(
         kind="notebook_code",
         value=(
-            f"datetime.fromisoformat({ts}).replace(day=1, hour=0, minute=0, second=0, microsecond=0).strftime({fmt})"
+            f"datetime.fromisoformat({timestamp})"
+            f".replace(day=1, hour=0, minute=0, second=0, microsecond=0)"
+            f".strftime({format_string})"
         ),
         imports=_DATETIME_IMPORTS + _collect_imports(*args),
     )
@@ -1549,18 +1451,21 @@ def _handle_subtract_from_time(args: list[ExpressionResult]) -> ExpressionResult
     """subtractFromTime(ts, interval, unit, fmt?) -> datetime - timedelta."""
     if len(args) < 3 or len(args) > 4:
         return None
-    ts = _arg_to_code(args[0])
+    timestamp = _arg_to_code(args[0])
     interval = _arg_to_code(args[1])
     unit_str = args[2].value if args[2].kind == "literal" else None
     if unit_str is None:
         return None
-    td_kwarg = _TIME_UNIT_MAP.get(unit_str)
-    if td_kwarg is None:
+    timedelta_keyword = _TIME_UNIT_MAP.get(unit_str)
+    if timedelta_keyword is None:
         return None
-    fmt = _get_format_arg(args, 3)
+    format_string = _get_format_arg(args, 3)
     return ExpressionResult(
         kind="notebook_code",
-        value=f"(datetime.fromisoformat({ts}) - timedelta({td_kwarg}={interval})).strftime({fmt})",
+        value=(
+            f"(datetime.fromisoformat({timestamp})"
+            f" - timedelta({timedelta_keyword}={interval})).strftime({format_string})"
+        ),
         imports=_DATETIME_IMPORTS + _collect_imports(*args),
     )
 
@@ -1571,17 +1476,12 @@ def _get_format_arg(args: list[ExpressionResult], idx: int) -> str:
     Returns a Python string expression suitable for embedding in generated code.
     """
     if idx < len(args) and args[idx].kind == "literal" and args[idx].value:
-        py_fmt = _convert_date_format(args[idx].value)
-        return repr(py_fmt)
+        python_format = _convert_date_format(args[idx].value)
+        return repr(python_format)
     return "'%Y-%m-%dT%H:%M:%SZ'"
 
 
-# ---------------------------------------------------------------------------
-# Function dispatch table — maps ADF function names to handlers
-# ---------------------------------------------------------------------------
-
 _FUNCTION_HANDLERS: dict[str, Callable[[list[ExpressionResult]], ExpressionResult | None]] = {
-    # --- String functions (12) ---
     "concat": _handle_concat,
     "endsWith": _handle_ends_with,
     "guid": _handle_guid,
@@ -1594,7 +1494,6 @@ _FUNCTION_HANDLERS: dict[str, Callable[[list[ExpressionResult]], ExpressionResul
     "toLower": _handle_to_lower,
     "toUpper": _handle_to_upper,
     "trim": _handle_trim,
-    # --- Collection functions (10) ---
     "contains": _handle_contains,
     "empty": _handle_empty,
     "first": _handle_first,
@@ -1605,7 +1504,6 @@ _FUNCTION_HANDLERS: dict[str, Callable[[list[ExpressionResult]], ExpressionResul
     "skip": _handle_skip,
     "take": _handle_take,
     "union": _handle_union,
-    # --- Logical functions (9) ---
     "and": _handle_and,
     "equals": _handle_equals,
     "greater": _handle_greater,
@@ -1615,7 +1513,6 @@ _FUNCTION_HANDLERS: dict[str, Callable[[list[ExpressionResult]], ExpressionResul
     "lessOrEquals": _handle_less_or_equals,
     "not": _handle_not,
     "or": _handle_or,
-    # --- Conversion functions (24) ---
     "array": _handle_array,
     "base64": _handle_base64,
     "base64ToBinary": _handle_base64_to_binary,
@@ -1627,7 +1524,7 @@ _FUNCTION_HANDLERS: dict[str, Callable[[list[ExpressionResult]], ExpressionResul
     "dataUri": _handle_agentic,
     "dataUriToBinary": _handle_agentic,
     "dataUriToString": _handle_agentic,
-    "decodeBase64": _handle_base64_to_string,  # alias
+    "decodeBase64": _handle_base64_to_string,
     "decodeDataUri": _handle_agentic,
     "decodeUriComponent": _handle_decode_uri_component,
     "encodeUriComponent": _handle_encode_uri_component,
@@ -1635,12 +1532,11 @@ _FUNCTION_HANDLERS: dict[str, Callable[[list[ExpressionResult]], ExpressionResul
     "int": _handle_int,
     "json": _handle_json,
     "string": _handle_string,
-    "uriComponent": _handle_encode_uri_component,  # alias
+    "uriComponent": _handle_encode_uri_component,
     "uriComponentToBinary": _handle_agentic,
-    "uriComponentToString": _handle_decode_uri_component,  # alias
+    "uriComponentToString": _handle_decode_uri_component,
     "xml": _handle_agentic,
     "xpath": _handle_agentic,
-    # --- Math functions (9) ---
     "add": _handle_add,
     "div": _handle_div,
     "max": _handle_max,
@@ -1650,7 +1546,6 @@ _FUNCTION_HANDLERS: dict[str, Callable[[list[ExpressionResult]], ExpressionResul
     "rand": _handle_rand,
     "range": _handle_range,
     "sub": _handle_sub,
-    # --- Date/time functions (20) ---
     "addDays": _handle_add_days,
     "addHours": _handle_add_hours,
     "addMinutes": _handle_add_minutes,
@@ -1670,11 +1565,10 @@ _FUNCTION_HANDLERS: dict[str, Callable[[list[ExpressionResult]], ExpressionResul
     "startOfMonth": _handle_start_of_month,
     "subtractFromTime": _handle_subtract_from_time,
     "ticks": _handle_agentic,
-    # NOTE: utcNow is intentionally absent — handled by dedicated _resolve_utcnow
-    # upstream in resolve_expression() before the generic dispatch is reached.
+    # utcNow is intentionally absent -- handled by _resolve_utcnow upstream
+    # in resolve_expression() before the generic dispatch is reached.
 }
 
-# Build case-insensitive lookup (excluding None entries)
 _FUNCTION_HANDLERS_CI: dict[str, Callable[[list[ExpressionResult]], ExpressionResult | None]] = {
     k.lower(): v for k, v in _FUNCTION_HANDLERS.items() if v is not None
 }

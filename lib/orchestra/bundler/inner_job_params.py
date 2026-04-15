@@ -18,11 +18,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-# ---------------------------------------------------------------------------
-# Regex patterns for ADF expression references
-# ---------------------------------------------------------------------------
-
-# The leading @ is optional — ADF only puts it on the outermost expression;
+# The leading @ is optional -- ADF only puts it on the outermost expression;
 # inner references like concat('x', pipeline().parameters.Y) are bare.
 _ITEM_BARE_RE = re.compile(r"@?item\(\s*\)", re.IGNORECASE)
 _ITEM_FIELD_RE = re.compile(r"@?item\(\s*\)\.(\w+)", re.IGNORECASE)
@@ -36,16 +32,13 @@ _ACTIVITY_OUTPUT_RE = re.compile(
     re.IGNORECASE,
 )
 _VARIABLES_RE = re.compile(r"@?variables\(\s*'([^']+)'\s*\)", re.IGNORECASE)
-# Already-resolved DAB refs
 _DAB_JOB_PARAM_RE = re.compile(r"\{\{job\.parameters\.(\w+)\}\}")
-# Already-resolved {{input.<field>}} refs (from translate-time resolution)
 _DAB_INPUT_FIELD_RE = re.compile(r"\{\{input\.(\w+)\}\}")
 
-# Simple @concat('literal', ref, 'literal', ...) — used for resolution
 _CONCAT_RE = re.compile(r"@?concat\((.+)\)$", re.IGNORECASE | re.DOTALL)
 
 # ADF type-conversion wrappers: @string(expr), @int(expr), @bool(expr), etc.
-# These are no-ops in DAB string parameter context — strip them.
+# These are no-ops in DAB string parameter context -- strip them.
 _TYPE_CAST_RE = re.compile(
     r"^@?(string|int|float|bool|decimal|json|xml|base64|binary|uriComponent|"
     r"ticks|dataUri|dataUriToBinary|dataUriToString|uriComponentToString)\((.+)\)$",
@@ -70,7 +63,7 @@ def collect_inner_job_params(
         Tuple of:
         - ``parameters``: list of ``{"name": ..., "default": ...}`` dicts for
           the inner job definition.
-        - ``job_parameters``: dict mapping param name → parent expression,
+        - ``job_parameters``: dict mapping param name -> parent expression,
           suitable for the ``run_job_task.job_parameters`` block.  ``item``
           always maps to ``"{{input}}"``, pipeline/variable params map to
           ``"{{job.parameters.<name>}}"``.
@@ -80,11 +73,9 @@ def collect_inner_job_params(
 
     _scan_tasks(tasks, param_names, item_field_names=item_field_names)
 
-    # Also scan raw IR dicts for references in fields consumed during conversion
     if raw_ir_tasks:
         _scan_ir_tasks(raw_ir_tasks, param_names, item_field_names=item_field_names)
 
-    # Build parameter declarations
     parameters: list[dict[str, Any]] = []
     for name in sorted(param_names):
         param: dict[str, Any] = {"name": name}
@@ -92,10 +83,9 @@ def collect_inner_job_params(
             param["default"] = ""
         parameters.append(param)
 
-    # Build pass-through map from parent job.
-    # - "item" (bare @item()) → {{input}}  (the full iteration value)
-    # - item field names (@item().field) → {{input.<field>}}
-    # - pipeline params / variables → {{job.parameters.<name>}}
+    # "item" (bare @item()) maps to {{input}} (the full iteration value);
+    # item field names (@item().field) map to {{input.<field>}};
+    # pipeline params / variables map to {{job.parameters.<name>}}.
     job_parameters: dict[str, str] = {}
     for name in sorted(param_names):
         if name == "item":
@@ -106,6 +96,41 @@ def collect_inner_job_params(
             job_parameters[name] = "{{job.parameters." + name + "}}"
 
     return parameters, job_parameters
+
+
+def normalize_inner_task_params(tasks: list[dict[str, Any]]) -> None:
+    """Normalise ADF expressions in task dicts for an inner job context.
+
+    Rewrites raw ADF expression dicts in ``base_parameters`` and
+    ``condition_task`` operands to ``{{job.parameters.*}}`` dynamic value
+    references.  Resolves simple ``@concat(...)`` expressions to string
+    concatenation.
+
+    Mutates the task dicts in place.
+
+    Args:
+        tasks: The inner job's task dicts.
+    """
+    for task in tasks:
+        notebook_task = task.get("notebook_task")
+        if notebook_task and "base_parameters" in notebook_task:
+            notebook_task["base_parameters"] = {
+                key: _normalize_value(value) for key, value in notebook_task["base_parameters"].items()
+            }
+
+        condition_task = task.get("condition_task")
+        if condition_task:
+            if "left" in condition_task:
+                condition_task["left"] = _normalize_value(condition_task["left"])
+            if "right" in condition_task:
+                condition_task["right"] = _normalize_value(condition_task["right"])
+            normalize_inner_task_params(condition_task.get("if_true", []))
+            normalize_inner_task_params(condition_task.get("if_false", []))
+
+        for_each_task = task.get("for_each_task", {})
+        body = for_each_task.get("task")
+        if body:
+            normalize_inner_task_params([body])
 
 
 def _scan_tasks(
@@ -125,28 +150,24 @@ def _scan_tasks(
         item_field_names: Optional accumulator for field names from item().field refs.
     """
     for task in tasks:
-        # Scan notebook_task.base_parameters
-        nb_task = task.get("notebook_task", {})
-        params = nb_task.get("base_parameters", {})
+        notebook_task = task.get("notebook_task", {})
+        params = notebook_task.get("base_parameters", {})
         for value in params.values():
             _extract_refs(value, param_names, item_field_names=item_field_names)
 
-        # Scan run_job_task.job_parameters
-        rj_task = task.get("run_job_task", {})
-        for value in rj_task.get("job_parameters", {}).values():
+        run_job_task = task.get("run_job_task", {})
+        for value in run_job_task.get("job_parameters", {}).values():
             _extract_refs(value, param_names, item_field_names=item_field_names)
 
-        # Scan condition_task operands and recurse into branches
-        ct = task.get("condition_task", {})
-        if ct:
-            _extract_refs(ct.get("left", ""), param_names, item_field_names=item_field_names)
-            _extract_refs(ct.get("right", ""), param_names, item_field_names=item_field_names)
-            _scan_tasks(ct.get("if_true", []), param_names, item_field_names=item_field_names)
-            _scan_tasks(ct.get("if_false", []), param_names, item_field_names=item_field_names)
+        condition_task = task.get("condition_task", {})
+        if condition_task:
+            _extract_refs(condition_task.get("left", ""), param_names, item_field_names=item_field_names)
+            _extract_refs(condition_task.get("right", ""), param_names, item_field_names=item_field_names)
+            _scan_tasks(condition_task.get("if_true", []), param_names, item_field_names=item_field_names)
+            _scan_tasks(condition_task.get("if_false", []), param_names, item_field_names=item_field_names)
 
-        # Recurse into for_each_task body
-        fe = task.get("for_each_task", {})
-        body = fe.get("task")
+        for_each_task = task.get("for_each_task", {})
+        body = for_each_task.get("task")
         if body:
             _scan_tasks([body], param_names, item_field_names=item_field_names)
 
@@ -160,7 +181,7 @@ def _scan_ir_tasks(
     """Scan raw IR task dicts for parameter references in all fields.
 
     Catches references in fields that ``_scan_tasks`` can't see because they
-    are consumed during DAB conversion — e.g. WebActivity ``url`` and ``body``,
+    are consumed during DAB conversion -- e.g. WebActivity ``url`` and ``body``,
     NotebookActivity ``base_parameters``, and nested control-flow structures.
 
     Args:
@@ -168,36 +189,31 @@ def _scan_ir_tasks(
         param_names: Accumulator set of discovered parameter names.
         item_field_names: Optional accumulator for field names from item().field refs.
     """
-    kw = {"item_field_names": item_field_names}
-    for ir in ir_tasks:
-        # WebActivity: url, body, headers
-        _extract_refs(ir.get("url", ""), param_names, **kw)
-        _extract_refs(ir.get("body"), param_names, **kw)
-        if isinstance(ir.get("headers"), dict):
-            for v in ir["headers"].values():
-                _extract_refs(v, param_names, **kw)
+    field_name_kwargs = {"item_field_names": item_field_names}
+    for task_dict in ir_tasks:
+        _extract_refs(task_dict.get("url", ""), param_names, **field_name_kwargs)
+        _extract_refs(task_dict.get("body"), param_names, **field_name_kwargs)
+        if isinstance(task_dict.get("headers"), dict):
+            for value in task_dict["headers"].values():
+                _extract_refs(value, param_names, **field_name_kwargs)
 
-        # NotebookActivity: base_parameters
-        bp = ir.get("base_parameters")
-        if isinstance(bp, dict):
-            for v in bp.values():
-                _extract_refs(v, param_names, **kw)
+        base_parameters = task_dict.get("base_parameters")
+        if isinstance(base_parameters, dict):
+            for value in base_parameters.values():
+                _extract_refs(value, param_names, **field_name_kwargs)
 
-        # SwitchActivity: on_expression, cases, default_activities
-        _extract_refs(ir.get("on_expression", ""), param_names, **kw)
-        for case in ir.get("cases", []):
-            _scan_ir_tasks(case.get("activities", []), param_names, **kw)
-        _scan_ir_tasks(ir.get("default_activities", []), param_names, **kw)
+        _extract_refs(task_dict.get("on_expression", ""), param_names, **field_name_kwargs)
+        for case in task_dict.get("cases", []):
+            _scan_ir_tasks(case.get("activities", []), param_names, **field_name_kwargs)
+        _scan_ir_tasks(task_dict.get("default_activities", []), param_names, **field_name_kwargs)
 
-        # IfConditionActivity: expression operands, branches
-        _extract_refs(ir.get("op", ""), param_names, **kw)
-        _extract_refs(ir.get("left", ""), param_names, **kw)
-        _extract_refs(ir.get("right", ""), param_names, **kw)
-        _scan_ir_tasks(ir.get("if_true_activities", []), param_names, **kw)
-        _scan_ir_tasks(ir.get("if_false_activities", []), param_names, **kw)
+        _extract_refs(task_dict.get("op", ""), param_names, **field_name_kwargs)
+        _extract_refs(task_dict.get("left", ""), param_names, **field_name_kwargs)
+        _extract_refs(task_dict.get("right", ""), param_names, **field_name_kwargs)
+        _scan_ir_tasks(task_dict.get("if_true_activities", []), param_names, **field_name_kwargs)
+        _scan_ir_tasks(task_dict.get("if_false_activities", []), param_names, **field_name_kwargs)
 
-        # ForEachActivity: inner_activities
-        _scan_ir_tasks(ir.get("inner_activities", []), param_names, **kw)
+        _scan_ir_tasks(task_dict.get("inner_activities", []), param_names, **field_name_kwargs)
 
 
 def _extract_refs(
@@ -216,88 +232,42 @@ def _extract_refs(
     if not text:
         return
 
-    # @pipeline().parameters.X
-    for m in _PIPELINE_PARAM_RE.finditer(text):
-        param_names.add(m.group(1))
+    for match in _PIPELINE_PARAM_RE.finditer(text):
+        param_names.add(match.group(1))
 
-    # @variables('Y')
-    for m in _VARIABLES_RE.finditer(text):
-        param_names.add(m.group(1))
+    for match in _VARIABLES_RE.finditer(text):
+        param_names.add(match.group(1))
 
-    # @item().field → extract the field name as its own parameter
-    for m in _ITEM_FIELD_RE.finditer(text):
-        field_name = m.group(1)
+    for match in _ITEM_FIELD_RE.finditer(text):
+        field_name = match.group(1)
         param_names.add(field_name)
         if item_field_names is not None:
             item_field_names.add(field_name)
 
-    # @item() (bare, no field access) → "item"
-    # Only add if there's a bare item() that isn't part of item().field
-    bare_text = _ITEM_FIELD_RE.sub("", text)  # strip field refs first
+    # Only add bare "item" if there's an item() that isn't part of item().field
+    bare_text = _ITEM_FIELD_RE.sub("", text)
     if _ITEM_BARE_RE.search(bare_text):
         param_names.add("item")
 
-    # Already-resolved {{input.field}} refs (from translate-time resolution)
-    for m in _DAB_INPUT_FIELD_RE.finditer(text):
-        field_name = m.group(1)
+    for match in _DAB_INPUT_FIELD_RE.finditer(text):
+        field_name = match.group(1)
         param_names.add(field_name)
         if item_field_names is not None:
             item_field_names.add(field_name)
 
-    # Already-resolved DAB refs
-    for m in _DAB_JOB_PARAM_RE.finditer(text):
-        param_names.add(m.group(1))
-
-
-# ---------------------------------------------------------------------------
-# Expression normalization
-# ---------------------------------------------------------------------------
-
-
-def normalize_inner_task_params(tasks: list[dict[str, Any]]) -> None:
-    """Normalise ADF expressions in task dicts for an inner job context.
-
-    Rewrites raw ADF expression dicts in ``base_parameters`` and
-    ``condition_task`` operands to ``{{job.parameters.*}}`` dynamic value
-    references.  Resolves simple ``@concat(...)`` expressions to string
-    concatenation.
-
-    Mutates the task dicts in place.
-
-    Args:
-        tasks: The inner job's task dicts.
-    """
-    for task in tasks:
-        nb_task = task.get("notebook_task")
-        if nb_task and "base_parameters" in nb_task:
-            nb_task["base_parameters"] = {k: _normalize_value(v) for k, v in nb_task["base_parameters"].items()}
-
-        # Normalize condition_task operands
-        ct = task.get("condition_task")
-        if ct:
-            if "left" in ct:
-                ct["left"] = _normalize_value(ct["left"])
-            if "right" in ct:
-                ct["right"] = _normalize_value(ct["right"])
-            normalize_inner_task_params(ct.get("if_true", []))
-            normalize_inner_task_params(ct.get("if_false", []))
-
-        # Recurse into for_each_task body
-        fe = task.get("for_each_task", {})
-        body = fe.get("task")
-        if body:
-            normalize_inner_task_params([body])
+    for match in _DAB_JOB_PARAM_RE.finditer(text):
+        param_names.add(match.group(1))
 
 
 def _normalize_value(value: Any) -> str:
     """Normalize a single parameter value from ADF expression to DAB reference.
 
     Handles:
-    - ``{type: Expression, value: ...}`` dicts → unwrapped and processed
-    - ``@item().field`` → ``{{job.parameters.item}}``
-    - ``@pipeline().parameters.X`` → ``{{job.parameters.X}}``
-    - ``@variables('Y')`` → ``{{job.parameters.Y}}``
-    - ``@concat('a', ref, 'b')`` → resolved to a plain string with embedded refs
+    - ``{type: Expression, value: ...}`` dicts -- unwrapped and processed
+    - ``@item().field`` -> ``{{job.parameters.item}}``
+    - ``@pipeline().parameters.X`` -> ``{{job.parameters.X}}``
+    - ``@variables('Y')`` -> ``{{job.parameters.Y}}``
+    - ``@concat('a', ref, 'b')`` -> resolved to a plain string with embedded refs
 
     Args:
         value: A string or ``{type: Expression, value: ...}`` dict.
@@ -314,18 +284,15 @@ def _normalize_value(value: Any) -> str:
 
     # Strip ADF type-conversion wrappers (@string, @int, etc.) first so the
     # inner expression can be resolved by subsequent steps.
-    m = _TYPE_CAST_RE.match(text.strip())
-    if m:
-        text = m.group(2)
+    match = _TYPE_CAST_RE.match(text.strip())
+    if match:
+        text = match.group(2)
         # Re-add @ prefix if the inner expression is a function call or
         # reference that needs it for pattern matching.
         if not text.startswith("@") and not text.startswith("{{"):
             text = "@" + text
 
-    # Resolve references inside the expression
     text = _replace_refs(text)
-
-    # Then try to resolve @concat(...) to a plain string
     text = _resolve_concat(text)
 
     return text
@@ -343,26 +310,15 @@ def _replace_refs(text: str) -> str:
     Returns:
         Text with references replaced.
     """
-    # Already-resolved {{input.field}} (from translate-time) → {{job.parameters.<field>}}
-    # Must fire before ADF-style patterns to handle pre-resolved refs.
     text = _DAB_INPUT_FIELD_RE.sub(r"{{job.parameters.\1}}", text)
-    # @item().field → {{job.parameters.<field>}}
     text = _ITEM_FIELD_RE.sub(r"{{job.parameters.\1}}", text)
-    # @item()  (bare, no field access) → {{job.parameters.item}}
     text = _ITEM_BARE_RE.sub("{{job.parameters.item}}", text)
-    # @pipeline().parameters.X → {{job.parameters.X}}
     text = _PIPELINE_PARAM_RE.sub(r"{{job.parameters.\1}}", text)
-    # @pipeline().RunId → {{job.run_id}}
     text = _PIPELINE_RUNID_RE.sub("{{job.run_id}}", text)
-    # @pipeline().TriggerTime → {{job.start_time.iso_datetime}}
     text = _PIPELINE_TRIGGER_TIME_RE.sub("{{job.start_time.iso_datetime}}", text)
-    # @pipeline().Pipeline → {{job.name}}
     text = _PIPELINE_NAME_RE.sub("{{job.name}}", text)
-    # @pipeline().GroupId → {{job.run_id}}
     text = _PIPELINE_GROUPID_RE.sub("{{job.run_id}}", text)
-    # @activity('Name').output[.firstRow].field → {{tasks.Name.values.field}}
     text = _ACTIVITY_OUTPUT_RE.sub(r"{{tasks.\1.values.\2}}", text)
-    # @variables('Y') → {{job.parameters.Y}}
     text = _VARIABLES_RE.sub(r"{{job.parameters.\1}}", text)
 
     return text
@@ -381,26 +337,23 @@ def _resolve_concat(text: str) -> str:
     Returns:
         Resolved string, or original text if not resolvable.
     """
-    m = _CONCAT_RE.match(text.strip())
-    if not m:
+    match = _CONCAT_RE.match(text.strip())
+    if not match:
         return text
 
-    args_str = m.group(1)
+    args_str = match.group(1)
     parts = _split_concat_args(args_str)
     if parts is None:
-        return text  # too complex to split
+        return text
 
     resolved: list[str] = []
     for part in parts:
         part = part.strip()
-        # String literal: 'value'
         if part.startswith("'") and part.endswith("'"):
             resolved.append(part[1:-1])
-        # Already a {{...}} ref
         elif part.startswith("{{"):
             resolved.append(part)
         else:
-            # Unrecognised argument — bail out
             return text
 
     return "".join(resolved)
@@ -420,25 +373,25 @@ def _split_concat_args(args_str: str) -> list[str] | None:
     current: list[str] = []
     in_quote = False
 
-    for ch in args_str:
-        if ch == "'" and depth == 0:
+    for char in args_str:
+        if char == "'" and depth == 0:
             in_quote = not in_quote
-            current.append(ch)
+            current.append(char)
         elif in_quote:
-            current.append(ch)
-        elif ch == "(":
+            current.append(char)
+        elif char == "(":
             depth += 1
-            current.append(ch)
-        elif ch == ")":
+            current.append(char)
+        elif char == ")":
             if depth == 0:
-                return None  # unbalanced
+                return None
             depth -= 1
-            current.append(ch)
-        elif ch == "," and depth == 0:
+            current.append(char)
+        elif char == "," and depth == 0:
             parts.append("".join(current).strip())
             current = []
         else:
-            current.append(ch)
+            current.append(char)
 
     if current:
         parts.append("".join(current).strip())

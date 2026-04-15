@@ -70,10 +70,6 @@ from orchestra.translator.activity_translators import (
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Translator registry — leaf activity types
-# ---------------------------------------------------------------------------
-
 TRANSLATOR_REGISTRY: dict[str, Callable[..., Activity]] = {
     "Copy": copy.translate,
     "DatabricksNotebook": notebook.translate,
@@ -87,11 +83,6 @@ TRANSLATOR_REGISTRY: dict[str, Callable[..., Activity]] = {
     "Wait": wait.translate,
     "Filter": filter.translate,
 }
-
-
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
 
 
 def translate_pipeline(pipeline: AdfPipeline, definitions: AdfDefinitions) -> TranslationReport:
@@ -158,12 +149,14 @@ def translate_pipeline(pipeline: AdfPipeline, definitions: AdfDefinitions) -> Tr
     # Build parameters dict from pipeline definition
     parameters: dict[str, Any] = {}
     if pipeline.parameters:
-        for pname, pdef in pipeline.parameters.items():
-            parameters[pname] = pdef.default_value
+        for param_name, param_def in pipeline.parameters.items():
+            parameters[param_name] = param_def.default_value
 
     pipeline_ir = Pipeline(
         name=pipeline.name,
-        parameters=[{"name": k, "default": v} for k, v in parameters.items()] if parameters else None,
+        parameters=[{"name": param_name, "default": param_value} for param_name, param_value in parameters.items()]
+        if parameters
+        else None,
         tasks=translated_activities,
         tags={"source": "adf", "pipeline": pipeline.name},
     )
@@ -176,11 +169,6 @@ def translate_pipeline(pipeline: AdfPipeline, definitions: AdfDefinitions) -> Tr
         gaps=gaps,
         warnings=warnings,
     )
-
-
-# ---------------------------------------------------------------------------
-# Activity dispatch
-# ---------------------------------------------------------------------------
 
 
 def _dispatch_activity(
@@ -206,9 +194,6 @@ def _dispatch_activity(
     base_kwargs = _build_base_kwargs(activity, definitions)
 
     match activity.type:
-        # ---------------------------------------------------------------
-        # Control-flow types that thread context
-        # ---------------------------------------------------------------
         case "ForEach":
             result, context = for_each.translate(
                 activity,
@@ -262,18 +247,12 @@ def _dispatch_activity(
             context = context.with_activity(activity.name, result)
             return result, context
 
-        # ---------------------------------------------------------------
-        # Leaf types from the registry
-        # ---------------------------------------------------------------
         case atype if atype in TRANSLATOR_REGISTRY:
             translator_fn = TRANSLATOR_REGISTRY[atype]
             result = translator_fn(activity, base_kwargs, context, definitions)
             context = context.with_activity(activity.name, result)
             return result, context
 
-        # ---------------------------------------------------------------
-        # Unknown / agentic types -> placeholder
-        # ---------------------------------------------------------------
         case _:
             strategy, skill = classify_activity(activity.type)
             reason = f"Agentic skill: {skill}" if skill else f"No translator for type '{activity.type}'"
@@ -314,11 +293,6 @@ def _translate_activity_list(
     return results, context
 
 
-# ---------------------------------------------------------------------------
-# Topological sort
-# ---------------------------------------------------------------------------
-
-
 def _topological_visit(activities: list[AdfActivity]) -> list[AdfActivity]:
     """Return activities in dependency-first (topological) order.
 
@@ -336,21 +310,20 @@ def _topological_visit(activities: list[AdfActivity]) -> list[AdfActivity]:
         return []
 
     # Build adjacency structures
-    name_to_activity: dict[str, AdfActivity] = {a.name: a for a in activities}
-    in_degree: dict[str, int] = {a.name: 0 for a in activities}
+    name_to_activity: dict[str, AdfActivity] = {act.name: act for act in activities}
+    in_degree: dict[str, int] = {act.name: 0 for act in activities}
     dependents: dict[str, list[str]] = defaultdict(list)
 
     for activity in activities:
         if activity.depends_on:
-            for dep in activity.depends_on:
-                dep_name = dep.activity
-                # Only count dependencies within the same level
-                if dep_name in name_to_activity:
+            for dependency in activity.depends_on:
+                dependency_name = dependency.activity
+                if dependency_name in name_to_activity:
                     in_degree[activity.name] += 1
-                    dependents[dep_name].append(activity.name)
+                    dependents[dependency_name].append(activity.name)
 
     # Kahn's algorithm
-    queue: list[str] = [name for name, deg in in_degree.items() if deg == 0]
+    queue: list[str] = [name for name, degree in in_degree.items() if degree == 0]
     result: list[AdfActivity] = []
 
     while queue:
@@ -365,18 +338,13 @@ def _topological_visit(activities: list[AdfActivity]) -> list[AdfActivity]:
 
     # Handle cycles — append remaining in original order
     if len(result) < len(activities):
-        visited = {a.name for a in result}
+        visited = {act.name for act in result}
         for activity in activities:
             if activity.name not in visited:
                 logger.warning("Cycle detected: activity '%s' has unresolved dependencies.", activity.name)
                 result.append(activity)
 
     return result
-
-
-# ---------------------------------------------------------------------------
-# Base kwargs builder
-# ---------------------------------------------------------------------------
 
 
 _TIMEOUT_RE = re.compile(r"(?:(\d+)\.)?(\d{2}):(\d{2}):(\d{2})")
@@ -414,11 +382,11 @@ def _build_base_kwargs(activity: AdfActivity, definitions: AdfDefinitions) -> di
     depends_on: list[Dependency] | None = None
     if activity.depends_on:
         depends_on = []
-        for dep in activity.depends_on:
-            outcome = dep.dependency_conditions[0] if dep.dependency_conditions else None
+        for dependency in activity.depends_on:
+            outcome = dependency.dependency_conditions[0] if dependency.dependency_conditions else None
             depends_on.append(
                 Dependency(
-                    task_key=_sanitize_task_key(dep.activity),
+                    task_key=_sanitize_task_key(dependency.activity),
                     outcome=outcome,
                 )
             )
@@ -426,10 +394,10 @@ def _build_base_kwargs(activity: AdfActivity, definitions: AdfDefinitions) -> di
     # Cluster config from linked service
     cluster: dict[str, Any] | None = None
     if activity.linked_service_name:
-        ls_name = activity.linked_service_name.reference_name
-        ls_def = definitions.linked_services.get(ls_name)
-        if ls_def:
-            cluster = _extract_cluster_config(ls_def.properties)
+        linked_service_name = activity.linked_service_name.reference_name
+        linked_service_def = definitions.linked_services.get(linked_service_name)
+        if linked_service_def:
+            cluster = _extract_cluster_config(linked_service_def.properties)
 
     return {
         "name": activity.name,
@@ -472,13 +440,13 @@ def _parse_adf_timeout(timeout_str: str) -> int | None:
     Returns:
         Total seconds, or ``None`` if the format is unrecognised.
     """
-    m = _TIMEOUT_RE.match(timeout_str)
-    if not m:
+    match = _TIMEOUT_RE.match(timeout_str)
+    if not match:
         return None
-    days = int(m.group(1) or 0)
-    hours = int(m.group(2))
-    minutes = int(m.group(3))
-    seconds = int(m.group(4))
+    days = int(match.group(1) or 0)
+    hours = int(match.group(2))
+    minutes = int(match.group(3))
+    seconds = int(match.group(4))
     return days * 86400 + hours * 3600 + minutes * 60 + seconds
 
 
@@ -513,11 +481,6 @@ def _extract_cluster_config(ls_properties: dict[str, Any]) -> dict[str, Any] | N
             config["spark_conf"] = spark_conf
 
     return config if config else None
-
-
-# ---------------------------------------------------------------------------
-# Serialization helpers
-# ---------------------------------------------------------------------------
 
 
 def _pipeline_to_dict(pipeline: Pipeline) -> dict[str, Any]:
@@ -564,7 +527,9 @@ def _activity_to_dict(task: Activity) -> dict[str, Any]:
     if task.min_retry_interval_millis:
         task_dict["min_retry_interval_millis"] = task.min_retry_interval_millis
     if task.depends_on:
-        task_dict["depends_on"] = [{"task_key": d.task_key, "outcome": d.outcome} for d in task.depends_on]
+        task_dict["depends_on"] = [
+            {"task_key": dependency.task_key, "outcome": dependency.outcome} for dependency in task.depends_on
+        ]
     if task.cluster:
         task_dict["cluster"] = task.cluster
 
@@ -616,13 +581,13 @@ def _activity_extra_fields(activity: Activity) -> dict[str, Any]:
         case ForEachActivity():
             extra["items_expression"] = activity.items_expression
             extra["concurrency"] = activity.concurrency
-            extra["inner_activities"] = [_activity_to_dict(a) for a in activity.inner_activities]
+            extra["inner_activities"] = [_activity_to_dict(inner) for inner in activity.inner_activities]
         case IfConditionActivity():
             extra["op"] = activity.op
             extra["left"] = activity.left
             extra["right"] = activity.right
-            extra["if_true_activities"] = [_activity_to_dict(a) for a in activity.if_true_activities]
-            extra["if_false_activities"] = [_activity_to_dict(a) for a in activity.if_false_activities]
+            extra["if_true_activities"] = [_activity_to_dict(inner) for inner in activity.if_true_activities]
+            extra["if_false_activities"] = [_activity_to_dict(inner) for inner in activity.if_false_activities]
         case LookupActivity():
             extra["source_type"] = activity.source_type
             if activity.source_properties:
@@ -652,9 +617,10 @@ def _activity_extra_fields(activity: Activity) -> dict[str, Any]:
         case SwitchActivity():
             extra["on_expression"] = activity.on_expression
             extra["cases"] = [
-                {"value": c.value, "activities": [_activity_to_dict(a) for a in c.activities]} for c in activity.cases
+                {"value": case_item.value, "activities": [_activity_to_dict(inner) for inner in case_item.activities]}
+                for case_item in activity.cases
             ]
-            extra["default_activities"] = [_activity_to_dict(a) for a in activity.default_activities]
+            extra["default_activities"] = [_activity_to_dict(inner) for inner in activity.default_activities]
         case WaitActivity():
             extra["wait_time_seconds"] = activity.wait_time_seconds
         case SparkJarActivity():
@@ -700,11 +666,6 @@ def _activity_extra_fields(activity: Activity) -> dict[str, Any]:
     return extra
 
 
-# ---------------------------------------------------------------------------
-# Debug serialization — full IR dump with all fields
-# ---------------------------------------------------------------------------
-
-
 def _activity_to_debug_dict(activity: Activity) -> dict[str, Any]:
     """Serialise an Activity to a full debug dict showing all dataclass fields.
 
@@ -719,22 +680,21 @@ def _activity_to_debug_dict(activity: Activity) -> dict[str, Any]:
     Returns:
         Dict with ``__class__`` plus every dataclass field.
     """
-    d: dict[str, Any] = {"__class__": type(activity).__name__}
+    result: dict[str, Any] = {"__class__": type(activity).__name__}
 
-    for f in activity.__dataclass_fields__:
-        value = getattr(activity, f)
+    for field in activity.__dataclass_fields__:
+        value = getattr(activity, field)
 
         if isinstance(value, Activity):
-            d[f] = _activity_to_debug_dict(value)
+            result[field] = _activity_to_debug_dict(value)
         elif isinstance(value, list) and value and isinstance(value[0], Activity):
-            d[f] = [_activity_to_debug_dict(a) for a in value]
+            result[field] = [_activity_to_debug_dict(inner) for inner in value]
         elif isinstance(value, list) and value and hasattr(value[0], "__dataclass_fields__"):
-            # SwitchCase, Dependency, etc.
-            d[f] = [_dataclass_to_debug_dict(item) for item in value]
+            result[field] = [_dataclass_to_debug_dict(item) for item in value]
         else:
-            d[f] = value
+            result[field] = value
 
-    return d
+    return result
 
 
 def _dataclass_to_debug_dict(obj: Any) -> dict[str, Any]:
@@ -748,19 +708,19 @@ def _dataclass_to_debug_dict(obj: Any) -> dict[str, Any]:
     Returns:
         Dict with ``__class__`` plus every dataclass field.
     """
-    d: dict[str, Any] = {"__class__": type(obj).__name__}
+    result: dict[str, Any] = {"__class__": type(obj).__name__}
 
-    for f in obj.__dataclass_fields__:
-        value = getattr(obj, f)
+    for field in obj.__dataclass_fields__:
+        value = getattr(obj, field)
 
         if isinstance(value, Activity):
-            d[f] = _activity_to_debug_dict(value)
+            result[field] = _activity_to_debug_dict(value)
         elif isinstance(value, list) and value and isinstance(value[0], Activity):
-            d[f] = [_activity_to_debug_dict(a) for a in value]
+            result[field] = [_activity_to_debug_dict(inner) for inner in value]
         else:
-            d[f] = value
+            result[field] = value
 
-    return d
+    return result
 
 
 def _pipeline_to_debug_dict(pipeline: Pipeline) -> dict[str, Any]:
@@ -780,11 +740,6 @@ def _pipeline_to_debug_dict(pipeline: Pipeline) -> dict[str, Any]:
         "tags": pipeline.tags,
         "tasks": [_activity_to_debug_dict(task) for task in pipeline.tasks],
     }
-
-
-# ---------------------------------------------------------------------------
-# CLI entry point
-# ---------------------------------------------------------------------------
 
 
 if __name__ == "__main__":
@@ -851,8 +806,8 @@ if __name__ == "__main__":
             all_gaps.append(asdict(gap))
 
         if report.warnings:
-            for w in report.warnings:
-                logger.warning(w)
+            for warning in report.warnings:
+                logger.warning(warning)
 
     # Write gaps
     if all_gaps:

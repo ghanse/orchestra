@@ -13,10 +13,6 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any, TypeAlias
 
-# ---------------------------------------------------------------------------
-# Expression result
-# ---------------------------------------------------------------------------
-
 
 @dataclass(slots=True, kw_only=True)
 class ExpressionResult:
@@ -35,11 +31,6 @@ class ExpressionResult:
     imports: list[str] = field(default_factory=list)
 
 
-# ---------------------------------------------------------------------------
-# Dependency
-# ---------------------------------------------------------------------------
-
-
 @dataclass(slots=True, kw_only=True)
 class Dependency:
     """Dependency on an upstream task.
@@ -51,11 +42,6 @@ class Dependency:
 
     task_key: str
     outcome: str | None = None
-
-
-# ---------------------------------------------------------------------------
-# Activity hierarchy
-# ---------------------------------------------------------------------------
 
 
 @dataclass(slots=True, kw_only=True)
@@ -396,11 +382,6 @@ class PlaceholderActivity(Activity):
     comment: str | None = None
 
 
-# ---------------------------------------------------------------------------
-# Pipeline
-# ---------------------------------------------------------------------------
-
-
 @dataclass(slots=True, kw_only=True)
 class Pipeline:
     """Top-level workflow container produced by the translator.
@@ -420,11 +401,6 @@ class Pipeline:
     tasks: list[Activity] = field(default_factory=list)
     tags: dict[str, str] = field(default_factory=dict)
     not_translatable: list[dict[str, Any]] = field(default_factory=list)
-
-
-# ---------------------------------------------------------------------------
-# Translation context (immutable, threaded through visitors)
-# ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True, slots=True)
@@ -494,14 +470,14 @@ class TranslationContext:
         Returns:
             New ``TranslationContext`` containing the updated caches.
         """
-        new_vvc = self.variable_value_cache
+        new_variable_value_cache = self.variable_value_cache
         if dab_ref_value is not None:
-            new_vvc = MappingProxyType({**self.variable_value_cache, variable_name: dab_ref_value})
+            new_variable_value_cache = MappingProxyType({**self.variable_value_cache, variable_name: dab_ref_value})
         return TranslationContext(
             activity_cache=self.activity_cache,
             registry=self.registry,
             variable_cache=MappingProxyType({**self.variable_cache, variable_name: task_key}),
-            variable_value_cache=new_vvc,
+            variable_value_cache=new_variable_value_cache,
         )
 
     def get_variable_task_key(self, variable_name: str) -> str | None:
@@ -513,17 +489,7 @@ class TranslationContext:
         return self.variable_value_cache.get(variable_name)
 
 
-# ---------------------------------------------------------------------------
-# Translation result types
-# ---------------------------------------------------------------------------
-
-
 TranslationResult: TypeAlias = Activity | UnsupportedActivity
-
-
-# ---------------------------------------------------------------------------
-# Agentic gap tracking
-# ---------------------------------------------------------------------------
 
 
 @dataclass(slots=True, kw_only=True)
@@ -541,11 +507,6 @@ class AgenticGap:
     activity_type: str
     recommended_skill: str | None = None
     raw_definition: dict[str, Any] | None = None
-
-
-# ---------------------------------------------------------------------------
-# Translation report
-# ---------------------------------------------------------------------------
 
 
 @dataclass(slots=True, kw_only=True)

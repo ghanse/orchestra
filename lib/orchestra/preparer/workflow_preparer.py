@@ -255,13 +255,13 @@ def prepare_workflow(pipeline: Pipeline) -> PreparedWorkflow:
     # Build variable-name → task-key mapping from SetVariable activities
     # so downstream notebook preparers can resolve @variables('name')
     # references to DAB dynamic value references.
-    vtk: dict[str, str] = {}
+    variable_task_keys_map: dict[str, str] = {}
     for activity in pipeline.tasks:
         if isinstance(activity, SetVariableActivity):
-            vtk[activity.variable_name] = activity.task_key
+            variable_task_keys_map[activity.variable_name] = activity.task_key
 
     for activity in pipeline.tasks:
-        prepared = prepare_activity(activity, scope=scope, variable_task_keys=vtk)
+        prepared = prepare_activity(activity, scope=scope, variable_task_keys=variable_task_keys_map)
         all_tasks.append(prepared.task)
         all_notebooks.extend(prepared.notebooks)
         all_secrets.extend(prepared.secrets)

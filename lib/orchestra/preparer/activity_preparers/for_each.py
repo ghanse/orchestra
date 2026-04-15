@@ -122,7 +122,6 @@ def prepare(activity: ForEachActivity, *, scope: str = "") -> PreparedActivity:
     inner_workflows: list[PreparedWorkflow] = []
 
     if len(inner_activities) == 1:
-        # --- Single inner activity: inline it directly ---
         inner_prepared = prepare_activity(inner_activities[0], scope=scope)
         inner_task = _inject_input_parameter(inner_prepared.task)
         all_notebooks.extend(inner_prepared.notebooks)
@@ -137,7 +136,6 @@ def prepare(activity: ForEachActivity, *, scope: str = "") -> PreparedActivity:
         }
 
     elif len(inner_activities) > 1:
-        # --- Multiple inner activities: create an inner job ---
         inner_job_name = f"{activity.task_key}_inner_tasks"
         inner_tasks: list[dict[str, Any]] = []
 

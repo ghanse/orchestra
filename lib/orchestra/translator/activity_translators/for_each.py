@@ -44,9 +44,9 @@ def translate(
     Returns:
         Tuple of ``(ForEachActivity, updated_context)``.
     """
-    tp = activity.type_properties or {}
+    type_properties = activity.type_properties or {}
 
-    items_raw = tp.get("items")
+    items_raw = type_properties.get("items")
     # Resolve the items expression via the unified resolver
     expr_result = resolve_expression(items_raw, context) if items_raw is not None else None
     if expr_result is not None and expr_result.kind in ("dab_ref", "literal"):
@@ -60,9 +60,9 @@ def translate(
         else:
             items_expression = ""
 
-    is_sequential = tp.get("isSequential", False)
+    is_sequential = type_properties.get("isSequential", False)
     default_batch = 1 if is_sequential else 20
-    batch_count_raw = tp.get("batchCount")
+    batch_count_raw = type_properties.get("batchCount")
     batch_count = (
         resolve_field_int(batch_count_raw, context, default=default_batch)
         if batch_count_raw is not None

@@ -32,10 +32,10 @@ def translate(
         Tuple of ``(SetVariableActivity, updated_context)`` where the context
         now maps the variable name to this activity's task key.
     """
-    tp = activity.type_properties or {}
+    type_properties = activity.type_properties or {}
 
-    variable_name = tp.get("variableName", "")
-    value_raw = tp.get("value", "")
+    variable_name = type_properties.get("variableName", "")
+    value_raw = type_properties.get("value", "")
 
     # Resolve via unified expression resolver
     expr_result = resolve_expression(value_raw, context)

@@ -27,10 +27,10 @@ def translate(
     Returns:
         A :class:`NotebookActivity` IR node.
     """
-    tp = activity.type_properties or {}
+    type_properties = activity.type_properties or {}
 
-    notebook_path = resolve_field(tp.get("notebookPath", ""), context)
-    raw_params = tp.get("baseParameters") or {}
+    notebook_path = resolve_field(type_properties.get("notebookPath", ""), context)
+    raw_params = type_properties.get("baseParameters") or {}
 
     # Resolve base_parameters at translate time so ADF expressions like
     # @variables('runTimestamp') are inlined to DAB refs while the full
