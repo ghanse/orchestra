@@ -628,10 +628,10 @@ def _motif_notebook(
     task_key: str,
     activity_name: str,
     motif_id: str,
-    replacement: str,
-    matched_names: list[str],
-    source_hint: str,
-    notes: list[str],
+    databricks_replacement: str,
+    matched_activity_names: list[str],
+    source_type_hint: str,
+    confidence_notes: list[str],
 ) -> str:
     """Generate a notebook for a collapsed motif activity.
 
@@ -639,10 +639,10 @@ def _motif_notebook(
     strategy, the list of ADF activities that were collapsed, and TODO
     sections for the specific replacement logic.
     """
-    matched_list = "\n".join(f"# MAGIC - `{name}`" for name in matched_names)
-    notes_list = "\n".join(f"# MAGIC - {note}" for note in notes) if notes else "# MAGIC   (none)"
+    matched_list = "\n".join(f"# MAGIC - `{name}`" for name in matched_activity_names)
+    notes_list = "\n".join(f"# MAGIC - {note}" for note in confidence_notes) if confidence_notes else "# MAGIC   (none)"
 
-    source_line = f"# MAGIC **Source type**: `{source_hint}`" if source_hint else ""
+    source_line = f"# MAGIC **Source type**: `{source_type_hint}`" if source_type_hint else ""
 
     lines = [
         "# Databricks notebook source",
@@ -650,7 +650,7 @@ def _motif_notebook(
         f"# MAGIC # Motif: {activity_name}",
         "# MAGIC",
         f"# MAGIC **Pattern**: `{motif_id}`",
-        f"# MAGIC **Databricks replacement**: `{replacement}`",
+        f"# MAGIC **Databricks replacement**: `{databricks_replacement}`",
     ]
     if source_line:
         lines.append(source_line)
@@ -673,7 +673,7 @@ def _motif_notebook(
     )
 
     # Generate replacement-specific scaffold
-    if replacement == "auto_loader":
+    if databricks_replacement == "auto_loader":
         lines.extend(
             [
                 "# Auto Loader ingestion — replaces Lookup/Copy/StoredProcedure watermark chain",
@@ -698,7 +698,7 @@ def _motif_notebook(
                 ")",
             ]
         )
-    elif replacement == "dlt_apply_changes":
+    elif databricks_replacement == "dlt_apply_changes":
         lines.extend(
             [
                 "# DLT APPLY CHANGES — replaces Copy/DataFlow SCD or CDC chain",
@@ -720,7 +720,7 @@ def _motif_notebook(
                 f"raise NotImplementedError('Motif {motif_id}: implement as DLT pipeline')",
             ]
         )
-    elif replacement == "for_each_ingestion":
+    elif databricks_replacement == "for_each_ingestion":
         lines.extend(
             [
                 "# Parameterised bulk ingestion — replaces Lookup/ForEach/Copy chain",
@@ -740,7 +740,7 @@ def _motif_notebook(
                 "    print(f'Ingested {table_name}: {df.count()} rows')",
             ]
         )
-    elif replacement == "python_rest_ingestion":
+    elif databricks_replacement == "python_rest_ingestion":
         lines.extend(
             [
                 "# REST API pagination — replaces WebActivity/Until/SetVariable chain",
@@ -768,7 +768,7 @@ def _motif_notebook(
                 "print(f'Ingested {len(all_records)} records')",
             ]
         )
-    elif replacement == "auto_loader_file_notification":
+    elif databricks_replacement == "auto_loader_file_notification":
         lines.extend(
             [
                 "# Auto Loader with file notification — replaces GetMetadata/ForEach/Copy/Delete chain",
@@ -797,8 +797,8 @@ def _motif_notebook(
         lines.extend(
             [
                 f"# TODO: Implement Databricks-native replacement for motif '{motif_id}'",
-                f"# Strategy: {replacement}",
-                f"raise NotImplementedError('Motif {motif_id}: implement {replacement}')",
+                f"# Strategy: {databricks_replacement}",
+                f"raise NotImplementedError('Motif {motif_id}: implement {databricks_replacement}')",
             ]
         )
 
@@ -1146,19 +1146,19 @@ def _task_ir_to_dab(task_ir: dict[str, Any]) -> dict[str, Any]:
         notebook_relative_path = f"notebooks/{task_key}.py"
         task["notebook_task"] = {"notebook_path": f"../src/{notebook_relative_path}"}
         motif_id = task_ir.get("motif_id", "unknown")
-        replacement = task_ir.get("databricks_replacement", "notebook")
-        matched_names = task_ir.get("matched_activity_names", [])
-        source_hint = task_ir.get("source_type_hint", "")
-        notes = task_ir.get("confidence_notes", [])
+        databricks_replacement = task_ir.get("databricks_replacement", "notebook")
+        matched_activity_names = task_ir.get("matched_activity_names", [])
+        source_type_hint = task_ir.get("source_type_hint", "")
+        confidence_notes = task_ir.get("confidence_notes", [])
 
         content = _motif_notebook(
             task_key=task_key,
             activity_name=activity_name,
             motif_id=motif_id,
-            replacement=replacement,
-            matched_names=matched_names,
-            source_hint=source_hint,
-            notes=notes,
+            databricks_replacement=databricks_replacement,
+            matched_activity_names=matched_activity_names,
+            source_type_hint=source_type_hint,
+            confidence_notes=confidence_notes,
         )
         notebooks.append(DabNotebook(relative_path=notebook_relative_path, content=content))
 

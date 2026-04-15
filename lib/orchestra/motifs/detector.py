@@ -36,10 +36,6 @@ from orchestra.models.motifs import (
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# File-based vs database-based linked-service heuristics
-# ---------------------------------------------------------------------------
-
 _FILE_LS_TYPES: set[str] = {
     "AzureBlobStorage",
     "AzureBlobFS",
@@ -80,10 +76,10 @@ _REST_LS_TYPES: set[str] = {
     "SharePointOnlineList",
 }
 
-
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
+_Detector = Callable[
+    [list[AdfActivity], dict[str, AdfActivity], AdfDefinitions, set[str]],
+    list[DetectedMotif],
+]
 
 
 def detect_motifs(
@@ -111,7 +107,7 @@ def detect_motifs(
         return []
 
     # Build lookup structures
-    by_name: dict[str, AdfActivity] = {a.name: a for a in activities}
+    by_name: dict[str, AdfActivity] = {activity.name: activity for activity in activities}
     claimed: set[str] = set()
     results: list[DetectedMotif] = []
 
@@ -144,17 +140,6 @@ def detect_motifs(
     return results
 
 
-_Detector = Callable[
-    [list[AdfActivity], dict[str, AdfActivity], AdfDefinitions, set[str]],
-    list[DetectedMotif],
-]
-
-
-# ---------------------------------------------------------------------------
-# Shared helpers
-# ---------------------------------------------------------------------------
-
-
 def _get_upstream_names(activity: AdfActivity) -> list[str]:
     """Return names of upstream dependencies for *activity*."""
     if not activity.depends_on:
@@ -184,32 +169,32 @@ def _infer_source_type(
     """Infer whether the source of a Copy/Lookup activity is files, database, or REST."""
     # Check inputs (dataset references)
     if activity.inputs:
-        for inp in activity.inputs:
-            ds = definitions.datasets.get(inp.reference_name)
-            if ds and ds.linked_service_name:
-                ls = definitions.linked_services.get(ds.linked_service_name)
-                if ls:
-                    if ls.type in _FILE_LS_TYPES:
+        for input_ref in activity.inputs:
+            dataset = definitions.datasets.get(input_ref.reference_name)
+            if dataset and dataset.linked_service_name:
+                linked_service = definitions.linked_services.get(dataset.linked_service_name)
+                if linked_service:
+                    if linked_service.type in _FILE_LS_TYPES:
                         return "files"
-                    if ls.type in _DATABASE_LS_TYPES:
+                    if linked_service.type in _DATABASE_LS_TYPES:
                         return "database"
-                    if ls.type in _REST_LS_TYPES:
+                    if linked_service.type in _REST_LS_TYPES:
                         return "rest_api"
 
     # Check linked service directly on the activity
     if activity.linked_service_name:
-        ls = definitions.linked_services.get(activity.linked_service_name.reference_name)
-        if ls:
-            if ls.type in _FILE_LS_TYPES:
+        linked_service = definitions.linked_services.get(activity.linked_service_name.reference_name)
+        if linked_service:
+            if linked_service.type in _FILE_LS_TYPES:
                 return "files"
-            if ls.type in _DATABASE_LS_TYPES:
+            if linked_service.type in _DATABASE_LS_TYPES:
                 return "database"
-            if ls.type in _REST_LS_TYPES:
+            if linked_service.type in _REST_LS_TYPES:
                 return "rest_api"
 
     # Check type_properties source type hints
-    tp = activity.type_properties or {}
-    source = tp.get("source", {})
+    type_properties = activity.type_properties or {}
+    source = type_properties.get("source", {})
     if isinstance(source, dict):
         source_type = source.get("type", "")
         if any(
@@ -234,18 +219,13 @@ def _activities_of_type(
     claimed: set[str],
 ) -> list[AdfActivity]:
     """Return unclaimed activities matching *adf_type*."""
-    return [a for a in activities if a.type == adf_type and a.name not in claimed]
+    return [activity for activity in activities if activity.type == adf_type and activity.name not in claimed]
 
 
 def _has_keyword(text: str, *keywords: str) -> bool:
     """Case-insensitive keyword check in *text*."""
     lower = text.lower()
     return any(kw.lower() in lower for kw in keywords)
-
-
-# ---------------------------------------------------------------------------
-# Individual motif detectors
-# ---------------------------------------------------------------------------
 
 
 def _detect_incremental_watermark(
@@ -269,9 +249,9 @@ def _detect_incremental_watermark(
         # Find Lookup activities that are upstream of this Copy
         upstream_lookups: list[AdfActivity] = []
         for name in _get_upstream_names(copy_act):
-            act = by_name.get(name)
-            if act and act.type == "Lookup" and act.name not in claimed:
-                upstream_lookups.append(act)
+            activity = by_name.get(name)
+            if activity and activity.type == "Lookup" and activity.name not in claimed:
+                upstream_lookups.append(activity)
 
         if len(upstream_lookups) < 2:
             continue
@@ -281,12 +261,12 @@ def _detect_incremental_watermark(
         has_change_tracking = False
         notes: list[str] = []
 
-        for lk in upstream_lookups:
-            tp_text = _type_props_text(lk)
-            if _has_keyword(tp_text, "watermark", "max(", "min(", "last_modified", "lastmodified"):
+        for lookup_activity in upstream_lookups:
+            type_properties_text = _type_props_text(lookup_activity)
+            if _has_keyword(type_properties_text, "watermark", "max(", "min(", "last_modified", "lastmodified"):
                 watermark_keywords_found = True
-                notes.append(f"Lookup '{lk.name}' contains watermark-style query")
-            if _has_keyword(tp_text, "change_tracking", "changetable", "sys_change_version"):
+                notes.append(f"Lookup '{lookup_activity.name}' contains watermark-style query")
+            if _has_keyword(type_properties_text, "change_tracking", "changetable", "sys_change_version"):
                 has_change_tracking = True
 
         if has_change_tracking:
@@ -298,16 +278,16 @@ def _detect_incremental_watermark(
 
         # Find downstream StoredProcedure
         downstream_sp: AdfActivity | None = None
-        for act in activities:
-            if act.type == "SqlServerStoredProcedure" and act.name not in claimed:
-                if _depends_on(act, copy_act.name):
-                    downstream_sp = act
+        for activity in activities:
+            if activity.type == "SqlServerStoredProcedure" and activity.name not in claimed:
+                if _depends_on(activity, copy_act.name):
+                    downstream_sp = activity
                     break
 
         if downstream_sp is None:
             continue
 
-        matched = [lk.name for lk in upstream_lookups] + [copy_act.name, downstream_sp.name]
+        matched = [lookup_activity.name for lookup_activity in upstream_lookups] + [copy_act.name, downstream_sp.name]
         source_hint = _infer_source_type(copy_act, definitions)
         notes.append(f"StoredProcedure '{downstream_sp.name}' updates watermark after Copy")
 
@@ -340,9 +320,9 @@ def _detect_cdc_change_tracking(
     for copy_act in copies:
         upstream_lookups: list[AdfActivity] = []
         for name in _get_upstream_names(copy_act):
-            act = by_name.get(name)
-            if act and act.type == "Lookup" and act.name not in claimed:
-                upstream_lookups.append(act)
+            activity = by_name.get(name)
+            if activity and activity.type == "Lookup" and activity.name not in claimed:
+                upstream_lookups.append(activity)
 
         if len(upstream_lookups) < 2:
             continue
@@ -350,27 +330,27 @@ def _detect_cdc_change_tracking(
         # Must have change-tracking keywords
         cdc_found = False
         notes: list[str] = []
-        for lk in upstream_lookups:
-            tp_text = _type_props_text(lk)
-            if _has_keyword(tp_text, "change_tracking", "changetable", "sys_change_version"):
+        for lookup_activity in upstream_lookups:
+            type_properties_text = _type_props_text(lookup_activity)
+            if _has_keyword(type_properties_text, "change_tracking", "changetable", "sys_change_version"):
                 cdc_found = True
-                notes.append(f"Lookup '{lk.name}' references SQL Server Change Tracking")
+                notes.append(f"Lookup '{lookup_activity.name}' references SQL Server Change Tracking")
 
         if not cdc_found:
             continue
 
         # Find downstream StoredProcedure
         downstream_sp: AdfActivity | None = None
-        for act in activities:
-            if act.type == "SqlServerStoredProcedure" and act.name not in claimed:
-                if _depends_on(act, copy_act.name):
-                    downstream_sp = act
+        for activity in activities:
+            if activity.type == "SqlServerStoredProcedure" and activity.name not in claimed:
+                if _depends_on(activity, copy_act.name):
+                    downstream_sp = activity
                     break
 
         if downstream_sp is None:
             continue
 
-        matched = [lk.name for lk in upstream_lookups] + [copy_act.name, downstream_sp.name]
+        matched = [lookup_activity.name for lookup_activity in upstream_lookups] + [copy_act.name, downstream_sp.name]
         source_hint = _infer_source_type(copy_act, definitions)
         notes.append(f"StoredProcedure '{downstream_sp.name}' updates change-tracking version")
 
@@ -400,13 +380,13 @@ def _detect_metadata_driven_bulk_copy(
     - Lookup query mentions table list, control table, or metadata
     """
     results: list[DetectedMotif] = []
-    for_each_acts = _activities_of_type(activities, "ForEach", claimed)
+    for_each_activities = _activities_of_type(activities, "ForEach", claimed)
 
-    for fe in for_each_acts:
+    for for_each_activity in for_each_activities:
         # Does ForEach contain a Copy child?
         has_copy_child = False
-        if fe.activities:
-            for child in fe.activities:
+        if for_each_activity.activities:
+            for child in for_each_activity.activities:
                 if child.type == "Copy":
                     has_copy_child = True
                     break
@@ -416,8 +396,8 @@ def _detect_metadata_driven_bulk_copy(
         # Does ForEach have an ExecutePipeline child? If so, this might be
         # parent-child orchestration instead -- skip.
         has_exec_child = False
-        if fe.activities:
-            for child in fe.activities:
+        if for_each_activity.activities:
+            for child in for_each_activity.activities:
                 if child.type == "ExecutePipeline":
                     has_exec_child = True
                     break
@@ -426,29 +406,29 @@ def _detect_metadata_driven_bulk_copy(
 
         # Find upstream Lookup
         upstream_lookups: list[AdfActivity] = []
-        for name in _get_upstream_names(fe):
-            act = by_name.get(name)
-            if act and act.type == "Lookup" and act.name not in claimed:
-                upstream_lookups.append(act)
+        for name in _get_upstream_names(for_each_activity):
+            activity = by_name.get(name)
+            if activity and activity.type == "Lookup" and activity.name not in claimed:
+                upstream_lookups.append(activity)
 
         if not upstream_lookups:
             continue
 
         notes: list[str] = []
-        for lk in upstream_lookups:
-            tp_text = _type_props_text(lk)
-            if _has_keyword(tp_text, "table", "schema", "control", "metadata", "config"):
-                notes.append(f"Lookup '{lk.name}' appears to read a control/metadata table")
+        for lookup_activity in upstream_lookups:
+            type_properties_text = _type_props_text(lookup_activity)
+            if _has_keyword(type_properties_text, "table", "schema", "control", "metadata", "config"):
+                notes.append(f"Lookup '{lookup_activity.name}' appears to read a control/metadata table")
 
         # Even without keyword match we detect if the structure is right
         if not notes:
             notes.append("Lookup -> ForEach -> Copy structure matches bulk copy pattern")
 
-        matched = [lk.name for lk in upstream_lookups] + [fe.name]
+        matched = [lookup_activity.name for lookup_activity in upstream_lookups] + [for_each_activity.name]
         source_hint = None
         # Try to infer from the child Copy
-        if fe.activities:
-            for child in fe.activities:
+        if for_each_activity.activities:
+            for child in for_each_activity.activities:
                 if child.type == "Copy":
                     source_hint = _infer_source_type(child, definitions)
                     break
@@ -480,39 +460,39 @@ def _detect_file_landing_zone(
     - Optional Delete downstream
     """
     results: list[DetectedMotif] = []
-    get_metadata_acts = _activities_of_type(activities, "GetMetadata", claimed)
+    get_metadata_activities = _activities_of_type(activities, "GetMetadata", claimed)
 
-    for gm in get_metadata_acts:
+    for get_metadata_activity in get_metadata_activities:
         # Check if GetMetadata lists child items (files)
-        tp_text = _type_props_text(gm)
-        if not _has_keyword(tp_text, "childitems", "getchilditems", "childitem", "exists"):
+        type_properties_text = _type_props_text(get_metadata_activity)
+        if not _has_keyword(type_properties_text, "childitems", "getchilditems", "childitem", "exists"):
             # Also accept if it just mentions file-like things
-            if not _has_keyword(tp_text, "file", "folder", "blob", "path"):
+            if not _has_keyword(type_properties_text, "file", "folder", "blob", "path"):
                 continue
 
         # Walk downstream from GetMetadata
-        matched: list[str] = [gm.name]
-        notes: list[str] = [f"GetMetadata '{gm.name}' lists files"]
+        matched: list[str] = [get_metadata_activity.name]
+        notes: list[str] = [f"GetMetadata '{get_metadata_activity.name}' lists files"]
 
         # Find a direct or indirect downstream ForEach with Copy child
         downstream_filter: AdfActivity | None = None
         downstream_foreach: AdfActivity | None = None
         downstream_delete: AdfActivity | None = None
 
-        for act in activities:
-            if act.name in claimed:
+        for activity in activities:
+            if activity.name in claimed:
                 continue
-            if act.type == "Filter" and _depends_on(act, gm.name):
-                downstream_filter = act
-            if act.type == "ForEach":
+            if activity.type == "Filter" and _depends_on(activity, get_metadata_activity.name):
+                downstream_filter = activity
+            if activity.type == "ForEach":
                 # ForEach can depend on GetMetadata directly or via Filter
-                deps = _get_upstream_names(act)
-                if gm.name in deps or (downstream_filter and downstream_filter.name in deps):
+                deps = _get_upstream_names(activity)
+                if get_metadata_activity.name in deps or (downstream_filter and downstream_filter.name in deps):
                     # Check for Copy child
-                    if act.activities:
-                        for child in act.activities:
+                    if activity.activities:
+                        for child in activity.activities:
                             if child.type == "Copy":
-                                downstream_foreach = act
+                                downstream_foreach = activity
                                 break
 
         if downstream_foreach is None:
@@ -526,11 +506,11 @@ def _detect_file_landing_zone(
         notes.append(f"ForEach '{downstream_foreach.name}' processes files via Copy")
 
         # Look for a Delete downstream of the ForEach
-        for act in activities:
-            if act.name in claimed:
+        for activity in activities:
+            if activity.name in claimed:
                 continue
-            if act.type == "Delete" and _depends_on(act, downstream_foreach.name):
-                downstream_delete = act
+            if activity.type == "Delete" and _depends_on(activity, downstream_foreach.name):
+                downstream_delete = activity
                 break
 
         if downstream_delete:
@@ -566,11 +546,11 @@ def _detect_copy_and_notify(
 
     for copy_act in copies:
         downstream_webs: list[AdfActivity] = []
-        for act in activities:
-            if act.name in claimed:
+        for activity in activities:
+            if activity.name in claimed:
                 continue
-            if act.type == "WebActivity" and _depends_on(act, copy_act.name):
-                downstream_webs.append(act)
+            if activity.type == "WebActivity" and _depends_on(activity, copy_act.name):
+                downstream_webs.append(activity)
 
         if not downstream_webs:
             continue
@@ -579,8 +559,10 @@ def _detect_copy_and_notify(
         notes: list[str] = []
         notification_found = False
         for web in downstream_webs:
-            tp_text = _type_props_text(web)
-            if _has_keyword(tp_text, "logic.azure.com", "email", "notify", "alert", "webhook", "slack", "teams"):
+            type_properties_text = _type_props_text(web)
+            if _has_keyword(
+                type_properties_text, "logic.azure.com", "email", "notify", "alert", "webhook", "slack", "teams"
+            ):
                 notification_found = True
                 notes.append(f"WebActivity '{web.name}' appears to be a notification call")
 
@@ -591,7 +573,7 @@ def _detect_copy_and_notify(
                 if web.depends_on:
                     for dep in web.depends_on:
                         if dep.activity == copy_act.name and dep.dependency_conditions:
-                            conds = [c.lower() for c in dep.dependency_conditions]
+                            conds = [cond.lower() for cond in dep.dependency_conditions]
                             if "failed" in conds or "completed" in conds:
                                 notification_found = True
                                 notes.append(
@@ -601,7 +583,7 @@ def _detect_copy_and_notify(
         if not notification_found:
             continue
 
-        matched = [copy_act.name] + [w.name for w in downstream_webs]
+        matched = [copy_act.name] + [web.name for web in downstream_webs]
         source_hint = _infer_source_type(copy_act, definitions)
 
         results.append(
@@ -635,29 +617,31 @@ def _detect_staged_load_synapse(
     for copy_act in copies:
         # Skip if there are upstream lookups (likely incremental / CDC)
         upstream_lookups = [
-            by_name[n] for n in _get_upstream_names(copy_act) if n in by_name and by_name[n].type == "Lookup"
+            by_name[name]
+            for name in _get_upstream_names(copy_act)
+            if name in by_name and by_name[name].type == "Lookup"
         ]
         if len(upstream_lookups) >= 2:
             continue
 
         # Find downstream StoredProcedure
         downstream_sp: AdfActivity | None = None
-        for act in activities:
-            if act.name in claimed:
+        for activity in activities:
+            if activity.name in claimed:
                 continue
-            if act.type == "SqlServerStoredProcedure" and _depends_on(act, copy_act.name):
-                downstream_sp = act
+            if activity.type == "SqlServerStoredProcedure" and _depends_on(activity, copy_act.name):
+                downstream_sp = activity
                 break
 
         if downstream_sp is None:
             continue
 
         notes: list[str] = []
-        tp_text = _type_props_text(copy_act)
+        type_properties_text = _type_props_text(copy_act)
 
         # Check for staging / Synapse hints
         staging_hint = _has_keyword(
-            tp_text,
+            type_properties_text,
             "polybase",
             "staging",
             "enablestaging",
@@ -670,7 +654,7 @@ def _detect_staged_load_synapse(
             notes.append("Copy activity uses staging/PolyBase for Synapse loading")
         else:
             # Also accept if the sink linked service is Synapse / SQL DW
-            sink_hint = _has_keyword(tp_text, "sqldwsink", "azuresqldwsink", "synapsesink")
+            sink_hint = _has_keyword(type_properties_text, "sqldwsink", "azuresqldwsink", "synapsesink")
             if sink_hint:
                 notes.append("Copy sink targets Azure Synapse / SQL DW")
             else:
@@ -724,42 +708,42 @@ def _detect_rest_api_pagination(
         upstream_setvars: list[AdfActivity] = []
 
         for name in upstream_names:
-            act = by_name.get(name)
-            if not act or act.name in claimed:
+            activity = by_name.get(name)
+            if not activity or activity.name in claimed:
                 continue
-            if act.type == "WebActivity":
-                upstream_webs.append(act)
-            elif act.type == "SetVariable":
-                upstream_setvars.append(act)
+            if activity.type == "WebActivity":
+                upstream_webs.append(activity)
+            elif activity.type == "SetVariable":
+                upstream_setvars.append(activity)
 
         # Also look for WebActivity upstream of a SetVariable that is upstream of Until
-        for sv in list(upstream_setvars):
-            for name in _get_upstream_names(sv):
-                act = by_name.get(name)
-                if act and act.type == "WebActivity" and act.name not in claimed:
-                    if act not in upstream_webs:
-                        upstream_webs.append(act)
+        for set_variable_activity in list(upstream_setvars):
+            for name in _get_upstream_names(set_variable_activity):
+                activity = by_name.get(name)
+                if activity and activity.type == "WebActivity" and activity.name not in claimed:
+                    if activity not in upstream_webs:
+                        upstream_webs.append(activity)
 
         notes: list[str] = []
 
         # Require at least some evidence of REST/pagination
         evidence = False
         for web in upstream_webs:
-            tp_text = _type_props_text(web)
-            if _has_keyword(tp_text, "oauth", "token", "auth", "bearer", "client_id"):
+            type_properties_text = _type_props_text(web)
+            if _has_keyword(type_properties_text, "oauth", "token", "auth", "bearer", "client_id"):
                 evidence = True
                 notes.append(f"WebActivity '{web.name}' appears to fetch an auth token")
 
         # Check Until children for pagination keywords
         if until_act.activities:
             for child in until_act.activities:
-                tp_text = _type_props_text(child)
-                if _has_keyword(tp_text, "page", "cursor", "offset", "skip", "next", "continuation"):
+                type_properties_text = _type_props_text(child)
+                if _has_keyword(type_properties_text, "page", "cursor", "offset", "skip", "next", "continuation"):
                     evidence = True
                     notes.append(f"Until child '{child.name}' uses pagination")
                 if child.type == "SetVariable":
-                    sv_text = _type_props_text(child)
-                    if _has_keyword(sv_text, "cursor", "page", "offset", "next", "token"):
+                    set_variable_text = _type_props_text(child)
+                    if _has_keyword(set_variable_text, "cursor", "page", "offset", "next", "token"):
                         evidence = True
                         notes.append(f"SetVariable '{child.name}' updates pagination cursor")
 
@@ -767,8 +751,8 @@ def _detect_rest_api_pagination(
             continue
 
         matched: list[str] = []
-        matched.extend(w.name for w in upstream_webs)
-        matched.extend(sv.name for sv in upstream_setvars)
+        matched.extend(web.name for web in upstream_webs)
+        matched.extend(set_variable_activity.name for set_variable_activity in upstream_setvars)
         matched.append(until_act.name)
 
         results.append(
@@ -796,13 +780,13 @@ def _detect_parent_child_orchestration(
     - ForEach contains ExecutePipeline child
     """
     results: list[DetectedMotif] = []
-    for_each_acts = _activities_of_type(activities, "ForEach", claimed)
+    for_each_activities = _activities_of_type(activities, "ForEach", claimed)
 
-    for fe in for_each_acts:
+    for for_each_activity in for_each_activities:
         # Does ForEach contain ExecutePipeline child?
         has_exec_child = False
-        if fe.activities:
-            for child in fe.activities:
+        if for_each_activity.activities:
+            for child in for_each_activity.activities:
                 if child.type == "ExecutePipeline":
                     has_exec_child = True
                     break
@@ -811,20 +795,20 @@ def _detect_parent_child_orchestration(
 
         # Find upstream Lookup
         upstream_lookups: list[AdfActivity] = []
-        for name in _get_upstream_names(fe):
-            act = by_name.get(name)
-            if act and act.type == "Lookup" and act.name not in claimed:
-                upstream_lookups.append(act)
+        for name in _get_upstream_names(for_each_activity):
+            activity = by_name.get(name)
+            if activity and activity.type == "Lookup" and activity.name not in claimed:
+                upstream_lookups.append(activity)
 
         if not upstream_lookups:
             continue
 
         notes: list[str] = [
             f"Lookup '{upstream_lookups[0].name}' provides work items",
-            f"ForEach '{fe.name}' iterates and calls child pipelines via ExecutePipeline",
+            f"ForEach '{for_each_activity.name}' iterates and calls child pipelines via ExecutePipeline",
         ]
 
-        matched = [lk.name for lk in upstream_lookups] + [fe.name]
+        matched = [lookup_activity.name for lookup_activity in upstream_lookups] + [for_each_activity.name]
 
         results.append(
             DetectedMotif(
@@ -851,32 +835,32 @@ def _detect_file_existence_validation(
     - IfCondition downstream
     """
     results: list[DetectedMotif] = []
-    get_metadata_acts = _activities_of_type(activities, "GetMetadata", claimed)
+    get_metadata_activities = _activities_of_type(activities, "GetMetadata", claimed)
 
-    for gm in get_metadata_acts:
-        tp_text = _type_props_text(gm)
+    for get_metadata_activity in get_metadata_activities:
+        type_properties_text = _type_props_text(get_metadata_activity)
         # Must check for existence
-        if not _has_keyword(tp_text, "exists"):
+        if not _has_keyword(type_properties_text, "exists"):
             continue
 
         # Find downstream IfCondition
         downstream_if: AdfActivity | None = None
-        for act in activities:
-            if act.name in claimed:
+        for activity in activities:
+            if activity.name in claimed:
                 continue
-            if act.type == "IfCondition" and _depends_on(act, gm.name):
-                downstream_if = act
+            if activity.type == "IfCondition" and _depends_on(activity, get_metadata_activity.name):
+                downstream_if = activity
                 break
 
         if downstream_if is None:
             continue
 
         notes = [
-            f"GetMetadata '{gm.name}' checks file existence",
+            f"GetMetadata '{get_metadata_activity.name}' checks file existence",
             f"IfCondition '{downstream_if.name}' gates on the result",
         ]
 
-        matched = [gm.name, downstream_if.name]
+        matched = [get_metadata_activity.name, downstream_if.name]
 
         results.append(
             DetectedMotif(
@@ -905,26 +889,26 @@ def _detect_scd_type_2(
       or the name/description hints at SCD
     """
     results: list[DetectedMotif] = []
-    dataflow_acts = _activities_of_type(activities, "ExecuteDataFlow", claimed)
+    dataflow_activities = _activities_of_type(activities, "ExecuteDataFlow", claimed)
 
-    for df_act in dataflow_acts:
+    for dataflow_activity in dataflow_activities:
         # Find upstream Copy
         upstream_copies: list[AdfActivity] = []
-        for name in _get_upstream_names(df_act):
-            act = by_name.get(name)
-            if act and act.type == "Copy" and act.name not in claimed:
-                upstream_copies.append(act)
+        for name in _get_upstream_names(dataflow_activity):
+            activity = by_name.get(name)
+            if activity and activity.type == "Copy" and activity.name not in claimed:
+                upstream_copies.append(activity)
 
         if not upstream_copies:
             continue
 
         notes: list[str] = []
-        tp_text = _type_props_text(df_act)
-        df_name = df_act.name.lower()
+        type_properties_text = _type_props_text(dataflow_activity)
+        dataflow_name = dataflow_activity.name.lower()
 
         # Check for SCD hints
         scd_evidence = _has_keyword(
-            tp_text + " " + df_name,
+            type_properties_text + " " + dataflow_name,
             "scd",
             "slowly",
             "dimension",
@@ -941,9 +925,9 @@ def _detect_scd_type_2(
             continue
 
         notes.append(f"Copy '{upstream_copies[0].name}' stages data")
-        notes.append(f"DataFlow '{df_act.name}' performs SCD Type 2 logic")
+        notes.append(f"DataFlow '{dataflow_activity.name}' performs SCD Type 2 logic")
 
-        matched = [c.name for c in upstream_copies] + [df_act.name]
+        matched = [copy.name for copy in upstream_copies] + [dataflow_activity.name]
 
         results.append(
             DetectedMotif(

@@ -263,8 +263,8 @@ def _dispatch_activity(
             context = context.with_activity(activity.name, result)
             return result, context
 
-        case atype if atype in TRANSLATOR_REGISTRY:
-            translator_fn = TRANSLATOR_REGISTRY[atype]
+        case activity_type if activity_type in TRANSLATOR_REGISTRY:
+            translator_fn = TRANSLATOR_REGISTRY[activity_type]
             result = translator_fn(activity, base_kwargs, context, definitions)
             context = context.with_activity(activity.name, result)
             return result, context
@@ -802,7 +802,7 @@ if __name__ == "__main__":
     output_dir: Path = args.output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    total_det = 0
+    total_deterministic = 0
     total_agentic = 0
     total_unsupported = 0
     all_gaps: list[dict[str, Any]] = []
@@ -812,7 +812,7 @@ if __name__ == "__main__":
             continue
 
         report = translate_pipeline(pipeline, definitions)
-        total_det += report.deterministic_count
+        total_deterministic += report.deterministic_count
         total_agentic += report.agentic_count
         total_unsupported += report.unsupported_count
 
@@ -844,10 +844,10 @@ if __name__ == "__main__":
         logger.info("Wrote %d gap(s) to %s", len(all_gaps), gaps_file)
 
     # Summary
-    total = total_det + total_agentic + total_unsupported
+    total = total_deterministic + total_agentic + total_unsupported
     print("\nTranslation Summary")
     print("===================")
-    print(f"Deterministic:    {total_det}")
+    print(f"Deterministic:    {total_deterministic}")
     print(f"Agentic:          {total_agentic}")
     print(f"Unsupported:      {total_unsupported}")
     print(f"Total:            {total}")
