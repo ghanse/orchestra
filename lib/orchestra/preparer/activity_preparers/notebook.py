@@ -124,24 +124,41 @@ def prepare(
     Returns:
         A PreparedActivity containing the notebook_task dict and placeholder notebook.
     """
-    sanitized = activity.task_key
-    notebook_rel_path = f"notebooks/{sanitized}.py"
-
-    # Resolve any remaining ADF expressions in notebook_path
+    # Resolve any remaining ADF expressions in notebook_path.
     resolved_path = _resolve_notebook_path(activity.notebook_path)
 
-    # Try to download the actual notebook from the workspace
+    task = _build_common_task_fields(activity)
+
+    # If the ADF activity already references an existing workspace notebook
+    # (an absolute path like /Shared/team/my_notebook), point the task at the
+    # existing path rather than copying the notebook into the bundle.  The
+    # original notebook is the source of truth; copying it into the bundle
+    # would create a divergent, stale copy.
+    if resolved_path.startswith("/"):
+        task["notebook_task"] = {"notebook_path": resolved_path}
+        if activity.base_parameters:
+            task["notebook_task"]["base_parameters"] = _resolve_base_parameters(
+                dict(activity.base_parameters),
+                variable_task_keys=variable_task_keys,
+            )
+        return PreparedActivity(task=task)
+
+    # Otherwise the ADF activity referenced a relative path that does not
+    # resolve to an absolute workspace location.  Synthesise a placeholder
+    # notebook in the bundle with snake_case naming derived from the
+    # activity name.
+    from orchestra.preparer.activity_preparers._naming import notebook_filename
+
+    notebook_filename_str = notebook_filename(activity.task_key, activity.name)
+    notebook_rel_path = f"notebooks/{notebook_filename_str}"
+
     from orchestra.preparer.workspace_downloader import download_notebook
 
     content = download_notebook(resolved_path)
     if content is None:
-        # Fall back to placeholder with export instructions
-        content = _notebook_placeholder(resolved_path, activity.name, f"{sanitized}.py")
+        content = _notebook_placeholder(resolved_path, activity.name, notebook_filename_str)
 
-    task = _build_common_task_fields(activity)
-    task["notebook_task"] = {
-        "notebook_path": f"../src/{notebook_rel_path}",
-    }
+    task["notebook_task"] = {"notebook_path": f"../src/{notebook_rel_path}"}
     if activity.base_parameters:
         task["notebook_task"]["base_parameters"] = _resolve_base_parameters(
             dict(activity.base_parameters),

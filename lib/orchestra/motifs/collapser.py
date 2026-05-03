@@ -134,7 +134,47 @@ def _build_motif_activity(
         confidence_notes=list(motif.confidence_notes),
         original_activities=original_activities,
         notebook_template=definition.notebook_template,
+        motif_config=_build_motif_config(definition.databricks_replacement, original_activities, task_key),
     )
+
+
+def _build_motif_config(
+    databricks_replacement: str,
+    original_activities: list[Activity],
+    motif_task_key: str,
+) -> dict[str, Any]:
+    """Extract motif-specific settings from the activities being collapsed.
+
+    For ``for_each_ingestion``: pulls the driving Lookup's SQL query and
+    source type so the generated notebook can fetch the iteration list
+    itself — otherwise the ``items`` widget has no upstream writer and the
+    motif is a guaranteed no-op.
+    """
+    # Local import avoids a module-load cycle (collapser → ir → collapser).
+    from orchestra.models.ir import CopyActivity, LookupActivity
+
+    if databricks_replacement != "for_each_ingestion":
+        return {}
+
+    lookup = next((activity for activity in original_activities if isinstance(activity, LookupActivity)), None)
+    copy = next((activity for activity in original_activities if isinstance(activity, CopyActivity)), None)
+
+    config: dict[str, Any] = {}
+    if lookup is not None:
+        if lookup.source_query:
+            config["lookup_query"] = lookup.source_query
+        if lookup.source_type:
+            config["lookup_source_type"] = lookup.source_type
+        config["lookup_scope"] = lookup.task_key or motif_task_key
+    if copy is not None:
+        sink_properties = copy.sink_properties or {}
+        sink_table = sink_properties.get("table") or sink_properties.get("tableName")
+        if sink_table:
+            config["sink_table"] = sink_table
+        if copy.source_type:
+            config["copy_source_type"] = copy.source_type
+        config["copy_scope"] = copy.task_key or motif_task_key
+    return config
 
 
 def _collect_external_dependencies(

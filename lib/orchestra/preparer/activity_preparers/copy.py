@@ -96,7 +96,8 @@ def prepare(activity: CopyActivity, *, scope: str = "") -> PreparedActivity:
         A PreparedActivity with the notebook_task, generated notebook, secret
         instructions, and setup tasks.
     """
-    notebook_name = f"{activity.task_key}.py"
+    from orchestra.preparer.activity_preparers._naming import notebook_filename
+    notebook_name = notebook_filename(activity.task_key, activity.name)
     notebook_path = f"notebooks/{notebook_name}"
 
     src_props = activity.source_properties or {}

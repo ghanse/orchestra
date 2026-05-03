@@ -153,10 +153,15 @@ class TestItem:
 
 class TestUtcNow:
     def test_utcnow_no_format(self):
+        # ``@utcNow()`` resolves to Python ``datetime.now(...).isoformat()``
+        # rather than the DAB ref ``{{job.start_time.iso_datetime}}`` so
+        # compositions like ``@formatDateTime(utcNow(), '...')`` chain
+        # correctly.  DAB does not evaluate ADF expressions, so wrapping a
+        # DAB ref in another ADF function would emit broken YAML.
         result = resolve_expression("@utcNow()", _context())
         assert result is not None
-        assert result.kind == "dab_ref"
-        assert result.value == "{{job.start_time.iso_datetime}}"
+        assert result.kind == "notebook_code"
+        assert result.value == "datetime.now(timezone.utc).isoformat()"
 
     def test_utcnow_with_format(self):
         result = resolve_expression("@utcNow('yyyy-MM-dd')", _context())
@@ -223,13 +228,16 @@ class TestUnsupported:
         result = resolve_expression("@xpath(xml('<r/>'), '/')", _context())
         assert result is None
 
-    def test_agentic_convert_from_utc(self):
+    def test_convert_from_utc_resolves_to_notebook_code(self):
         result = resolve_expression("@convertFromUtc('2024-01-01T00:00:00Z', 'Pacific Standard Time')", _context())
-        assert result is None
+        assert result is not None
+        assert result.kind == "notebook_code"
+        assert "ZoneInfo" in result.value
 
-    def test_agentic_ticks(self):
+    def test_ticks_resolves_to_notebook_code(self):
         result = resolve_expression("@ticks('2024-01-01T00:00:00Z')", _context())
-        assert result is None
+        assert result is not None
+        assert result.kind == "notebook_code"
 
 
 class TestStringFunctions:
@@ -735,9 +743,13 @@ class TestBackwardCompat:
         result = parse_expression_for_dab("@pipeline().RunId")
         assert result == "{{job.run_id}}"
 
-    def test_parse_expression_for_dab_returns_ref_for_utcnow(self):
+    def test_parse_expression_for_dab_returns_none_for_utcnow(self):
+        # ``@utcNow()`` now resolves to notebook_code so it composes correctly
+        # with other ADF time functions.  ``parse_expression_for_dab`` only
+        # returns dab_ref kinds, so utcNow now yields ``None`` (the caller
+        # routes through the notebook_code path instead).
         result = parse_expression_for_dab("@utcNow()")
-        assert result == "{{job.start_time.iso_datetime}}"
+        assert result is None
 
     def test_parse_expression_for_dab_returns_none_for_non_expression(self):
         result = parse_expression_for_dab("plain_string")

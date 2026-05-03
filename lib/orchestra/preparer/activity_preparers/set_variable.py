@@ -32,7 +32,8 @@ def prepare(activity: SetVariableActivity, *, scope: str = "") -> PreparedActivi
     Returns:
         A PreparedActivity with the notebook_task and generated notebook.
     """
-    notebook_name = f"{activity.task_key}.py"
+    from orchestra.preparer.activity_preparers._naming import notebook_filename
+    notebook_name = notebook_filename(activity.task_key, activity.name)
     notebook_path = f"notebooks/{notebook_name}"
     content = generate_set_variable_notebook(activity)
 
@@ -44,7 +45,11 @@ def prepare(activity: SetVariableActivity, *, scope: str = "") -> PreparedActivi
         # Safe to pass as a parameter -- DAB resolves refs at runtime
         base_parameters["value"] = activity.variable_value
 
-    # For notebook_code: do NOT put code in parameters; the notebook embeds it
+    # For notebook_code: the notebook body embeds the expression directly, but
+    # any `dbutils.widgets.get()` calls it produces need their values plumbed
+    # through base_parameters so DAB can resolve the corresponding refs.
+    for widget_name, dab_ref in activity.required_parameters.items():
+        base_parameters.setdefault(widget_name, dab_ref)
 
     task["notebook_task"] = {
         "notebook_path": f"../src/{notebook_path}",

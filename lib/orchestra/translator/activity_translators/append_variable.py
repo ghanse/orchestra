@@ -40,11 +40,13 @@ def translate(
     # Resolve via unified expression resolver
     expr_result = resolve_expression(value_raw, context)
 
+    required_parameters: dict[str, str] = {}
     if expr_result is not None:
         append_value = expr_result.value
         value_kind = expr_result.kind
         notebook_code = expr_result.value if expr_result.kind == "notebook_code" else None
         notebook_imports = list(expr_result.imports) if expr_result.kind == "notebook_code" else []
+        required_parameters = dict(expr_result.required_parameters)
     else:
         # Fall back to raw string representation
         append_value = value_raw if isinstance(value_raw, str) else str(value_raw)
@@ -59,6 +61,7 @@ def translate(
         value_kind=value_kind,
         notebook_code=notebook_code,
         notebook_imports=notebook_imports,
+        required_parameters=required_parameters,
     )
 
     # Register variable -> task_key mapping in context

@@ -47,7 +47,8 @@ def prepare(activity: WebActivity, *, scope: str = "") -> PreparedActivity:
     Returns:
         A PreparedActivity with the notebook_task, generated notebook, and secret instructions.
     """
-    notebook_name = f"{activity.task_key}.py"
+    from orchestra.preparer.activity_preparers._naming import notebook_filename
+    notebook_name = notebook_filename(activity.task_key, activity.name)
     notebook_path = f"notebooks/{notebook_name}"
     content = generate_web_activity_notebook(activity, scope=scope)
 

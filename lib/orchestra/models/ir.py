@@ -24,11 +24,16 @@ class ExpressionResult:
       - "notebook_code": Python code that must go in the notebook body
     value: the resolved value (literal, DAB ref template, or Python code)
     imports: Python import statements needed (only for notebook_code)
+    required_parameters: Widget-name -> DAB ref mapping for every
+      ``dbutils.widgets.get(...)`` call emitted by ``notebook_code``.
+      Downstream preparers should thread these into ``base_parameters`` so
+      DAB resolves the refs at job runtime.
     """
 
     kind: str  # "literal", "dab_ref", "notebook_code"
     value: str
     imports: list[str] = field(default_factory=list)
+    required_parameters: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(slots=True, kw_only=True)
@@ -67,6 +72,11 @@ class Activity:
     min_retry_interval_millis: int | None = None
     depends_on: list[Dependency] | None = None
     cluster: dict[str, Any] | None = None
+    # Widget-name → DAB-ref mapping for every `dbutils.widgets.get()` call
+    # that shows up in any notebook_code the translator produced for this
+    # activity.  Preparers thread these into ``base_parameters`` so DAB
+    # resolves the refs at job runtime.
+    required_parameters: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(slots=True, kw_only=True)
@@ -93,6 +103,15 @@ class CopyActivity(Activity):
         sink_type: Sink dataset type string.
         source_properties: Parsed source format/connection options.
         sink_properties: Parsed sink format/connection options.
+        sink_dataset_type: ADF dataset ``type`` of the sink (e.g. ``DelimitedText``,
+            ``Parquet``, ``Json``, ``AzureSqlTable``).  Captured from the activity's
+            output dataset so the code generator can write to the actual target
+            format instead of always defaulting to Delta.
+        sink_format: Spark format string derived from ``sink_dataset_type``
+            (``csv``, ``parquet``, ``json``, ``delta``, ...).  ``None`` if the
+            target is a table, not a file.
+        sink_resolved_path: Resolved abfss:// or table location for the sink,
+            mirroring ``source_properties.resolved_path`` for consistency.
         column_mapping: Column-level source-to-sink mappings.
     """
 
@@ -100,6 +119,9 @@ class CopyActivity(Activity):
     sink_type: str | None = None
     source_properties: dict[str, Any] | None = None
     sink_properties: dict[str, Any] | None = None
+    sink_dataset_type: str | None = None
+    sink_format: str | None = None
+    sink_resolved_path: str | None = None
     column_mapping: list[dict[str, str]] | None = None
 
 
@@ -412,6 +434,12 @@ class MotifActivity(Activity):
     confidence_notes: list[str] = field(default_factory=list)
     original_activities: list[Activity] = field(default_factory=list)
     notebook_template: str | None = None
+    # Small dict of motif-specific settings extracted from the collapsed
+    # activities — e.g. ``{"lookup_query": ..., "lookup_scope": ...}`` for
+    # ``for_each_ingestion``.  Used by the notebook generator so the motif
+    # can fetch its input list itself instead of requiring an ``items``
+    # widget that has no upstream writer.
+    motif_config: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True, kw_only=True)

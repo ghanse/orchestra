@@ -469,30 +469,42 @@ def _parse_adf_timeout(timeout_str: str) -> int | None:
 def _extract_cluster_config(ls_properties: dict[str, Any]) -> dict[str, Any] | None:
     """Extract Databricks cluster configuration from a linked-service properties dict.
 
+    Reads the AzureDatabricks linked service's ``newCluster*`` fields.  Two
+    JSON shapes show up in practice: classic ARM exports nest the cluster
+    config under ``typeProperties``, while ``az datafactory linked-service
+    show`` returns the same fields flat at the top level of ``properties``.
+    We try the nested form first and fall back to the flat one so the
+    translator catches the cluster spec from both.
+
     Args:
         ls_properties: Full properties bag from the linked service JSON.
 
     Returns:
-        Cluster configuration dict, or ``None`` if not a Databricks linked service.
+        Cluster configuration dict, or ``None`` if no Databricks cluster
+        details are present.
     """
-    type_props = ls_properties.get("typeProperties", {})
-    if not type_props:
-        return None
+    nested = ls_properties.get("typeProperties") or {}
+    # Merge: nested values win over flat ones when both exist (matches ARM
+    # template precedence).
+    fields: dict[str, Any] = {**ls_properties, **nested}
 
     config: dict[str, Any] = {}
 
-    # Existing cluster ID
-    existing_cluster_id = type_props.get("existingClusterId")
+    existing_cluster_id = fields.get("existingClusterId")
     if existing_cluster_id:
         config["existing_cluster_id"] = existing_cluster_id
 
-    # New cluster configuration
-    new_cluster = type_props.get("newClusterVersion") or type_props.get("newClusterSparkVersion")
+    new_cluster = fields.get("newClusterVersion") or fields.get("newClusterSparkVersion")
     if new_cluster:
         config["spark_version"] = new_cluster
-        config["num_workers"] = type_props.get("newClusterNumOfWorker", 1)
-        config["node_type_id"] = type_props.get("newClusterNodeType", "Standard_DS3_v2")
-        spark_conf = type_props.get("newClusterSparkConf")
+        # newClusterNumOfWorker is sometimes a string from az exports.
+        num_workers_raw = fields.get("newClusterNumOfWorker", 1)
+        try:
+            config["num_workers"] = int(num_workers_raw)
+        except (TypeError, ValueError):
+            config["num_workers"] = num_workers_raw
+        config["node_type_id"] = fields.get("newClusterNodeType", "Standard_DS3_v2")
+        spark_conf = fields.get("newClusterSparkConf")
         if spark_conf:
             config["spark_conf"] = spark_conf
 
@@ -593,6 +605,12 @@ def _activity_extra_fields(activity: Activity) -> dict[str, Any]:
                 extra["source_properties"] = activity.source_properties
             if activity.sink_properties:
                 extra["sink_properties"] = activity.sink_properties
+            if activity.sink_dataset_type:
+                extra["sink_dataset_type"] = activity.sink_dataset_type
+            if activity.sink_format:
+                extra["sink_format"] = activity.sink_format
+            if activity.sink_resolved_path:
+                extra["sink_resolved_path"] = activity.sink_resolved_path
             if activity.column_mapping:
                 extra["column_mapping"] = activity.column_mapping
         case ForEachActivity():
@@ -620,6 +638,8 @@ def _activity_extra_fields(activity: Activity) -> dict[str, Any]:
                 extra["notebook_code"] = activity.notebook_code
             if activity.notebook_imports:
                 extra["notebook_imports"] = activity.notebook_imports
+            if activity.required_parameters:
+                extra["required_parameters"] = dict(activity.required_parameters)
         case FilterActivity():
             extra["items_expression"] = activity.items_expression
             extra["condition_expression"] = activity.condition_expression
@@ -631,6 +651,8 @@ def _activity_extra_fields(activity: Activity) -> dict[str, Any]:
                 extra["notebook_code"] = activity.notebook_code
             if activity.notebook_imports:
                 extra["notebook_imports"] = activity.notebook_imports
+            if activity.required_parameters:
+                extra["required_parameters"] = dict(activity.required_parameters)
         case SwitchActivity():
             extra["on_expression"] = activity.on_expression
             extra["cases"] = [
@@ -684,6 +706,8 @@ def _activity_extra_fields(activity: Activity) -> dict[str, Any]:
                 extra["confidence_notes"] = activity.confidence_notes
             if activity.notebook_template:
                 extra["notebook_template"] = activity.notebook_template
+            if activity.motif_config:
+                extra["motif_config"] = activity.motif_config
         case PlaceholderActivity():
             extra["original_type"] = activity.original_type
             extra["comment"] = activity.comment

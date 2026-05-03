@@ -389,7 +389,17 @@ def _resolve_variable(
 
 
 def _resolve_utcnow(expr: str) -> ExpressionResult | None:
-    """Resolve ``utcNow()`` or ``utcNow('format')`` -> notebook_code."""
+    """Resolve ``utcNow()`` or ``utcNow('format')`` -> notebook_code.
+
+    Always returns ``notebook_code`` (rather than a job-trigger DAB ref)
+    so the surrounding Python composes naturally: e.g.
+    ``formatDateTime(utcnow(),'yyyy-MM-dd')`` becomes
+    ``datetime.now(timezone.utc).strftime('%Y-%m-%d')`` instead of a
+    widget round-trip via ``{{job.start_time.iso_datetime}}``.  The
+    standalone form returns ``...isoformat()`` so callers expecting a
+    string still work; downstream time-function handlers detect and
+    strip that wrapper to keep the datetime object live.
+    """
     match = _UTCNOW_RE.match(expr)
     if match is None:
         return None
@@ -401,7 +411,11 @@ def _resolve_utcnow(expr: str) -> ExpressionResult | None:
             value=f"datetime.now(timezone.utc).strftime('{python_format}')",
             imports=["from datetime import datetime, timezone"],
         )
-    return ExpressionResult(kind="dab_ref", value="{{job.start_time.iso_datetime}}")
+    return ExpressionResult(
+        kind="notebook_code",
+        value="datetime.now(timezone.utc).isoformat()",
+        imports=["from datetime import datetime, timezone"],
+    )
 
 
 def _convert_date_format(adf_format: str) -> str:
@@ -441,6 +455,7 @@ def _resolve_concat(
 
     all_imports: list[str] = []
     code_parts: list[str] = []
+    all_required_parameters: dict[str, str] = {}
 
     for part in parts:
         part = part.strip()
@@ -456,15 +471,23 @@ def _resolve_concat(
                 code_parts.append(repr(sub_result.value))
             elif sub_result.kind == "dab_ref":
                 code_parts.append(_dab_ref_to_widget_code(sub_result.value))
+                widget_name, dab_ref = _required_parameter_for_ref(sub_result.value)
+                all_required_parameters.setdefault(widget_name, dab_ref)
             elif sub_result.kind == "notebook_code":
                 code_parts.append(f"str({sub_result.value})")
                 all_imports.extend(sub_result.imports)
+                all_required_parameters.update(sub_result.required_parameters)
 
     if not code_parts:
         return None
 
     value = " + ".join(code_parts)
-    return ExpressionResult(kind="notebook_code", value=value, imports=list(dict.fromkeys(all_imports)))
+    return ExpressionResult(
+        kind="notebook_code",
+        value=value,
+        imports=list(dict.fromkeys(all_imports)),
+        required_parameters=all_required_parameters,
+    )
 
 
 def _dab_ref_to_widget_code(dab_ref: str) -> str:
@@ -472,10 +495,28 @@ def _dab_ref_to_widget_code(dab_ref: str) -> str:
 
     The preparer will ensure the DAB ref is passed as a named parameter,
     so the notebook can read it via ``dbutils.widgets.get(...)``.
+
+    Use :func:`_required_parameter_for_ref` on the same ref when building
+    an :class:`ExpressionResult` so the caller can plumb the refs through
+    ``base_parameters``.
+    """
+    widget_name, _ = _required_parameter_for_ref(dab_ref)
+    return f"dbutils.widgets.get('{widget_name}')"
+
+
+def _required_parameter_for_ref(dab_ref: str) -> tuple[str, str]:
+    """Return ``(widget_name, dab_ref)`` for a DAB dynamic value reference.
+
+    ``widget_name`` is derived from the ref's terminal path component and is
+    what the notebook will read with ``dbutils.widgets.get(widget_name)``.
+    Callers record this mapping in :attr:`ExpressionResult.required_parameters`
+    so a downstream preparer can declare ``base_parameters[widget_name] =
+    dab_ref`` on the generated task, ensuring DAB resolves the ref before
+    the notebook runs.
     """
     inner = dab_ref.strip("{}")
-    param_name = inner.split(".")[-1]
-    return f"dbutils.widgets.get('{param_name}')"
+    widget_name = inner.split(".")[-1]
+    return widget_name, dab_ref
 
 
 def _split_concat_args(inner: str) -> list[str]:
@@ -580,7 +621,22 @@ def _resolve_function_call(
                 return None
             resolved_args.append(sub_result)
 
-    return handler(resolved_args)
+    handler_result = handler(resolved_args)
+    # Auto-propagate required_parameters from args onto notebook_code results
+    # so preparers can thread DAB refs into base_parameters even for handlers
+    # that pre-date the required_parameters contract.
+    if handler_result is not None and handler_result.kind == "notebook_code":
+        extra_parameters = _collect_required_parameters(*resolved_args)
+        if extra_parameters:
+            merged = dict(extra_parameters)
+            merged.update(handler_result.required_parameters)
+            handler_result = ExpressionResult(
+                kind=handler_result.kind,
+                value=handler_result.value,
+                imports=handler_result.imports,
+                required_parameters=merged,
+            )
+    return handler_result
 
 
 def _is_numeric(text: str) -> bool:
@@ -605,12 +661,71 @@ def _arg_to_code(arg: ExpressionResult) -> str:
     return repr(arg.value)
 
 
+def _datetime_arg_code(arg: ExpressionResult) -> str:
+    """Return Python code that produces a ``datetime`` object from *arg*.
+
+    Most ADF time functions (formatDateTime, addDays, dayOfMonth, ...)
+    take a timestamp and need to wrap it in ``datetime.fromisoformat(...)``
+    to operate on it.  When the arg is itself the result of another time
+    function — most commonly ``utcnow()`` returning
+    ``datetime.now(timezone.utc).isoformat()`` — we strip the trailing
+    ``.isoformat()`` so the chain stays as one ``datetime`` expression
+    instead of round-tripping through a string.
+
+    Examples:
+        utcNow()                                    -> ``datetime.now(timezone.utc)``
+        '2024-01-01T00:00:00'                       -> ``datetime.fromisoformat('2024-01-01T00:00:00')``
+        @pipeline().parameters.start_date           -> ``datetime.fromisoformat(dbutils.widgets.get('start_date'))``
+    """
+    if arg.kind == "notebook_code":
+        # If the value already produces a datetime object that was just
+        # converted to ISO via .isoformat(), drop the conversion.
+        if arg.value.endswith(".isoformat()"):
+            return arg.value[: -len(".isoformat()")]
+        # If the value already ends in .strftime(...), the upstream caller
+        # was using it as a string; we still need a datetime, so parse it.
+    return f"datetime.fromisoformat({_arg_to_code(arg)})"
+
+
 def _collect_imports(*args: ExpressionResult) -> list[str]:
     """Collect unique imports from resolved arguments."""
     imports: list[str] = []
     for arg in args:
         imports.extend(arg.imports)
     return list(dict.fromkeys(imports))
+
+
+def _collect_required_parameters(*args: ExpressionResult) -> dict[str, str]:
+    """Collect widget → DAB ref mappings across resolved arguments.
+
+    Merges ``required_parameters`` from each arg and, for ``dab_ref`` args
+    that weren't already tracked, adds the ref under its widget name so the
+    generated ``dbutils.widgets.get(...)`` calls emitted by ``_arg_to_code``
+    can be answered by declared ``base_parameters``.
+    """
+    merged: dict[str, str] = {}
+    for arg in args:
+        merged.update(arg.required_parameters)
+        if arg.kind == "dab_ref":
+            widget_name, dab_ref = _required_parameter_for_ref(arg.value)
+            merged.setdefault(widget_name, dab_ref)
+    return merged
+
+
+def _result_from_args(value: str, args: list[ExpressionResult]) -> ExpressionResult:
+    """Build a notebook_code result that carries through imports and widget refs.
+
+    Used by every ``_handle_*`` that synthesises Python code from argument
+    expressions.  Centralising this ensures ``required_parameters`` (the
+    widget-name → DAB-ref map) is consistently propagated up the call tree
+    so preparers can thread the refs into ``base_parameters``.
+    """
+    return ExpressionResult(
+        kind="notebook_code",
+        value=value,
+        imports=_collect_imports(*args),
+        required_parameters=_collect_required_parameters(*args),
+    )
 
 
 def _handle_concat(args: list[ExpressionResult]) -> ExpressionResult | None:
@@ -1116,12 +1231,24 @@ def _handle_json(args: list[ExpressionResult]) -> ExpressionResult | None:
 
 
 def _handle_string(args: list[ExpressionResult]) -> ExpressionResult | None:
-    """string(value) -> str(value)"""
+    """string(value) -> str(value).
+
+    When the argument is already a DAB dynamic ref (which evaluates to a
+    string at runtime), the ``str()`` wrapper is redundant and forces the
+    result into ``notebook_code`` territory — meaning the surrounding
+    SetVariable/AppendVariable will embed ``dbutils.widgets.get(...)`` calls
+    that can't be populated without explicit base_parameter threading.
+    Preserve the ``dab_ref`` kind in that case so the caller can pass the
+    ref directly via ``base_parameters["value"]``.
+    """
     if len(args) != 1:
         return None
+    sole_arg = args[0]
+    if sole_arg.kind == "dab_ref":
+        return sole_arg
     return ExpressionResult(
         kind="notebook_code",
-        value=f"str({_arg_to_code(args[0])})",
+        value=f"str({_arg_to_code(sole_arg)})",
         imports=_collect_imports(*args),
     )
 
@@ -1233,12 +1360,12 @@ def _handle_add_days(args: list[ExpressionResult]) -> ExpressionResult | None:
     """addDays(ts, days, fmt?) -> (datetime.fromisoformat(ts) + timedelta(days=days)).strftime(fmt)"""
     if len(args) < 2 or len(args) > 3:
         return None
-    timestamp = _arg_to_code(args[0])
+    timestamp_dt = _datetime_arg_code(args[0])
     days = _arg_to_code(args[1])
     format_string = _get_format_arg(args, 2)
     return ExpressionResult(
         kind="notebook_code",
-        value=f"(datetime.fromisoformat({timestamp}) + timedelta(days={days})).strftime({format_string})",
+        value=f"({timestamp_dt} + timedelta(days={days})).strftime({format_string})",
         imports=_DATETIME_IMPORTS + _collect_imports(*args),
     )
 
@@ -1247,12 +1374,12 @@ def _handle_add_hours(args: list[ExpressionResult]) -> ExpressionResult | None:
     """addHours(ts, hours, fmt?) -> (datetime.fromisoformat(ts) + timedelta(hours=hours)).strftime(fmt)"""
     if len(args) < 2 or len(args) > 3:
         return None
-    timestamp = _arg_to_code(args[0])
+    timestamp_dt = _datetime_arg_code(args[0])
     hours = _arg_to_code(args[1])
     format_string = _get_format_arg(args, 2)
     return ExpressionResult(
         kind="notebook_code",
-        value=f"(datetime.fromisoformat({timestamp}) + timedelta(hours={hours})).strftime({format_string})",
+        value=f"({timestamp_dt} + timedelta(hours={hours})).strftime({format_string})",
         imports=_DATETIME_IMPORTS + _collect_imports(*args),
     )
 
@@ -1261,12 +1388,12 @@ def _handle_add_minutes(args: list[ExpressionResult]) -> ExpressionResult | None
     """addMinutes(ts, minutes, fmt?)"""
     if len(args) < 2 or len(args) > 3:
         return None
-    timestamp = _arg_to_code(args[0])
+    timestamp_dt = _datetime_arg_code(args[0])
     minutes = _arg_to_code(args[1])
     format_string = _get_format_arg(args, 2)
     return ExpressionResult(
         kind="notebook_code",
-        value=f"(datetime.fromisoformat({timestamp}) + timedelta(minutes={minutes})).strftime({format_string})",
+        value=f"({timestamp_dt} + timedelta(minutes={minutes})).strftime({format_string})",
         imports=_DATETIME_IMPORTS + _collect_imports(*args),
     )
 
@@ -1275,12 +1402,12 @@ def _handle_add_seconds(args: list[ExpressionResult]) -> ExpressionResult | None
     """addSeconds(ts, seconds, fmt?)"""
     if len(args) < 2 or len(args) > 3:
         return None
-    timestamp = _arg_to_code(args[0])
+    timestamp_dt = _datetime_arg_code(args[0])
     seconds = _arg_to_code(args[1])
     format_string = _get_format_arg(args, 2)
     return ExpressionResult(
         kind="notebook_code",
-        value=f"(datetime.fromisoformat({timestamp}) + timedelta(seconds={seconds})).strftime({format_string})",
+        value=f"({timestamp_dt} + timedelta(seconds={seconds})).strftime({format_string})",
         imports=_DATETIME_IMPORTS + _collect_imports(*args),
     )
 
@@ -1289,7 +1416,7 @@ def _handle_add_to_time(args: list[ExpressionResult]) -> ExpressionResult | None
     """addToTime(ts, interval, unit, fmt?) -> datetime + timedelta."""
     if len(args) < 3 or len(args) > 4:
         return None
-    timestamp = _arg_to_code(args[0])
+    timestamp_dt = _datetime_arg_code(args[0])
     interval = _arg_to_code(args[1])
     unit_str = args[2].value if args[2].kind == "literal" else None
     if unit_str is None:
@@ -1301,7 +1428,7 @@ def _handle_add_to_time(args: list[ExpressionResult]) -> ExpressionResult | None
     return ExpressionResult(
         kind="notebook_code",
         value=(
-            f"(datetime.fromisoformat({timestamp})"
+            f"({timestamp_dt}"
             f" + timedelta({timedelta_keyword}={interval})).strftime({format_string})"
         ),
         imports=_DATETIME_IMPORTS + _collect_imports(*args),
@@ -1309,34 +1436,34 @@ def _handle_add_to_time(args: list[ExpressionResult]) -> ExpressionResult | None
 
 
 def _handle_day_of_month(args: list[ExpressionResult]) -> ExpressionResult | None:
-    """dayOfMonth(ts) -> datetime.fromisoformat(ts).day"""
+    """dayOfMonth(ts) -> <datetime>.day"""
     if len(args) != 1:
         return None
     return ExpressionResult(
         kind="notebook_code",
-        value=f"datetime.fromisoformat({_arg_to_code(args[0])}).day",
+        value=f"{_datetime_arg_code(args[0])}.day",
         imports=_DATETIME_IMPORTS + _collect_imports(*args),
     )
 
 
 def _handle_day_of_week(args: list[ExpressionResult]) -> ExpressionResult | None:
-    """dayOfWeek(ts) -> datetime.fromisoformat(ts).isoweekday() % 7 (ADF: 0=Sunday)"""
+    """dayOfWeek(ts) -> <datetime>.isoweekday() % 7 (ADF: 0=Sunday)"""
     if len(args) != 1:
         return None
     return ExpressionResult(
         kind="notebook_code",
-        value=f"datetime.fromisoformat({_arg_to_code(args[0])}).isoweekday() % 7",
+        value=f"{_datetime_arg_code(args[0])}.isoweekday() % 7",
         imports=_DATETIME_IMPORTS + _collect_imports(*args),
     )
 
 
 def _handle_day_of_year(args: list[ExpressionResult]) -> ExpressionResult | None:
-    """dayOfYear(ts) -> datetime.fromisoformat(ts).timetuple().tm_yday"""
+    """dayOfYear(ts) -> <datetime>.timetuple().tm_yday"""
     if len(args) != 1:
         return None
     return ExpressionResult(
         kind="notebook_code",
-        value=f"datetime.fromisoformat({_arg_to_code(args[0])}).timetuple().tm_yday",
+        value=f"{_datetime_arg_code(args[0])}.timetuple().tm_yday",
         imports=_DATETIME_IMPORTS + _collect_imports(*args),
     )
 
@@ -1345,17 +1472,17 @@ def _handle_format_date_time(args: list[ExpressionResult]) -> ExpressionResult |
     """formatDateTime(ts, fmt?) -> datetime.fromisoformat(ts).strftime(converted_fmt)"""
     if len(args) < 1 or len(args) > 2:
         return None
-    timestamp = _arg_to_code(args[0])
+    timestamp_dt = _datetime_arg_code(args[0])
     if len(args) == 2 and args[1].kind == "literal":
         python_format = _convert_date_format(args[1].value)
         return ExpressionResult(
             kind="notebook_code",
-            value=f"datetime.fromisoformat({timestamp}).strftime('{python_format}')",
+            value=f"{timestamp_dt}.strftime('{python_format}')",
             imports=_DATETIME_IMPORTS + _collect_imports(*args),
         )
     return ExpressionResult(
         kind="notebook_code",
-        value=f"datetime.fromisoformat({timestamp}).isoformat()",
+        value=f"{timestamp_dt}.isoformat()",
         imports=_DATETIME_IMPORTS + _collect_imports(*args),
     )
 
@@ -1402,12 +1529,12 @@ def _handle_start_of_day(args: list[ExpressionResult]) -> ExpressionResult | Non
     """startOfDay(ts, fmt?) -> datetime.fromisoformat(ts).replace(hour=0,...).strftime(fmt)"""
     if len(args) < 1 or len(args) > 2:
         return None
-    timestamp = _arg_to_code(args[0])
+    timestamp_dt = _datetime_arg_code(args[0])
     format_string = _get_format_arg(args, 1)
     return ExpressionResult(
         kind="notebook_code",
         value=(
-            f"datetime.fromisoformat({timestamp})"
+            f"{timestamp_dt}"
             f".replace(hour=0, minute=0, second=0, microsecond=0)"
             f".strftime({format_string})"
         ),
@@ -1419,12 +1546,12 @@ def _handle_start_of_hour(args: list[ExpressionResult]) -> ExpressionResult | No
     """startOfHour(ts, fmt?) -> datetime.fromisoformat(ts).replace(minute=0,...).strftime(fmt)"""
     if len(args) < 1 or len(args) > 2:
         return None
-    timestamp = _arg_to_code(args[0])
+    timestamp_dt = _datetime_arg_code(args[0])
     format_string = _get_format_arg(args, 1)
     return ExpressionResult(
         kind="notebook_code",
         value=(
-            f"datetime.fromisoformat({timestamp}).replace(minute=0, second=0, microsecond=0).strftime({format_string})"
+            f"{timestamp_dt}.replace(minute=0, second=0, microsecond=0).strftime({format_string})"
         ),
         imports=_DATETIME_IMPORTS + _collect_imports(*args),
     )
@@ -1434,12 +1561,12 @@ def _handle_start_of_month(args: list[ExpressionResult]) -> ExpressionResult | N
     """startOfMonth(ts, fmt?) -> datetime.fromisoformat(ts).replace(day=1,...).strftime(fmt)"""
     if len(args) < 1 or len(args) > 2:
         return None
-    timestamp = _arg_to_code(args[0])
+    timestamp_dt = _datetime_arg_code(args[0])
     format_string = _get_format_arg(args, 1)
     return ExpressionResult(
         kind="notebook_code",
         value=(
-            f"datetime.fromisoformat({timestamp})"
+            f"{timestamp_dt}"
             f".replace(day=1, hour=0, minute=0, second=0, microsecond=0)"
             f".strftime({format_string})"
         ),
@@ -1451,7 +1578,7 @@ def _handle_subtract_from_time(args: list[ExpressionResult]) -> ExpressionResult
     """subtractFromTime(ts, interval, unit, fmt?) -> datetime - timedelta."""
     if len(args) < 3 or len(args) > 4:
         return None
-    timestamp = _arg_to_code(args[0])
+    timestamp_dt = _datetime_arg_code(args[0])
     interval = _arg_to_code(args[1])
     unit_str = args[2].value if args[2].kind == "literal" else None
     if unit_str is None:
@@ -1463,7 +1590,7 @@ def _handle_subtract_from_time(args: list[ExpressionResult]) -> ExpressionResult
     return ExpressionResult(
         kind="notebook_code",
         value=(
-            f"(datetime.fromisoformat({timestamp})"
+            f"({timestamp_dt}"
             f" - timedelta({timedelta_keyword}={interval})).strftime({format_string})"
         ),
         imports=_DATETIME_IMPORTS + _collect_imports(*args),
@@ -1479,6 +1606,79 @@ def _get_format_arg(args: list[ExpressionResult], idx: int) -> str:
         python_format = _convert_date_format(args[idx].value)
         return repr(python_format)
     return "'%Y-%m-%dT%H:%M:%SZ'"
+
+
+_ZONEINFO_IMPORTS = ["from datetime import datetime, timezone", "from zoneinfo import ZoneInfo"]
+
+
+def _handle_convert_from_utc(args: list[ExpressionResult]) -> ExpressionResult | None:
+    """convertFromUtc(timestamp, destinationTimeZone, fmt?)
+
+    Reads a UTC ``timestamp`` and returns it formatted in the
+    ``destinationTimeZone``.  ADF accepts both IANA names
+    (``America/Los_Angeles``) and Windows time-zone IDs
+    (``Pacific Standard Time``); we pass the literal through to
+    Python's ``zoneinfo.ZoneInfo`` and let it fail at runtime when
+    the name isn't recognised, since a baked-in mapping table would
+    bit-rot quickly.
+    """
+    if len(args) < 2 or len(args) > 3:
+        return None
+    src = _datetime_arg_code(args[0])
+    dest_tz = _arg_to_code(args[1])
+    fmt = _get_format_arg(args, 2)
+    return ExpressionResult(
+        kind="notebook_code",
+        value=f"{src}.replace(tzinfo=timezone.utc).astimezone(ZoneInfo({dest_tz})).strftime({fmt})",
+        imports=_ZONEINFO_IMPORTS + _collect_imports(*args),
+    )
+
+
+def _handle_convert_to_utc(args: list[ExpressionResult]) -> ExpressionResult | None:
+    """convertToUtc(timestamp, sourceTimeZone, fmt?) -> UTC datetime."""
+    if len(args) < 2 or len(args) > 3:
+        return None
+    src = _datetime_arg_code(args[0])
+    src_tz = _arg_to_code(args[1])
+    fmt = _get_format_arg(args, 2)
+    return ExpressionResult(
+        kind="notebook_code",
+        value=f"{src}.replace(tzinfo=ZoneInfo({src_tz})).astimezone(timezone.utc).strftime({fmt})",
+        imports=_ZONEINFO_IMPORTS + _collect_imports(*args),
+    )
+
+
+def _handle_convert_time_zone(args: list[ExpressionResult]) -> ExpressionResult | None:
+    """convertTimeZone(timestamp, sourceTimeZone, destinationTimeZone, fmt?)."""
+    if len(args) < 3 or len(args) > 4:
+        return None
+    src = _datetime_arg_code(args[0])
+    src_tz = _arg_to_code(args[1])
+    dst_tz = _arg_to_code(args[2])
+    fmt = _get_format_arg(args, 3)
+    return ExpressionResult(
+        kind="notebook_code",
+        value=(
+            f"{src}.replace(tzinfo=ZoneInfo({src_tz}))"
+            f".astimezone(ZoneInfo({dst_tz})).strftime({fmt})"
+        ),
+        imports=_ZONEINFO_IMPORTS + _collect_imports(*args),
+    )
+
+
+def _handle_ticks(args: list[ExpressionResult]) -> ExpressionResult | None:
+    """ticks(timestamp) -> .NET FILETIME ticks (100-ns intervals since 0001-01-01)."""
+    if len(args) != 1:
+        return None
+    src = _datetime_arg_code(args[0])
+    return ExpressionResult(
+        kind="notebook_code",
+        value=(
+            f"int(({src} - datetime(1, 1, 1, tzinfo=timezone.utc))"
+            f".total_seconds() * 10_000_000)"
+        ),
+        imports=_DATETIME_IMPORTS + _collect_imports(*args),
+    )
 
 
 _FUNCTION_HANDLERS: dict[str, Callable[[list[ExpressionResult]], ExpressionResult | None]] = {
@@ -1551,9 +1751,9 @@ _FUNCTION_HANDLERS: dict[str, Callable[[list[ExpressionResult]], ExpressionResul
     "addMinutes": _handle_add_minutes,
     "addSeconds": _handle_add_seconds,
     "addToTime": _handle_add_to_time,
-    "convertFromUtc": _handle_agentic,
-    "convertTimeZone": _handle_agentic,
-    "convertToUtc": _handle_agentic,
+    "convertFromUtc": _handle_convert_from_utc,
+    "convertTimeZone": _handle_convert_time_zone,
+    "convertToUtc": _handle_convert_to_utc,
     "dayOfMonth": _handle_day_of_month,
     "dayOfWeek": _handle_day_of_week,
     "dayOfYear": _handle_day_of_year,
@@ -1564,7 +1764,7 @@ _FUNCTION_HANDLERS: dict[str, Callable[[list[ExpressionResult]], ExpressionResul
     "startOfHour": _handle_start_of_hour,
     "startOfMonth": _handle_start_of_month,
     "subtractFromTime": _handle_subtract_from_time,
-    "ticks": _handle_agentic,
+    "ticks": _handle_ticks,
     # utcNow is intentionally absent -- handled by _resolve_utcnow upstream
     # in resolve_expression() before the generic dispatch is reached.
 }

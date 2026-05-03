@@ -69,14 +69,12 @@ class TestNotebookPreparer:
         assert isinstance(prepared, PreparedActivity)
         assert prepared.task["task_key"] == "run_nb"
         assert "notebook_task" in prepared.task
-        # Path is now bundle-relative
-        assert prepared.task["notebook_task"]["notebook_path"] == "../src/notebooks/run_nb.py"
+        # Existing notebook at an absolute workspace path is referenced
+        # in place -- no placeholder is synthesized into the bundle src
+        # tree because the notebook already exists in the workspace.
+        assert prepared.task["notebook_task"]["notebook_path"] == "/Shared/ETL/transform"
         assert prepared.task["notebook_task"]["base_parameters"] == {"env": "dev"}
-        # Placeholder notebook is now generated
-        assert len(prepared.notebooks) == 1
-        assert prepared.notebooks[0].relative_path == "notebooks/run_nb.py"
-        assert "Export notebook from workspace" in prepared.notebooks[0].content
-        assert "/Shared/ETL/transform" in prepared.notebooks[0].content
+        assert prepared.notebooks == []
 
     def test_prepare_notebook_no_params(self):
         activity = NotebookActivity(
@@ -86,8 +84,8 @@ class TestNotebookPreparer:
         )
         prepared = prepare_activity(activity)
         assert "base_parameters" not in prepared.task.get("notebook_task", {})
-        # Placeholder notebook is generated
-        assert len(prepared.notebooks) == 1
+        # No placeholder for an absolute workspace path.
+        assert prepared.notebooks == []
 
     def test_prepare_notebook_resolves_expression_params(self):
         """ADF expression params are mapped to DAB dynamic value references."""
@@ -363,26 +361,36 @@ class TestRunJobPreparer:
 class TestSwitchPreparer:
     def test_prepare_switch_generates_condition_task(self):
         inner = WaitActivity(**_make_base("CaseWait", "case_wait"), wait_time_seconds=1)
+        default_inner = WaitActivity(**_make_base("DefaultWait", "default_wait"), wait_time_seconds=2)
         activity = SwitchActivity(
             **_make_base("Route", "route"),
             on_expression="@item().type",
             cases=[SwitchCase(value="full", activities=[inner])],
-            default_activities=[inner],
+            default_activities=[default_inner],
         )
         prepared = prepare_activity(activity)
-        assert "condition_task" in prepared.task
+        # The main task is the first case condition: ``<switch>_case_<value>``.
+        # ``task_key_remap`` rewires upstream depends_on edges from the
+        # original switch key to this new key.
+        assert prepared.task["task_key"] == "route_case_full"
+        assert prepared.task_key_remap == {"route": "route_case_full"}
         cond = prepared.task["condition_task"]
-        # Should use op/left/right format, not condition_expression
-        assert "op" in cond
         assert cond["op"] == "EQUAL_TO"
         assert "left" in cond
-        assert "right" in cond
         assert cond["right"] == "full"
-        assert "if_true" in cond
-        assert "if_false" in cond
+        assert "if_true" not in cond
+        assert "if_false" not in cond
+        # Case body is a sibling task gated on outcome="true".
+        case_task_keys = {task["task_key"] for task in prepared.extra_tasks}
+        assert "case_wait" in case_task_keys
+        case_task = next(task for task in prepared.extra_tasks if task["task_key"] == "case_wait")
+        assert case_task["depends_on"] == [{"task_key": "route_case_full", "outcome": "true"}]
+        # Default body is gated on outcome="false" of the last case.
+        default_task = next(task for task in prepared.extra_tasks if task["task_key"] == "default_wait")
+        assert default_task["depends_on"] == [{"task_key": "route_case_full", "outcome": "false"}]
 
-    def test_prepare_switch_multi_case_unique_keys(self):
-        """Each nested condition node in a multi-case switch gets a unique task key."""
+    def test_prepare_switch_multi_case_chains_conditions(self):
+        """Each case becomes a chained condition task linked by outcome=false."""
         inner1 = WaitActivity(**_make_base("Wait1", "wait1"), wait_time_seconds=1)
         inner2 = WaitActivity(**_make_base("Wait2", "wait2"), wait_time_seconds=2)
         inner3 = WaitActivity(**_make_base("Wait3", "wait3"), wait_time_seconds=3)
@@ -398,27 +406,26 @@ class TestSwitchPreparer:
             default_activities=[default],
         )
         prepared = prepare_activity(activity)
+        # First case condition is the main task: ``route_case_dev``.  No
+        # if_true/if_false nesting -- branches hang off as siblings.
+        assert prepared.task["task_key"] == "route_case_dev"
         cond = prepared.task["condition_task"]
-        # Outermost condition: checks dev
-        assert cond["op"] == "EQUAL_TO"
         assert cond["right"] == "dev"
-        # Second case is nested in if_false -- named after the inner case (staging)
-        assert len(cond["if_false"]) == 1
-        nested1 = cond["if_false"][0]
-        assert nested1["task_key"] == "route__case_staging"
-        nested1_cond = nested1["condition_task"]
-        assert nested1_cond["right"] == "staging"
-        # Third case: the prod condition is wrapped with its own key
-        assert len(nested1_cond["if_false"]) == 1
-        nested2 = nested1_cond["if_false"][0]
-        assert nested2["task_key"] == "route__case_prod"
-        nested2_cond = nested2["condition_task"]
-        assert nested2_cond["right"] == "prod"
-        # Default branch is the if_false of the innermost (prod) condition
-        assert len(nested2_cond["if_false"]) == 1  # default task
-        # All task keys are unique
-        all_keys = {"route", nested1["task_key"], nested2["task_key"]}
-        assert len(all_keys) == 3
+        assert "if_true" not in cond and "if_false" not in cond
+        # Subsequent case conditions live as siblings, chained via outcome=false.
+        extra_by_key = {task["task_key"]: task for task in prepared.extra_tasks}
+        assert "route_case_staging" in extra_by_key
+        assert "route_case_prod" in extra_by_key
+        assert extra_by_key["route_case_staging"]["depends_on"] == [{"task_key": "route_case_dev", "outcome": "false"}]
+        assert extra_by_key["route_case_prod"]["depends_on"] == [
+            {"task_key": "route_case_staging", "outcome": "false"}
+        ]
+        # Case bodies hang off their own condition with outcome=true.
+        assert extra_by_key["wait1"]["depends_on"] == [{"task_key": "route_case_dev", "outcome": "true"}]
+        assert extra_by_key["wait2"]["depends_on"] == [{"task_key": "route_case_staging", "outcome": "true"}]
+        assert extra_by_key["wait3"]["depends_on"] == [{"task_key": "route_case_prod", "outcome": "true"}]
+        # Default hangs off the last case's outcome=false.
+        assert extra_by_key["default_wait"]["depends_on"] == [{"task_key": "route_case_prod", "outcome": "false"}]
 
     def test_prepare_switch_resolves_variables_expression(self):
         """Switch on @variables('x') resolves to a DAB task value ref."""
@@ -536,7 +543,12 @@ class TestPrepareWorkflow:
         assert isinstance(wf, PreparedWorkflow)
         assert wf.name == "test_pipeline"
         assert len(wf.tasks) == 3
-        assert len(wf.notebooks) >= 3  # copy, wait, and notebook all generate notebooks
+        # Copy and Wait synthesize bundled notebooks; the NotebookActivity
+        # references an existing absolute workspace path so it does not
+        # contribute a bundle artifact.
+        assert len(wf.notebooks) == 2
+        relative_paths = {nb.relative_path for nb in wf.notebooks}
+        assert relative_paths == {"notebooks/copy.py", "notebooks/wait.py"}
 
     def test_prepare_workflow_deduplicates_secrets(self):
         """Duplicate secrets across tasks are deduplicated."""

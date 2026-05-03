@@ -5,7 +5,7 @@ Each generator produces a self-contained Databricks notebook with:
 - Imports for required modules
 - ``dbutils.widgets.get()`` for runtime parameters
 - ``dbutils.secrets.get()`` for credentials
-- ``dbutils.notebook.exit()`` to return results
+- ``dbutils.jobs.taskValues.set(...)`` to forward results to downstream tasks
 """
 
 from __future__ import annotations
@@ -126,14 +126,14 @@ def generate_lookup_notebook(activity: LookupActivity, *, scope: str = "") -> st
 
             # Set task values so downstream tasks can reference them via
             # {{{{tasks.{activity.task_key}.values.<key>}}}}.
-            # The full result is stored under "result".  For firstRow lookups,
+            # The full result is stored under "result" as a JSON string so
+            # for_each_task can consume it as `inputs`.  For firstRow lookups,
             # each column is also stored as an individual task value so
             # condition_task can reference e.g. {{{{tasks.{activity.task_key}.values.cnt}}}}.
-            dbutils.jobs.taskValues.set(key="result", value=output)
+            dbutils.jobs.taskValues.set(key="result", value=json.dumps(output))
             if first_row_only and isinstance(output, dict):
                 for col_name, col_value in output.items():
                     dbutils.jobs.taskValues.set(key=col_name, value=col_value)
-            dbutils.notebook.exit(json.dumps(output))
         """)
     else:
         body = textwrap.dedent(f"""\
@@ -154,11 +154,10 @@ def generate_lookup_notebook(activity: LookupActivity, *, scope: str = "") -> st
 
             # Set task values so downstream tasks can reference them via
             # {{{{tasks.{activity.task_key}.values.<key>}}}}.
-            dbutils.jobs.taskValues.set(key="result", value=output)
+            dbutils.jobs.taskValues.set(key="result", value=json.dumps(output))
             if first_row_only and isinstance(output, dict):
                 for col_name, col_value in output.items():
                     dbutils.jobs.taskValues.set(key=col_name, value=col_value)
-            dbutils.notebook.exit(json.dumps(output))
         """)
 
     return header + _command_separator() + body
@@ -217,10 +216,30 @@ def generate_web_activity_notebook(activity: WebActivity, *, scope: str = "") ->
             body_block = f"body = {raw_body}\n"
         else:
             body_str = _resolve_body(raw_body)
+            # ``_resolve_body`` may return either a JSON literal, a Python
+            # dict literal, or a ``repr()``'d string containing Python-like
+            # concat syntax.  Parse strings as JSON when possible so the
+            # downstream ``requests.request(json=...)`` gets a real object.
             body_block = textwrap.dedent(f"""\
-                body = dbutils.widgets.get("body") if dbutils.widgets.get("body") else {body_str}
+                body_raw = dbutils.widgets.get("body") or {body_str}
+                if isinstance(body_raw, str):
+                    try:
+                        body = json.loads(body_raw)
+                    except (ValueError, TypeError):
+                        body = body_raw
+                else:
+                    body = body_raw
             """)
-        request_call = "response = requests.request(method, url, headers=headers, json=body, timeout=300)\n"
+        # ``json=`` encodes dicts; string bodies go over ``data=`` so we don't
+        # double-encode them as JSON strings.
+        request_call = textwrap.dedent(
+            """\
+            if isinstance(body, (dict, list)):
+                response = requests.request(method, url, headers=headers, json=body, timeout=300)
+            else:
+                response = requests.request(method, url, headers=headers, data=body, timeout=300)
+            """
+        )
     else:
         request_call = "response = requests.request(method, url, headers=headers, timeout=300)\n"
 
@@ -260,7 +279,6 @@ def generate_web_activity_notebook(activity: WebActivity, *, scope: str = "") ->
         except ValueError:
             result = {"status_code": response.status_code, "text": response.text}
 
-        dbutils.notebook.exit(json.dumps(result))
     """)
 
     return header + _command_separator() + body
@@ -289,7 +307,6 @@ def generate_delete_notebook(activity: DeleteActivity) -> str:
         print(f"Deleting: {{target_path}} (recursive={{recursive}})")
         result = dbutils.fs.rm(target_path, recurse=recursive)
 
-        dbutils.notebook.exit(str(result))
     """)
 
     return header + _command_separator() + body
@@ -342,7 +359,6 @@ def generate_set_variable_notebook(activity: SetVariableActivity) -> str:
         lines.append("dbutils.jobs.taskValues.set(key=variable_name, value=value)")
         lines.append("print(f\"Set task value '{variable_name}' = '{value}'\")")
         lines.append("")
-        lines.append('dbutils.notebook.exit(json.dumps({"variable_name": variable_name, "value": str(value)}))')
         body = "\n".join(lines) + "\n"
     else:
         # literal or dab_ref: read from widget parameter
@@ -360,7 +376,6 @@ def generate_set_variable_notebook(activity: SetVariableActivity) -> str:
             dbutils.jobs.taskValues.set(key=variable_name, value=value)
             print(f"Set task value '{{variable_name}}' = '{{value}}'")
 
-            dbutils.notebook.exit(json.dumps({{"variable_name": variable_name, "value": str(value)}}))
         """)
 
     return header + _command_separator() + body
@@ -393,7 +408,6 @@ def generate_wait_notebook(activity: WaitActivity) -> str:
         time.sleep(wait_seconds)
         print("Wait complete.")
 
-        dbutils.notebook.exit(f"Waited {{wait_seconds}} seconds")
     """)
 
     return header + _command_separator() + body
@@ -429,7 +443,42 @@ def generate_copy_notebook(activity: CopyActivity, *, scope: str = "") -> str:
     else:
         body = _generate_generic_copy_body(activity)
 
+    # Hoist any imports the body needs into a single cell at the top of
+    # the notebook.  ``_render_sink_write`` and a few other helpers used
+    # to inline ``from datetime import ...`` next to the call site, which
+    # produced an awkward block sandwiched between two comment groups.
+    imports = _detect_imports(body)
+    if imports:
+        body = _strip_inline_imports(body, imports)
+        return header + _command_separator() + "\n".join(imports) + "\n" + _command_separator() + body
     return header + _command_separator() + body
+
+
+def _detect_imports(body: str) -> list[str]:
+    """Return import lines required by code references found in *body*."""
+    needed: list[str] = []
+    if "datetime." in body:
+        needed.append("from datetime import datetime, timezone, timedelta")
+    if "ZoneInfo(" in body:
+        needed.append("from zoneinfo import ZoneInfo")
+    return needed
+
+
+def _strip_inline_imports(body: str, hoisted: list[str]) -> str:
+    """Remove inline import lines that match the ones we hoisted to the top."""
+    lines = body.splitlines()
+    keep: list[str] = []
+    skip_prefixes = (
+        "from datetime import",
+        "from zoneinfo import",
+        "import datetime",
+    )
+    for line in lines:
+        stripped = line.lstrip()
+        if any(stripped.startswith(prefix) for prefix in skip_prefixes):
+            continue
+        keep.append(line)
+    return "\n".join(keep) + ("\n" if body.endswith("\n") else "")
 
 
 def generate_filter_notebook(activity: FilterActivity) -> str:
@@ -483,7 +532,6 @@ def generate_filter_notebook(activity: FilterActivity) -> str:
         dbutils.jobs.taskValues.set(key="output", value=result)
         print(f"Filtered {{len(items)}} items to {{len(filtered)}} items")
 
-        dbutils.notebook.exit(result)
     """)
 
     return header + _command_separator() + body
@@ -527,15 +575,21 @@ def generate_append_variable_notebook(activity: AppendVariableActivity) -> str:
         lines.append(f"value = {activity.notebook_code}")
         lines.append("")
         lines.append("# Read the current array from task values (or start with empty list)")
-        lines.append("try:")
-        lines.append('    tk = dbutils.widgets.get("task_key", "")')
-        lines.append("    current_raw = dbutils.jobs.taskValues.get(taskKey=tk, key=variable_name)")
-        lines.append("    if isinstance(current_raw, str):")
-        lines.append("        current = json.loads(current_raw)")
-        lines.append("    else:")
-        lines.append("        current = current_raw")
-        lines.append("except Exception:")
-        lines.append("    current = []")
+        lines.append("# `source_task_key` is populated at deploy time with the task that most")
+        lines.append("# recently set this variable.  An empty value falls back to []." )
+        lines.append("source_task_key = dbutils.widgets.get('source_task_key')")
+        lines.append("current: list = []")
+        lines.append("if source_task_key:")
+        lines.append("    try:")
+        lines.append("        current_raw = dbutils.jobs.taskValues.get(taskKey=source_task_key, key=variable_name)")
+        lines.append("        if isinstance(current_raw, str):")
+        lines.append("            current = json.loads(current_raw)")
+        lines.append("        elif isinstance(current_raw, list):")
+        lines.append("            current = current_raw")
+        lines.append("        elif current_raw is not None:")
+        lines.append("            current = [current_raw]")
+        lines.append("    except Exception:")
+        lines.append("        current = []")
         lines.append("")
         lines.append("if not isinstance(current, list):")
         lines.append("    current = [current] if current else []")
@@ -546,7 +600,6 @@ def generate_append_variable_notebook(activity: AppendVariableActivity) -> str:
         lines.append("dbutils.jobs.taskValues.set(key=variable_name, value=result)")
         lines.append("print(f\"Appended to '{variable_name}': array now has {len(current)} item(s)\")")
         lines.append("")
-        lines.append("dbutils.notebook.exit(result)")
         body = "\n".join(lines) + "\n"
     else:
         body = textwrap.dedent(f"""\
@@ -556,19 +609,22 @@ def generate_append_variable_notebook(activity: AppendVariableActivity) -> str:
             variable_name = dbutils.widgets.get("variable_name") or "{activity.variable_name}"
             value = dbutils.widgets.get("value") or {json.dumps(activity.append_value)}
 
-            # Read the current array from task values (or start with empty list)
-            try:
-                tk = dbutils.widgets.get("task_key", "")
-                current_raw = dbutils.jobs.taskValues.get(taskKey=tk, key=variable_name)
-                if isinstance(current_raw, str):
-                    current = json.loads(current_raw)
-                else:
-                    current = current_raw
-            except Exception:
-                current = []
-
-            if not isinstance(current, list):
-                current = [current] if current else []
+            # Read the current array from a prior task's values.
+            # `source_task_key` is passed via base_parameters and points at the
+            # task that most recently set this variable; empty → start with [].
+            source_task_key = dbutils.widgets.get("source_task_key")
+            current: list = []
+            if source_task_key:
+                try:
+                    current_raw = dbutils.jobs.taskValues.get(taskKey=source_task_key, key=variable_name)
+                    if isinstance(current_raw, str):
+                        current = json.loads(current_raw)
+                    elif isinstance(current_raw, list):
+                        current = current_raw
+                    elif current_raw is not None:
+                        current = [current_raw]
+                except Exception:
+                    current = []
 
             # Evaluate the value to append
             try:
@@ -583,7 +639,6 @@ def generate_append_variable_notebook(activity: AppendVariableActivity) -> str:
             dbutils.jobs.taskValues.set(key=variable_name, value=result)
             print(f"Appended to '{{variable_name}}': array now has {{len(current)}} item(s)")
 
-            dbutils.notebook.exit(result)
         """)
 
     return header + _command_separator() + body
@@ -635,11 +690,23 @@ def _dab_ref_to_fstring_expr(ref: str) -> str:
 
 
 def _resolve_body(body: Any) -> str:
-    """Resolve ADF expressions in a request body and return a Python literal.
+    """Resolve ADF expressions in a request body and return a Python expression.
 
-    Walks the body dict/list/string and resolves any ADF expression values
-    (``@{...}`` interpolation or ``{"type": "Expression", ...}`` dicts) to
-    Python code or literal strings.
+    The returned string must be valid Python that evaluates (at notebook
+    execution time) to a ``dict`` / ``list`` / ``str`` — whatever
+    ``requests.request(json=..., data=...)`` can send.  Callers are
+    responsible for typing the result (``isinstance(body, (dict, list))``).
+
+    Two resolver outcomes to be careful about:
+
+    1. ``resolve_expression`` returns ``kind="notebook_code"`` — the value is
+       already Python code that produces the right runtime value; embed
+       directly.
+    2. ``resolve_expression`` returns ``kind="literal"`` — the value is a
+       plain Python scalar.  Use ``json.dumps`` so string / number / bool
+       are all turned into valid Python source literals.  Using ``repr``
+       here is a trap: ``repr`` of a string containing Python source
+       produces a *string literal* of that source, not the source itself.
 
     Args:
         body: The raw body from the WebActivity IR.
@@ -648,7 +715,7 @@ def _resolve_body(body: Any) -> str:
         A Python expression string suitable for embedding in generated code.
     """
     if body is None:
-        return "''"
+        return "None"
 
     from orchestra.models.ir import TranslationContext
     from orchestra.parser.expression_parser import (
@@ -661,17 +728,17 @@ def _resolve_body(body: Any) -> str:
     if isinstance(body, str):
         if "@{" in body:
             resolved_str = resolve_interpolated_string_for_notebook(body, context)
-            return f"f{repr(resolved_str)}"
+            return f"f{json.dumps(resolved_str)}"
         if body.startswith("@"):
             result = resolve_expression(body, context)
             if result is not None:
-                if result.kind == "literal":
-                    return repr(result.value)
                 if result.kind == "notebook_code":
                     return result.value
+                if result.kind == "literal":
+                    return json.dumps(result.value)
                 if result.kind == "dab_ref":
-                    return repr(result.value)
-        return repr(body)
+                    return json.dumps(result.value)
+        return json.dumps(body)
 
     if isinstance(body, dict):
         # Unwrap {"type": "Expression", "value": "@..."} — the body itself
@@ -775,6 +842,103 @@ def _resolve_headers(headers: dict[str, str] | None) -> tuple[str, str]:
     return headers_literal, preamble
 
 
+def _render_sink_write(
+    activity: CopyActivity,
+    df_var: str = "df",
+    *,
+    mode: str = "overwrite",
+    indent: str = "",
+) -> str:
+    """Return the Python ``df.write.*`` expression for the activity's sink.
+
+    Honours ``sink_format`` and ``sink_resolved_path`` from the IR so that a
+    Copy with a CSV / Parquet / JSON sink writes that format to the resolved
+    path instead of always defaulting to a Delta ``saveAsTable``.
+
+    The fallback when no file-format sink is identifiable is still Delta
+    ``saveAsTable(target_table)`` — that preserves the existing behaviour for
+    sinks the translator can't classify (e.g. unknown ``sink_dataset_type``)
+    and matches the Databricks default for managed targets.
+
+    Args:
+        activity: The CopyActivity.  Reads ``sink_format``,
+            ``sink_resolved_path``, and ``sink_dataset_type``.
+        df_var: The Python identifier of the DataFrame to write.
+        mode: Spark write mode.  ``overwrite`` for full reads, ``append``
+            for incremental ones (e.g. inside ForEach loops).
+        indent: Prefix prepended to every emitted line, so the snippet drops
+            cleanly into already-indented bodies.
+
+    Returns:
+        A multi-line Python snippet.  Trailing newline included.
+    """
+    fmt = activity.sink_format
+    sink_props = activity.sink_properties or {}
+
+    # File-format sink — write the actual format declared by the ADF
+    # output dataset.  Delta files written with ``.save(path)`` skip the
+    # metastore, which matches the ADF semantic of a path-based dataset.
+    if fmt and fmt != "delta":
+        opts: list[str] = []
+        format_settings = sink_props.get("formatSettings") or {}
+        if fmt == "csv":
+            if format_settings.get("firstRowAsHeader") is not False:
+                opts.append('.option("header", "true")')
+            if format_settings.get("columnDelimiter"):
+                delim = format_settings["columnDelimiter"]
+                opts.append(f'.option("delimiter", "{delim}")')
+        opts_str = "".join(opts)
+
+        volume_relative = sink_props.get("volume_relative_path")
+        if volume_relative is not None:
+            # Volume-rooted sink: ``output_path_root`` is set by the bundler
+            # as a base_parameter (with DAB-substituted ``${var.catalog}``
+            # / ``${var.schema}``).  Any ``@{...}`` expressions in the
+            # ADF dataset's folderPath / fileName have already been
+            # rewritten to Python f-string fragments, so we wrap the
+            # relative path in an f-string and join.
+            rel_literal = volume_relative.replace('"', '\\"')
+            preamble = ""
+            # Pull in any modules the rewritten f-string fragments reference
+            # so the notebook is runnable as-is.  Today the only one is
+            # ``datetime`` (from ``@{formatDateTime(...)}`` rewrites).
+            if "datetime." in rel_literal:
+                preamble = f"{indent}from datetime import datetime\n"
+            return (
+                f"{preamble}"
+                f"{indent}# Volume root is bound by the task's ``output_path_root`` parameter\n"
+                f'{indent}# (resolved by DAB to /Volumes/<catalog>/<schema>/<volume>).\n'
+                f'{indent}output_path_root = dbutils.widgets.get("output_path_root")\n'
+                f'{indent}output_path = f"{{output_path_root}}/{rel_literal}"\n'
+                f'{indent}{df_var}.write.format("{fmt}"){opts_str}.mode("{mode}").save(output_path)\n'
+            )
+
+        # No structured sink volume — fall back to a single ``output_path``
+        # widget the user fills in.  Common when the linked service uses
+        # a masked connection string and we can't reconstruct any path.
+        return (
+            f'{indent}# The ADF output dataset path could not be resolved at translation time.\n'
+            f'{indent}# Set ``output_path`` on this task to the destination URI.\n'
+            f'{indent}output_path = dbutils.widgets.get("output_path")\n'
+            f'{indent}{df_var}.write.format("{fmt}"){opts_str}.mode("{mode}").save(output_path)\n'
+        )
+
+    # Delta sink (or unclassified fallback) — keep existing behaviour.
+    if fmt == "delta" or fmt is None:
+        if mode == "append":
+            return (
+                f'{indent}{df_var}.write.format("delta").mode("append")'
+                f'.option("mergeSchema", "true").saveAsTable(target_table)\n'
+            )
+        return (
+            f'{indent}{df_var}.write.format("delta").mode("{mode}")'
+            f'.option("overwriteSchema", "true").saveAsTable(target_table)\n'
+        )
+
+    # Last-resort fallback for an unhandled format string.
+    return f'{indent}{df_var}.write.format("{fmt}").mode("{mode}").save("{path or chr(34) + chr(34)}")\n'
+
+
 def _infer_file_format(source_type: str | None, source_properties: dict | None) -> str:
     """Infer the file format from the source type string and source properties.
 
@@ -874,8 +1038,35 @@ def _generate_autoloader_body(activity: CopyActivity) -> str:
             .toTable(target_table)
         )
 
-        dbutils.notebook.exit(f"Auto Loader ingestion complete: {{target_table}}")
     """)
+
+
+def _adf_timeout_to_seconds(value: Any) -> int | None:
+    """Parse ADF duration strings (e.g. ``"02:00:00"`` / ``"0.01:30:00"``) to seconds.
+
+    ADF timeout strings use ``[d.]HH:MM:SS`` format.  Return ``None`` when the
+    value is empty or can't be parsed so the caller can decide whether to
+    omit the option entirely.
+    """
+    if not value:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if "." in text and text.split(".", 1)[0].isdigit():
+        days_part, hms_part = text.split(".", 1)
+        days = int(days_part)
+    else:
+        days = 0
+        hms_part = text
+    parts = hms_part.split(":")
+    if len(parts) != 3:
+        return None
+    try:
+        hours, minutes, seconds = (int(part) for part in parts)
+    except ValueError:
+        return None
+    return days * 86400 + hours * 3600 + minutes * 60 + seconds
 
 
 def _generate_jdbc_body(activity: CopyActivity, *, scope: str = "") -> str:
@@ -893,6 +1084,10 @@ def _generate_jdbc_body(activity: CopyActivity, *, scope: str = "") -> str:
     sink_table = sink_properties.get("table", sink_properties.get("tableName", f"{activity.task_key}_raw"))
     table_name = source_properties.get("tableName", source_properties.get("table", ""))
     query_raw = source_properties.get("sqlReaderQuery", source_properties.get("query", ""))
+    query_timeout_seconds = _adf_timeout_to_seconds(source_properties.get("queryTimeout"))
+    query_timeout_option = (
+        f'\n            .option("queryTimeout", "{query_timeout_seconds}")' if query_timeout_seconds else ""
+    )
 
     # Detect ADF expression dicts that weren't resolved during translation
     query = ""
@@ -940,15 +1135,15 @@ def _generate_jdbc_body(activity: CopyActivity, *, scope: str = "") -> str:
                 .option("url", jdbc_url)
                 .option("user", jdbc_user)
                 .option("password", jdbc_password)
-                .option("query", query)
+                .option("query", query){query_timeout_option}
                 .load()
             )
 
-            # Write to Delta table (append for ForEach pattern)
-            df.write.format("delta").mode("append").option("mergeSchema", "true").saveAsTable(target_table)
+            # Write to the sink defined by the ADF output dataset.  No
+            # count/print: those trigger an extra Spark action and can
+            # double the read cost.
+        """) + _render_sink_write(activity, mode="append", indent="") + textwrap.dedent("""\
 
-            print(f"JDBC ingestion complete: {{df.count()}} rows written to {{target_table}}")
-            dbutils.notebook.exit(f"Rows written: {{df.count()}}")
         """)
 
     # Static query or table name — resolve any @{...} interpolation in SQL strings
@@ -982,15 +1177,15 @@ def _generate_jdbc_body(activity: CopyActivity, *, scope: str = "") -> str:
             .option("url", jdbc_url)
             .option("user", jdbc_user)
             .option("password", jdbc_password)
-        {read_option}
+        {read_option}{query_timeout_option}
             .load()
         )
 
-        # Write to Delta table
-        df.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(target_table)
+        # Write to the sink defined by the ADF output dataset.  No count/
+        # print: those trigger an extra Spark action and can double the
+        # read cost.
+    """) + _render_sink_write(activity, mode="overwrite", indent="") + textwrap.dedent("""\
 
-        print(f"JDBC ingestion complete: {{df.count()}} rows written to {{target_table}}")
-        dbutils.notebook.exit(f"Rows written: {{df.count()}}")
     """)
 
 
@@ -1025,12 +1220,10 @@ def _generate_rest_copy_body(activity: CopyActivity) -> str:
             else:
                 data = [data]
 
-        # Write to Delta table
+        # Write to the sink defined by the ADF output dataset.
         df = spark.createDataFrame(data)
-        df.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(target_table)
+    """) + _render_sink_write(activity, mode="overwrite", indent="") + textwrap.dedent("""\
 
-        print(f"REST ingestion complete: {{df.count()}} rows written to {{target_table}}")
-        dbutils.notebook.exit(f"Rows written: {{df.count()}}")
     """)
 
 
@@ -1055,9 +1248,7 @@ def _generate_generic_copy_body(activity: CopyActivity) -> str:
         # Read source data
         df = spark.read.format("{file_format}").load(source_path)
 
-        # Write to Delta table
-        df.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(target_table)
+        # Write to the sink defined by the ADF output dataset.
+    """) + _render_sink_write(activity, mode="overwrite", indent="") + textwrap.dedent("""\
 
-        print(f"Copy complete: {{df.count()}} rows written to {{target_table}}")
-        dbutils.notebook.exit(f"Rows written: {{df.count()}}")
     """)

@@ -32,6 +32,7 @@ _ACTIVITY_OUTPUT_RE = re.compile(
     re.IGNORECASE,
 )
 _VARIABLES_RE = re.compile(r"@?variables\(\s*'([^']+)'\s*\)", re.IGNORECASE)
+_UTCNOW_RE = re.compile(r"@?utcNow\(\s*\)", re.IGNORECASE)
 _DAB_JOB_PARAM_RE = re.compile(r"\{\{job\.parameters\.(\w+)\}\}")
 _DAB_INPUT_FIELD_RE = re.compile(r"\{\{input\.(\w+)\}\}")
 
@@ -320,6 +321,7 @@ def _replace_refs(text: str) -> str:
     text = _PIPELINE_GROUPID_RE.sub("{{job.run_id}}", text)
     text = _ACTIVITY_OUTPUT_RE.sub(r"{{tasks.\1.values.\2}}", text)
     text = _VARIABLES_RE.sub(r"{{job.parameters.\1}}", text)
+    text = _UTCNOW_RE.sub("{{job.start_time.iso_datetime}}", text)
 
     return text
 

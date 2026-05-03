@@ -40,6 +40,11 @@ class PreparedActivity:
 
     Attributes:
         task: The DAB task dict ready for inclusion in a job definition.
+        extra_tasks: Additional sibling tasks emitted by this activity.  Used
+            by IfCondition and Switch to flatten branch children into the
+            job's top-level task list (per the DAB condition_task schema,
+            which has no nested task children — branching is expressed via
+            ``depends_on.outcome``).
         notebooks: Generated notebooks this task depends on.
         secrets: Secret creation instructions required by this task.
         setup_tasks: One-time setup tasks required before this task can run.
@@ -48,10 +53,18 @@ class PreparedActivity:
     """
 
     task: dict[str, Any]
+    extra_tasks: list[dict[str, Any]] = field(default_factory=list)
     notebooks: list[DabNotebook] = field(default_factory=list)
     secrets: list[SecretInstruction] = field(default_factory=list)
     setup_tasks: list[SetupTask] = field(default_factory=list)
     inner_workflows: list[PreparedWorkflow] = field(default_factory=list)
+    # Optional rename mapping from a logical task_key (set on the IR activity)
+    # to the actual emitted entry-point task_key.  Used by Switch when the
+    # first case task is renamed to ``<activity>__case_<value>`` for clarity:
+    # any downstream task whose ``depends_on`` references the original
+    # ``<activity>`` key is rewritten to point at the new first-case key by
+    # ``prepare_workflow``.
+    task_key_remap: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(slots=True, kw_only=True)
@@ -76,6 +89,42 @@ class PreparedWorkflow:
     setup_tasks: list[SetupTask]
     inner_workflows: list[PreparedWorkflow] = field(default_factory=list)
     parameters: list[dict[str, Any]] = field(default_factory=list)
+    # Per-task cluster hints (``{"spark_version": ..., "node_type_id": ...}``)
+    # collected from the activities' ADF linked-service configs.  Preserved
+    # so the bundle writer can pin ``spark_version`` / ``node_type_id``
+    # defaults to values the source pipeline was authored against.
+    cluster_hints: list[dict[str, Any]] = field(default_factory=list)
+
+
+def _run_if_from_adf_outcomes(outcomes: list[str | None]) -> str | None:
+    """Map the set of ADF dependency conditions to a single DAB ``run_if``.
+
+    ADF lets each dependency edge carry its own outcome (``Succeeded`` /
+    ``Failed`` / ``Completed`` / ``Skipped``).  DAB models this as a single
+    ``run_if`` on the *downstream* task ([control flow docs](https://docs.databricks.com/aws/en/jobs/run-if)),
+    so we combine the edges with the most permissive rule that preserves
+    ADF semantics:
+
+    - Any ``Completed`` or ``Skipped`` → ``ALL_DONE`` (downstream fires
+      regardless of upstream result).
+    - Any ``Failed`` → ``AT_LEAST_ONE_FAILED`` (error branch fires when an
+      upstream failed; other upstreams may have succeeded).
+    - All ``Succeeded`` / ``None`` → ``None`` (DAB default ``ALL_SUCCESS``).
+
+    Args:
+        outcomes: The ADF dependency-condition strings from each edge.
+
+    Returns:
+        A DAB ``run_if`` enum string, or ``None`` to keep the default.
+    """
+    normalised = [outcome for outcome in outcomes if outcome]
+    if not normalised:
+        return None
+    if any(outcome in ("Completed", "Skipped") for outcome in normalised):
+        return "ALL_DONE"
+    if any(outcome == "Failed" for outcome in normalised):
+        return "AT_LEAST_ONE_FAILED"
+    return None
 
 
 def _build_common_task_fields(activity: Activity) -> dict[str, Any]:
@@ -92,6 +141,9 @@ def _build_common_task_fields(activity: Activity) -> dict[str, Any]:
 
     if activity.depends_on:
         task["depends_on"] = [{"task_key": dep.task_key} for dep in activity.depends_on]
+        run_if = _run_if_from_adf_outcomes([dep.outcome for dep in activity.depends_on])
+        if run_if:
+            task["run_if"] = run_if
 
     if activity.timeout_seconds is not None and activity.timeout_seconds > 0:
         task["timeout_seconds"] = activity.timeout_seconds
@@ -176,8 +228,13 @@ def prepare_activity(
             f"No preparer registered for activity type {type(activity).__name__} (task_key={activity.task_key!r})"
         )
 
-    # Pass variable_task_keys only to preparers that accept it
+    # Pass variable_task_keys to preparers that need the most-recent-writer
+    # of each pipeline variable — NotebookActivity reads it to rewrite
+    # @variables() references, and AppendVariableActivity reads it to find
+    # the prior value to append to.
     if type(activity) is NotebookActivity:
+        return preparer_fn(activity, scope=scope, variable_task_keys=variable_task_keys)
+    if type(activity) is AppendVariableActivity:
         return preparer_fn(activity, scope=scope, variable_task_keys=variable_task_keys)
     return preparer_fn(activity, scope=scope)
 
@@ -249,24 +306,43 @@ def prepare_workflow(pipeline: Pipeline) -> PreparedWorkflow:
     all_secrets: list[SecretInstruction] = []
     all_setup_tasks: list[SetupTask] = []
     all_inner_workflows: list[PreparedWorkflow] = []
+    cluster_hints: list[dict[str, Any]] = []
+    task_key_remap: dict[str, str] = {}
 
     scope = pipeline.name
 
-    # Build variable-name → task-key mapping from SetVariable activities
-    # so downstream notebook preparers can resolve @variables('name')
-    # references to DAB dynamic value references.
+    # Build variable-name → task-key mapping so downstream preparers can
+    # resolve @variables('name') / find the most-recent writer to append to.
+    # The map is updated in pipeline-declaration order so AppendVariable
+    # sees the last SetVariable/AppendVariable that preceded it.
     variable_task_keys_map: dict[str, str] = {}
-    for activity in pipeline.tasks:
-        if isinstance(activity, SetVariableActivity):
-            variable_task_keys_map[activity.variable_name] = activity.task_key
 
     for activity in pipeline.tasks:
         prepared = prepare_activity(activity, scope=scope, variable_task_keys=variable_task_keys_map)
         all_tasks.append(prepared.task)
+        all_tasks.extend(prepared.extra_tasks)
         all_notebooks.extend(prepared.notebooks)
         all_secrets.extend(prepared.secrets)
         all_setup_tasks.extend(prepared.setup_tasks)
         all_inner_workflows.extend(prepared.inner_workflows)
+        task_key_remap.update(prepared.task_key_remap)
+        if activity.cluster:
+            cluster_hints.append(dict(activity.cluster))
+
+        if isinstance(activity, (SetVariableActivity, AppendVariableActivity)):
+            variable_task_keys_map[activity.variable_name] = activity.task_key
+
+    # Apply any task-key renames (today only Switch uses this, to push the
+    # first case from <activity> to <activity>__case_<value>).  Walk every
+    # task and rewrite ``depends_on[].task_key`` references that match a
+    # remap entry — preserves edges from activities that referenced the
+    # logical pre-rename name.
+    if task_key_remap:
+        for task in all_tasks:
+            for dep in task.get("depends_on", []) or []:
+                old = dep.get("task_key")
+                if old in task_key_remap:
+                    dep["task_key"] = task_key_remap[old]
 
     # Deduplicate secrets by (scope, key)
     seen_secrets: set[tuple[str, str]] = set()
@@ -284,4 +360,5 @@ def prepare_workflow(pipeline: Pipeline) -> PreparedWorkflow:
         secrets=unique_secrets,
         setup_tasks=all_setup_tasks,
         inner_workflows=all_inner_workflows,
+        cluster_hints=cluster_hints,
     )

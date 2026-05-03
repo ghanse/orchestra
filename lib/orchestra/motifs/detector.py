@@ -383,25 +383,15 @@ def _detect_metadata_driven_bulk_copy(
     for_each_activities = _activities_of_type(activities, "ForEach", claimed)
 
     for for_each_activity in for_each_activities:
-        # Does ForEach contain a Copy child?
-        has_copy_child = False
-        if for_each_activity.activities:
-            for child in for_each_activity.activities:
-                if child.type == "Copy":
-                    has_copy_child = True
-                    break
-        if not has_copy_child:
-            continue
-
-        # Does ForEach have an ExecutePipeline child? If so, this might be
-        # parent-child orchestration instead -- skip.
-        has_exec_child = False
-        if for_each_activity.activities:
-            for child in for_each_activity.activities:
-                if child.type == "ExecutePipeline":
-                    has_exec_child = True
-                    break
-        if has_exec_child:
+        # Bulk-copy motif requires the inner body to *be* the Copy: a single
+        # Copy child, with no other transform / orchestration activity in the
+        # loop body. Patterns like Notebook -> Copy or BuildReport -> Export
+        # are not bulk-copy motifs even when an upstream Lookup is present;
+        # they are generic "build then archive" pipelines and the user almost
+        # never wants the Copy collapsed into a metadata-driven ingestion
+        # template that ignores the upstream notebook work.
+        inner_activities = list(for_each_activity.activities or [])
+        if len(inner_activities) != 1 or inner_activities[0].type != "Copy":
             continue
 
         # Find upstream Lookup
