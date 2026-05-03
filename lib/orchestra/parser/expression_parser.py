@@ -1356,60 +1356,35 @@ def _handle_sub(args: list[ExpressionResult]) -> ExpressionResult | None:
     )
 
 
-def _handle_add_days(args: list[ExpressionResult]) -> ExpressionResult | None:
-    """addDays(ts, days, fmt?) -> (datetime.fromisoformat(ts) + timedelta(days=days)).strftime(fmt)"""
-    if len(args) < 2 or len(args) > 3:
-        return None
-    timestamp_dt = _datetime_arg_code(args[0])
-    days = _arg_to_code(args[1])
-    format_string = _get_format_arg(args, 2)
-    return ExpressionResult(
-        kind="notebook_code",
-        value=f"({timestamp_dt} + timedelta(days={days})).strftime({format_string})",
-        imports=_DATETIME_IMPORTS + _collect_imports(*args),
-    )
+def _make_add_unit_handler(
+    timedelta_keyword: str,
+) -> Callable[[list[ExpressionResult]], ExpressionResult | None]:
+    """Build a handler for ``addDays`` / ``addHours`` / ``addMinutes`` / ``addSeconds``.
+
+    Each ADF function differs only in the ``timedelta`` keyword argument it
+    bumps (``days``, ``hours``, ``minutes``, ``seconds``).  Generating the
+    handlers from this factory keeps them in lock-step.
+    """
+
+    def handler(args: list[ExpressionResult]) -> ExpressionResult | None:
+        if len(args) < 2 or len(args) > 3:
+            return None
+        timestamp_dt = _datetime_arg_code(args[0])
+        amount = _arg_to_code(args[1])
+        format_string = _get_format_arg(args, 2)
+        return ExpressionResult(
+            kind="notebook_code",
+            value=f"({timestamp_dt} + timedelta({timedelta_keyword}={amount})).strftime({format_string})",
+            imports=_DATETIME_IMPORTS + _collect_imports(*args),
+        )
+
+    return handler
 
 
-def _handle_add_hours(args: list[ExpressionResult]) -> ExpressionResult | None:
-    """addHours(ts, hours, fmt?) -> (datetime.fromisoformat(ts) + timedelta(hours=hours)).strftime(fmt)"""
-    if len(args) < 2 or len(args) > 3:
-        return None
-    timestamp_dt = _datetime_arg_code(args[0])
-    hours = _arg_to_code(args[1])
-    format_string = _get_format_arg(args, 2)
-    return ExpressionResult(
-        kind="notebook_code",
-        value=f"({timestamp_dt} + timedelta(hours={hours})).strftime({format_string})",
-        imports=_DATETIME_IMPORTS + _collect_imports(*args),
-    )
-
-
-def _handle_add_minutes(args: list[ExpressionResult]) -> ExpressionResult | None:
-    """addMinutes(ts, minutes, fmt?)"""
-    if len(args) < 2 or len(args) > 3:
-        return None
-    timestamp_dt = _datetime_arg_code(args[0])
-    minutes = _arg_to_code(args[1])
-    format_string = _get_format_arg(args, 2)
-    return ExpressionResult(
-        kind="notebook_code",
-        value=f"({timestamp_dt} + timedelta(minutes={minutes})).strftime({format_string})",
-        imports=_DATETIME_IMPORTS + _collect_imports(*args),
-    )
-
-
-def _handle_add_seconds(args: list[ExpressionResult]) -> ExpressionResult | None:
-    """addSeconds(ts, seconds, fmt?)"""
-    if len(args) < 2 or len(args) > 3:
-        return None
-    timestamp_dt = _datetime_arg_code(args[0])
-    seconds = _arg_to_code(args[1])
-    format_string = _get_format_arg(args, 2)
-    return ExpressionResult(
-        kind="notebook_code",
-        value=f"({timestamp_dt} + timedelta(seconds={seconds})).strftime({format_string})",
-        imports=_DATETIME_IMPORTS + _collect_imports(*args),
-    )
+_handle_add_days = _make_add_unit_handler("days")
+_handle_add_hours = _make_add_unit_handler("hours")
+_handle_add_minutes = _make_add_unit_handler("minutes")
+_handle_add_seconds = _make_add_unit_handler("seconds")
 
 
 def _handle_add_to_time(args: list[ExpressionResult]) -> ExpressionResult | None:
@@ -1487,42 +1462,41 @@ def _handle_format_date_time(args: list[ExpressionResult]) -> ExpressionResult |
     )
 
 
-def _handle_get_future_time(args: list[ExpressionResult]) -> ExpressionResult | None:
-    """getFutureTime(interval, unit, fmt?) -> (datetime.now(utc) + timedelta(...)).strftime(fmt)"""
-    if len(args) < 2 or len(args) > 3:
-        return None
-    interval = _arg_to_code(args[0])
-    unit_str = args[1].value if args[1].kind == "literal" else None
-    if unit_str is None:
-        return None
-    timedelta_keyword = _TIME_UNIT_MAP.get(unit_str)
-    if timedelta_keyword is None:
-        return None
-    format_string = _get_format_arg(args, 2)
-    return ExpressionResult(
-        kind="notebook_code",
-        value=f"(datetime.now(timezone.utc) + timedelta({timedelta_keyword}={interval})).strftime({format_string})",
-        imports=_DATETIME_IMPORTS + _collect_imports(*args),
-    )
+def _make_now_offset_handler(
+    operator: str,
+) -> Callable[[list[ExpressionResult]], ExpressionResult | None]:
+    """Build a ``getFutureTime`` / ``getPastTime`` handler.
+
+    Both functions read ``(interval, unit, fmt?)`` and emit
+    ``datetime.now(utc) ±  timedelta(...)``; ``operator`` is ``"+"`` or
+    ``"-"``.
+    """
+
+    def handler(args: list[ExpressionResult]) -> ExpressionResult | None:
+        if len(args) < 2 or len(args) > 3:
+            return None
+        interval = _arg_to_code(args[0])
+        unit_str = args[1].value if args[1].kind == "literal" else None
+        if unit_str is None:
+            return None
+        timedelta_keyword = _TIME_UNIT_MAP.get(unit_str)
+        if timedelta_keyword is None:
+            return None
+        format_string = _get_format_arg(args, 2)
+        return ExpressionResult(
+            kind="notebook_code",
+            value=(
+                f"(datetime.now(timezone.utc) {operator} "
+                f"timedelta({timedelta_keyword}={interval})).strftime({format_string})"
+            ),
+            imports=_DATETIME_IMPORTS + _collect_imports(*args),
+        )
+
+    return handler
 
 
-def _handle_get_past_time(args: list[ExpressionResult]) -> ExpressionResult | None:
-    """getPastTime(interval, unit, fmt?) -> (datetime.now(utc) - timedelta(...)).strftime(fmt)"""
-    if len(args) < 2 or len(args) > 3:
-        return None
-    interval = _arg_to_code(args[0])
-    unit_str = args[1].value if args[1].kind == "literal" else None
-    if unit_str is None:
-        return None
-    timedelta_keyword = _TIME_UNIT_MAP.get(unit_str)
-    if timedelta_keyword is None:
-        return None
-    format_string = _get_format_arg(args, 2)
-    return ExpressionResult(
-        kind="notebook_code",
-        value=f"(datetime.now(timezone.utc) - timedelta({timedelta_keyword}={interval})).strftime({format_string})",
-        imports=_DATETIME_IMPORTS + _collect_imports(*args),
-    )
+_handle_get_future_time = _make_now_offset_handler("+")
+_handle_get_past_time = _make_now_offset_handler("-")
 
 
 def _handle_start_of_day(args: list[ExpressionResult]) -> ExpressionResult | None:

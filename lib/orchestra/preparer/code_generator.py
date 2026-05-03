@@ -14,6 +14,12 @@ import json
 import textwrap
 from typing import TYPE_CHECKING, Any
 
+from orchestra.models.source_types import (
+    FILE_SOURCE_TYPES as _FILE_SOURCE_TYPES,
+    JDBC_SOURCE_TYPES as _JDBC_SOURCE_TYPES,
+    REST_SOURCE_TYPES as _REST_SOURCE_TYPES,
+)
+
 if TYPE_CHECKING:
     from orchestra.models.ir import (
         AppendVariableActivity,
@@ -25,48 +31,6 @@ if TYPE_CHECKING:
         WaitActivity,
         WebActivity,
     )
-
-
-_DB_SOURCE_TYPES = {
-    "AzureSqlSource",
-    "SqlServerSource",
-    "OracleSource",
-    "PostgreSqlSource",
-    "MySqlSource",
-    "SqlSource",
-    "CosmosDbSqlApiSource",
-    "SqlDWSource",
-}
-
-_FILE_SOURCE_TYPES = {
-    "BlobSource",
-    "AzureBlobFSSource",
-    "AzureDataLakeStoreSource",
-    "AmazonS3Source",
-    "FileSystemSource",
-    "SftpSource",
-    "HttpSource",
-    "AzureBlobStorageSource",
-    "DelimitedTextSource",
-    "JsonSource",
-    "ParquetSource",
-    "AvroSource",
-    "OrcSource",
-}
-
-_JDBC_SOURCE_TYPES = {
-    "AzureSqlSource",
-    "SqlServerSource",
-    "OracleSource",
-    "PostgreSqlSource",
-    "MySqlSource",
-    "SqlSource",
-    "CosmosDbSqlApiSource",
-    "SqlDWSource",
-    "AzureSqlDatabaseSource",
-}
-
-_REST_SOURCE_TYPES = {"RestSource", "HttpSource"}
 
 
 def generate_lookup_notebook(activity: LookupActivity, *, scope: str = "") -> str:
@@ -87,7 +51,7 @@ def generate_lookup_notebook(activity: LookupActivity, *, scope: str = "") -> st
     # (e.g. contains dbutils.widgets.get() calls from expression resolution).
     is_dynamic_query = "dbutils.widgets.get" in query or "dbutils.jobs.taskValues" in query
 
-    if source_type in _DB_SOURCE_TYPES:
+    if source_type in _JDBC_SOURCE_TYPES:
         scope = scope or activity.task_key
 
         if is_dynamic_query:

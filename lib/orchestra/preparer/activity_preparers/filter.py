@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from orchestra.models.dab import DabNotebook
 from orchestra.models.ir import TranslationContext
 from orchestra.parser.expression_parser import resolve_expression
+from orchestra.preparer.activity_preparers._helpers import build_notebook_task_artifacts
+from orchestra.preparer.activity_preparers._naming import notebook_filename
 from orchestra.preparer.code_generator import generate_filter_notebook
 from orchestra.preparer.workflow_preparer import PreparedActivity, _build_common_task_fields
 
@@ -31,34 +32,23 @@ def prepare(activity: FilterActivity, *, scope: str = "") -> PreparedActivity:
     Returns:
         A PreparedActivity with the notebook_task and generated notebook.
     """
-    from orchestra.preparer.activity_preparers._naming import notebook_filename
-    notebook_name = notebook_filename(activity.task_key, activity.name)
-    notebook_path = f"notebooks/{notebook_name}"
+    notebook_relative_path = f"notebooks/{notebook_filename(activity.task_key, activity.name)}"
     content = generate_filter_notebook(activity)
 
-    task = _build_common_task_fields(activity)
-    params: dict[str, str] = {}
-
-    # items_expression: typically a DAB ref like {{tasks.X.values.result}}
-    ctx = TranslationContext()
-    items_result = resolve_expression(activity.items_expression, ctx)
+    # items_expression: typically a DAB ref like ``{{tasks.X.values.result}}``.
+    # condition_expression is intentionally NOT included -- it usually
+    # involves ``item().field`` which requires runtime JSON parsing.
+    items_result = resolve_expression(activity.items_expression, TranslationContext())
     if items_result and items_result.kind in ("dab_ref", "literal"):
-        params["items_expression"] = items_result.value
+        items_value = items_result.value
     else:
-        params["items_expression"] = activity.items_expression
+        items_value = activity.items_expression
 
-    # condition_expression: typically involves item().field which is notebook_code
-    # — do NOT put in parameters, the notebook embeds it directly
-    task["notebook_task"] = {
-        "notebook_path": f"../src/{notebook_path}",
-        "base_parameters": params,
-    }
-
-    notebooks = [
-        DabNotebook(
-            relative_path=notebook_path,
-            content=content,
-        )
-    ]
+    task = _build_common_task_fields(activity)
+    task["notebook_task"], notebooks = build_notebook_task_artifacts(
+        notebook_relative_path=notebook_relative_path,
+        notebook_content=content,
+        base_parameters={"items_expression": items_value},
+    )
 
     return PreparedActivity(task=task, notebooks=notebooks)

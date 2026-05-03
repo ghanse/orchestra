@@ -4,40 +4,16 @@ from __future__ import annotations
 
 import re
 
-from orchestra.models.dab import DabNotebook, SecretInstruction, SetupTask
+from orchestra.models.dab import SecretInstruction, SetupTask
 from orchestra.models.ir import CopyActivity
+from orchestra.models.source_types import FILE_SOURCE_TYPES, JDBC_SOURCE_TYPES
+from orchestra.preparer.activity_preparers._helpers import (
+    build_notebook_task_artifacts,
+    make_jdbc_secrets,
+)
+from orchestra.preparer.activity_preparers._naming import notebook_filename
 from orchestra.preparer.code_generator import generate_copy_notebook
 from orchestra.preparer.workflow_preparer import PreparedActivity, _build_common_task_fields
-
-# Source type strings that indicate file-based origins
-_FILE_SOURCE_TYPES = {
-    "BlobSource",
-    "AzureBlobFSSource",
-    "AzureDataLakeStoreSource",
-    "AmazonS3Source",
-    "FileSystemSource",
-    "SftpSource",
-    "HttpSource",
-    "AzureBlobStorageSource",
-    "DelimitedTextSource",
-    "JsonSource",
-    "ParquetSource",
-    "AvroSource",
-    "OrcSource",
-}
-
-# Source type strings that indicate database origins
-_DB_SOURCE_TYPES = {
-    "AzureSqlSource",
-    "SqlServerSource",
-    "OracleSource",
-    "PostgreSqlSource",
-    "MySqlSource",
-    "SqlSource",
-    "CosmosDbSqlApiSource",
-    "SqlDWSource",
-    "AzureSqlDatabaseSource",
-}
 
 
 def _extract_volume_info(source_properties: dict) -> dict | None:
@@ -96,9 +72,7 @@ def prepare(activity: CopyActivity, *, scope: str = "") -> PreparedActivity:
         A PreparedActivity with the notebook_task, generated notebook, secret
         instructions, and setup tasks.
     """
-    from orchestra.preparer.activity_preparers._naming import notebook_filename
-    notebook_name = notebook_filename(activity.task_key, activity.name)
-    notebook_path = f"notebooks/{notebook_name}"
+    notebook_relative_path = f"notebooks/{notebook_filename(activity.task_key, activity.name)}"
 
     src_props = activity.source_properties or {}
     source_type = activity.source_type or ""
@@ -114,7 +88,7 @@ def prepare(activity: CopyActivity, *, scope: str = "") -> PreparedActivity:
     volume_source_path: str | None = None
     volume_base: str | None = None
     container_location: str | None = None
-    if source_type in _FILE_SOURCE_TYPES:
+    if source_type in FILE_SOURCE_TYPES:
         vol_info = _extract_volume_info(src_props)
         if vol_info:
             volume_name = vol_info["volume_name"]
@@ -147,54 +121,39 @@ def prepare(activity: CopyActivity, *, scope: str = "") -> PreparedActivity:
 
     content = generate_copy_notebook(activity, scope=scope)
 
-    task = _build_common_task_fields(activity)
-    task["notebook_task"] = {
-        "notebook_path": f"../src/{notebook_path}",
-        "base_parameters": {},
-    }
+    base_parameters: dict[str, str] = {}
     if activity.source_type:
-        task["notebook_task"]["base_parameters"]["source_type"] = activity.source_type
+        base_parameters["source_type"] = activity.source_type
     if activity.sink_type:
-        task["notebook_task"]["base_parameters"]["sink_type"] = activity.sink_type
+        base_parameters["sink_type"] = activity.sink_type
+    # Source path: prefer the resolved volume path; fall back to the raw
+    # abfss:// URL when no volume could be derived.
+    source_path = volume_source_path or src_props.get("resolved_path")
+    if source_path:
+        base_parameters["source_path"] = source_path
 
-    # Pass through the source path as a parameter: prefer the volume path,
-    # fall back to the resolved abfss:// path.
-    if volume_source_path:
-        task["notebook_task"]["base_parameters"]["source_path"] = volume_source_path
-    else:
-        resolved_path = src_props.get("resolved_path")
-        if resolved_path:
-            task["notebook_task"]["base_parameters"]["source_path"] = resolved_path
-
-    notebooks = [
-        DabNotebook(
-            relative_path=notebook_path,
-            content=content,
-        )
-    ]
+    task = _build_common_task_fields(activity)
+    task["notebook_task"], notebooks = build_notebook_task_artifacts(
+        notebook_relative_path=notebook_relative_path,
+        notebook_content=content,
+        base_parameters=base_parameters,
+    )
 
     secrets: list[SecretInstruction] = []
     setup_tasks: list[SetupTask] = []
+    scope_name = scope or activity.task_key
 
-    if source_type in _DB_SOURCE_TYPES:
-        scope_name = scope or activity.task_key
-        secrets.append(
-            SecretInstruction(
-                scope=scope_name,
-                key="jdbc-url",
-                value_source=f"JDBC URL for {source_type} source in activity '{activity.name}'",
+    if source_type in JDBC_SOURCE_TYPES:
+        secrets.extend(
+            make_jdbc_secrets(
+                scope_name=scope_name,
+                source_type=source_type,
+                activity_name=activity.name,
+                role="source",
             )
         )
-        secrets.append(
-            SecretInstruction(
-                scope=scope_name,
-                key="jdbc-password",
-                value_source=f"JDBC password for {source_type} source in activity '{activity.name}'",
-            )
-        )
-    elif source_type in _FILE_SOURCE_TYPES:
+    elif source_type in FILE_SOURCE_TYPES:
         if src_props.get("connection_string") or src_props.get("sasUri"):
-            scope_name = scope or activity.task_key
             secrets.append(
                 SecretInstruction(
                     scope=scope_name,
@@ -202,9 +161,8 @@ def prepare(activity: CopyActivity, *, scope: str = "") -> PreparedActivity:
                     value_source=f"Connection string for {source_type} source in activity '{activity.name}'",
                 )
             )
-
-        # Create UC external volume setup task at the container level.
-        # Multiple activities sharing the same container reuse this volume.
+        # External volume at the container level: multiple activities
+        # sharing the same container reuse one volume.
         if volume_name and container_location:
             setup_tasks.append(
                 SetupTask(

@@ -4,38 +4,16 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from orchestra.models.dab import DabNotebook
-from orchestra.models.ir import TranslationContext
-from orchestra.parser.expression_parser import resolve_expression, resolve_interpolated_string
+from orchestra.preparer.activity_preparers._helpers import (
+    build_notebook_task_artifacts,
+    resolve_param_value,
+)
+from orchestra.preparer.activity_preparers._naming import notebook_filename
 from orchestra.preparer.code_generator import generate_delete_notebook
 from orchestra.preparer.workflow_preparer import PreparedActivity, _build_common_task_fields
 
 if TYPE_CHECKING:
     from orchestra.models.ir import DeleteActivity
-
-
-def _resolve_param_value(value: str) -> str:
-    """Resolve an ADF expression parameter value to a DAB ref.
-
-    Args:
-        value: A parameter value string that may contain ADF expressions.
-
-    Returns:
-        Resolved value string.
-    """
-    ctx = TranslationContext()
-
-    # Try @{...} interpolation
-    if "@{" in value:
-        return resolve_interpolated_string(value, ctx)
-
-    # Try @expr style
-    if value.startswith("@"):
-        result = resolve_expression(value, ctx)
-        if result is not None and result.kind in ("dab_ref", "literal"):
-            return result.value
-
-    return value
 
 
 def prepare(activity: DeleteActivity, *, scope: str = "") -> PreparedActivity:
@@ -47,27 +25,21 @@ def prepare(activity: DeleteActivity, *, scope: str = "") -> PreparedActivity:
     Returns:
         A PreparedActivity with the notebook_task and generated notebook.
     """
-    from orchestra.preparer.activity_preparers._naming import notebook_filename
-    notebook_name = notebook_filename(activity.task_key, activity.name)
-    notebook_path = f"notebooks/{notebook_name}"
+    notebook_relative_path = f"notebooks/{notebook_filename(activity.task_key, activity.name)}"
     content = generate_delete_notebook(activity)
 
-    task = _build_common_task_fields(activity)
-    task["notebook_task"] = {
-        "notebook_path": f"../src/{notebook_path}",
-        "base_parameters": {
-            "dataset_name": _resolve_param_value(activity.dataset_name),
-            "recursive": str(activity.recursive).lower(),
-        },
+    base_parameters = {
+        "dataset_name": resolve_param_value(activity.dataset_name),
+        "recursive": str(activity.recursive).lower(),
     }
     if activity.folder_path:
-        task["notebook_task"]["base_parameters"]["folder_path"] = _resolve_param_value(activity.folder_path)
+        base_parameters["folder_path"] = resolve_param_value(activity.folder_path)
 
-    notebooks = [
-        DabNotebook(
-            relative_path=notebook_path,
-            content=content,
-        )
-    ]
+    task = _build_common_task_fields(activity)
+    task["notebook_task"], notebooks = build_notebook_task_artifacts(
+        notebook_relative_path=notebook_relative_path,
+        notebook_content=content,
+        base_parameters=base_parameters,
+    )
 
     return PreparedActivity(task=task, notebooks=notebooks)

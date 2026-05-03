@@ -4,38 +4,17 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from orchestra.models.dab import DabNotebook, SecretInstruction
-from orchestra.models.ir import TranslationContext
-from orchestra.parser.expression_parser import resolve_expression, resolve_interpolated_string
+from orchestra.models.dab import SecretInstruction
+from orchestra.preparer.activity_preparers._helpers import (
+    build_notebook_task_artifacts,
+    resolve_param_value,
+)
+from orchestra.preparer.activity_preparers._naming import notebook_filename
 from orchestra.preparer.code_generator import generate_web_activity_notebook
 from orchestra.preparer.workflow_preparer import PreparedActivity, _build_common_task_fields
 
 if TYPE_CHECKING:
     from orchestra.models.ir import WebActivity
-
-
-def _resolve_param_value(value: str) -> str:
-    """Resolve an ADF expression parameter value to a DAB ref.
-
-    Args:
-        value: A parameter value string that may contain ADF expressions.
-
-    Returns:
-        Resolved value string.
-    """
-    ctx = TranslationContext()
-
-    # Try @{...} interpolation
-    if "@{" in value:
-        return resolve_interpolated_string(value, ctx)
-
-    # Try @expr style
-    if value.startswith("@"):
-        result = resolve_expression(value, ctx)
-        if result is not None and result.kind in ("dab_ref", "literal"):
-            return result.value
-
-    return value
 
 
 def prepare(activity: WebActivity, *, scope: str = "") -> PreparedActivity:
@@ -47,26 +26,18 @@ def prepare(activity: WebActivity, *, scope: str = "") -> PreparedActivity:
     Returns:
         A PreparedActivity with the notebook_task, generated notebook, and secret instructions.
     """
-    from orchestra.preparer.activity_preparers._naming import notebook_filename
-    notebook_name = notebook_filename(activity.task_key, activity.name)
-    notebook_path = f"notebooks/{notebook_name}"
+    notebook_relative_path = f"notebooks/{notebook_filename(activity.task_key, activity.name)}"
     content = generate_web_activity_notebook(activity, scope=scope)
 
     task = _build_common_task_fields(activity)
-    task["notebook_task"] = {
-        "notebook_path": f"../src/{notebook_path}",
-        "base_parameters": {
-            "url": _resolve_param_value(activity.url),
-            "method": _resolve_param_value(activity.method),
+    task["notebook_task"], notebooks = build_notebook_task_artifacts(
+        notebook_relative_path=notebook_relative_path,
+        notebook_content=content,
+        base_parameters={
+            "url": resolve_param_value(activity.url),
+            "method": resolve_param_value(activity.method),
         },
-    }
-
-    notebooks = [
-        DabNotebook(
-            relative_path=notebook_path,
-            content=content,
-        )
-    ]
+    )
 
     secrets: list[SecretInstruction] = []
     auth = activity.authentication
