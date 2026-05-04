@@ -17,9 +17,9 @@ from typing import TYPE_CHECKING, Any
 
 from orchestra.preparer.workflow_preparer import (
     PreparedActivity,
-    PreparedAggregates,
+    PreparedArtifacts,
     _build_common_task_fields,
-    merge_prepared_aggregates,
+    merge_prepared_artifacts,
     prepare_activity,
 )
 
@@ -70,14 +70,14 @@ def prepare(activity: IfConditionActivity, *, scope: str = "") -> PreparedActivi
         "right": activity.right,
     }
 
-    aggregates = PreparedAggregates()
+    artifacts = PreparedArtifacts()
 
     if_true_tasks: list[dict[str, Any]] = []
     for child in activity.if_true_activities:
         prepared = prepare_activity(child, scope=scope)
         if_true_tasks.append(prepared.task)
         if_true_tasks.extend(prepared.extra_tasks)
-        aggregates = merge_prepared_aggregates(aggregates, prepared)
+        artifacts = merge_prepared_artifacts(artifacts, prepared)
     _inject_outcome_dependency(if_true_tasks, activity.task_key, "true")
 
     if_false_tasks: list[dict[str, Any]] = []
@@ -85,14 +85,14 @@ def prepare(activity: IfConditionActivity, *, scope: str = "") -> PreparedActivi
         prepared = prepare_activity(child, scope=scope)
         if_false_tasks.append(prepared.task)
         if_false_tasks.extend(prepared.extra_tasks)
-        aggregates = merge_prepared_aggregates(aggregates, prepared)
+        artifacts = merge_prepared_artifacts(artifacts, prepared)
     _inject_outcome_dependency(if_false_tasks, activity.task_key, "false")
 
     return PreparedActivity(
         task=task,
         extra_tasks=if_true_tasks + if_false_tasks,
-        notebooks=list(aggregates.notebooks),
-        secrets=list(aggregates.secrets),
-        setup_tasks=list(aggregates.setup_tasks),
-        inner_workflows=list(aggregates.inner_workflows),
+        notebooks=list(artifacts.notebooks),
+        secrets=list(artifacts.secrets),
+        setup_tasks=list(artifacts.setup_tasks),
+        inner_workflows=list(artifacts.inner_workflows),
     )

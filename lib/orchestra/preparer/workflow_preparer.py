@@ -288,7 +288,7 @@ def _prepare_placeholder(activity: Activity) -> PreparedActivity:
 
 
 @dataclass(frozen=True, slots=True)
-class PreparedAggregates:
+class PreparedArtifacts:
     """Immutable accumulator for the four artifact lists a workflow collects.
 
     ``prepare_workflow`` and the control-flow preparers (``IfCondition``,
@@ -297,7 +297,7 @@ class PreparedAggregates:
     secrets, setup tasks, inner workflows) up into the outer scope.
     Storing them in a frozen dataclass with tuple fields keeps the
     accumulation purely functional: each merge returns a new
-    :class:`PreparedAggregates` rather than mutating shared lists.
+    :class:`PreparedArtifacts` rather than mutating shared lists.
     """
 
     notebooks: tuple[DabNotebook, ...] = ()
@@ -306,13 +306,13 @@ class PreparedAggregates:
     inner_workflows: tuple[PreparedWorkflow, ...] = ()
 
 
-def merge_prepared_aggregates(
-    aggregates: PreparedAggregates,
+def merge_prepared_artifacts(
+    artifacts: PreparedArtifacts,
     prepared: PreparedActivity,
-) -> PreparedAggregates:
-    """Return a new :class:`PreparedAggregates` extended with *prepared*'s artifacts.
+) -> PreparedArtifacts:
+    """Return a new :class:`PreparedArtifacts` extended with *prepared*'s artifacts.
 
-    Treats *aggregates* as immutable -- the input is never mutated; the
+    Treats *artifacts* as immutable -- the input is never mutated; the
     returned value is a fresh instance with each of the four tuple
     fields concatenated with the corresponding list from *prepared*.
 
@@ -321,11 +321,11 @@ def merge_prepared_aggregates(
     tasks, branch bodies, ForEach inner tasks); only the cross-cutting
     "fold up" collections live here.
     """
-    return PreparedAggregates(
-        notebooks=aggregates.notebooks + tuple(prepared.notebooks),
-        secrets=aggregates.secrets + tuple(prepared.secrets),
-        setup_tasks=aggregates.setup_tasks + tuple(prepared.setup_tasks),
-        inner_workflows=aggregates.inner_workflows + tuple(prepared.inner_workflows),
+    return PreparedArtifacts(
+        notebooks=artifacts.notebooks + tuple(prepared.notebooks),
+        secrets=artifacts.secrets + tuple(prepared.secrets),
+        setup_tasks=artifacts.setup_tasks + tuple(prepared.setup_tasks),
+        inner_workflows=artifacts.inner_workflows + tuple(prepared.inner_workflows),
     )
 
 
@@ -344,7 +344,7 @@ def prepare_workflow(pipeline: Pipeline) -> PreparedWorkflow:
         A PreparedWorkflow ready for the DAB bundle writer.
     """
     all_tasks: list[dict[str, Any]] = []
-    aggregates = PreparedAggregates()
+    artifacts = PreparedArtifacts()
     cluster_hints: list[dict[str, Any]] = []
     task_key_remap: dict[str, str] = {}
 
@@ -360,7 +360,7 @@ def prepare_workflow(pipeline: Pipeline) -> PreparedWorkflow:
         prepared = prepare_activity(activity, scope=scope, variable_task_keys=variable_task_keys_map)
         all_tasks.append(prepared.task)
         all_tasks.extend(prepared.extra_tasks)
-        aggregates = merge_prepared_aggregates(aggregates, prepared)
+        artifacts = merge_prepared_artifacts(artifacts, prepared)
         task_key_remap.update(prepared.task_key_remap)
         if activity.cluster:
             cluster_hints.append(dict(activity.cluster))
@@ -382,7 +382,7 @@ def prepare_workflow(pipeline: Pipeline) -> PreparedWorkflow:
 
     seen_secrets: set[tuple[str, str]] = set()
     unique_secrets: list[SecretInstruction] = []
-    for secret in aggregates.secrets:
+    for secret in artifacts.secrets:
         secret_id = (secret.scope, secret.key)
         if secret_id not in seen_secrets:
             seen_secrets.add(secret_id)
@@ -391,9 +391,9 @@ def prepare_workflow(pipeline: Pipeline) -> PreparedWorkflow:
     return PreparedWorkflow(
         name=pipeline.name,
         tasks=all_tasks,
-        notebooks=list(aggregates.notebooks),
+        notebooks=list(artifacts.notebooks),
         secrets=unique_secrets,
-        setup_tasks=list(aggregates.setup_tasks),
-        inner_workflows=list(aggregates.inner_workflows),
+        setup_tasks=list(artifacts.setup_tasks),
+        inner_workflows=list(artifacts.inner_workflows),
         cluster_hints=cluster_hints,
     )

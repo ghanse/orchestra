@@ -22,9 +22,9 @@ from orchestra.parser.expression_parser import resolve_expression, resolve_inter
 from orchestra.preparer.activity_preparers.if_condition import _inject_outcome_dependency
 from orchestra.preparer.workflow_preparer import (
     PreparedActivity,
-    PreparedAggregates,
+    PreparedArtifacts,
     _build_common_task_fields,
-    merge_prepared_aggregates,
+    merge_prepared_artifacts,
     prepare_activity,
 )
 
@@ -82,7 +82,7 @@ def prepare(activity: SwitchActivity, *, scope: str = "") -> PreparedActivity:
         A PreparedActivity with the first condition as ``task`` and all
         subsequent conditions + case bodies as ``extra_tasks``.
     """
-    aggregates = PreparedAggregates()
+    artifacts = PreparedArtifacts()
     extra_tasks: list[dict[str, Any]] = []
 
     resolved_expr = _resolve_on_expression(activity.on_expression)
@@ -97,16 +97,16 @@ def prepare(activity: SwitchActivity, *, scope: str = "") -> PreparedActivity:
             prepared = prepare_activity(child, scope=scope)
             default_tasks.append(prepared.task)
             default_tasks.extend(prepared.extra_tasks)
-            aggregates = merge_prepared_aggregates(aggregates, prepared)
+            artifacts = merge_prepared_artifacts(artifacts, prepared)
         _inject_outcome_dependency(default_tasks, activity.task_key, "true")
 
         return PreparedActivity(
             task=task,
             extra_tasks=default_tasks,
-            notebooks=list(aggregates.notebooks),
-            secrets=list(aggregates.secrets),
-            setup_tasks=list(aggregates.setup_tasks),
-            inner_workflows=list(aggregates.inner_workflows),
+            notebooks=list(artifacts.notebooks),
+            secrets=list(artifacts.secrets),
+            setup_tasks=list(artifacts.setup_tasks),
+            inner_workflows=list(artifacts.inner_workflows),
         )
 
     # Build one condition task per case, chained via outcome="false" deps.
@@ -140,7 +140,7 @@ def prepare(activity: SwitchActivity, *, scope: str = "") -> PreparedActivity:
             prepared = prepare_activity(child, scope=scope)
             case_branch_tasks.append(prepared.task)
             case_branch_tasks.extend(prepared.extra_tasks)
-            aggregates = merge_prepared_aggregates(aggregates, prepared)
+            artifacts = merge_prepared_artifacts(artifacts, prepared)
         _inject_outcome_dependency(case_branch_tasks, case_key, "true")
 
         if is_first:
@@ -155,7 +155,7 @@ def prepare(activity: SwitchActivity, *, scope: str = "") -> PreparedActivity:
         prepared = prepare_activity(child, scope=scope)
         branch_default_tasks.append(prepared.task)
         branch_default_tasks.extend(prepared.extra_tasks)
-        aggregates = merge_prepared_aggregates(aggregates, prepared)
+        artifacts = merge_prepared_artifacts(artifacts, prepared)
     if branch_default_tasks:
         _inject_outcome_dependency(branch_default_tasks, case_keys[-1], "false")
         extra_tasks.extend(branch_default_tasks)
@@ -167,9 +167,9 @@ def prepare(activity: SwitchActivity, *, scope: str = "") -> PreparedActivity:
     return PreparedActivity(
         task=first_condition_task,
         extra_tasks=extra_tasks,
-        notebooks=list(aggregates.notebooks),
-        secrets=list(aggregates.secrets),
-        setup_tasks=list(aggregates.setup_tasks),
-        inner_workflows=list(aggregates.inner_workflows),
+        notebooks=list(artifacts.notebooks),
+        secrets=list(artifacts.secrets),
+        setup_tasks=list(artifacts.setup_tasks),
+        inner_workflows=list(artifacts.inner_workflows),
         task_key_remap=remap,
     )
