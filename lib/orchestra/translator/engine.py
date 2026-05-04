@@ -580,6 +580,10 @@ def _activity_extra_fields(activity: Activity) -> dict[str, Any]:
         case FilterActivity():
             extra["items_expression"] = activity.items_expression
             extra["condition_expression"] = activity.condition_expression
+            if activity.condition_code is not None:
+                extra["condition_code"] = activity.condition_code
+            if activity.condition_imports:
+                extra["condition_imports"] = list(activity.condition_imports)
         case AppendVariableActivity():
             extra["variable_name"] = activity.variable_name
             extra["append_value"] = activity.append_value

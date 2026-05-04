@@ -318,11 +318,20 @@ class FilterActivity(Activity):
 
     Attributes:
         items_expression: ADF expression for the input array.
-        condition_expression: ADF expression for the filter condition.
+        condition_expression: Original ADF condition expression (preserved
+            for documentation; never executed at runtime).
+        condition_code: Python expression that evaluates to a bool against
+            a per-iteration ``item`` dict.  ``None`` when the translator
+            could not safely pre-resolve the condition; the code generator
+            emits a TODO placeholder notebook in that case.
+        condition_imports: Imports the ``condition_code`` expression
+            requires (e.g. ``datetime``).
     """
 
     items_expression: str
     condition_expression: str
+    condition_code: str | None = None
+    condition_imports: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True, kw_only=True)

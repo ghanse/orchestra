@@ -940,6 +940,8 @@ def _reconstruct_ir(task_ir: dict[str, Any]) -> Activity:
             **base,
             items_expression=task_ir.get("items_expression", ""),
             condition_expression=task_ir.get("condition_expression", ""),
+            condition_code=task_ir.get("condition_code"),
+            condition_imports=list(task_ir.get("condition_imports") or []),
         )
     if task_type == "AppendVariableActivity":
         return AppendVariableActivity(

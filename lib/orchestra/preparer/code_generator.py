@@ -418,53 +418,75 @@ def _strip_inline_imports(body: str, hoisted: list[str]) -> str:
 def generate_filter_notebook(activity: FilterActivity) -> str:
     """Generates a notebook that filters an array and stores the result as a task value.
 
-    Args:
-        activity: The FilterActivity IR node.
-
-    Returns:
-        Complete notebook source code as a string.
+    The condition is pre-translated at translate-time when possible; the
+    notebook never calls ``eval()`` on widget input.  Conditions the
+    translator could not safely lower fall back to a TODO placeholder
+    notebook.
     """
     header = _notebook_header(f"Filter: {activity.name}")
+    if activity.condition_code is None:
+        return header + _command_separator() + _filter_placeholder_body(activity)
+    return header + _command_separator() + _filter_resolved_body(activity)
 
-    body = textwrap.dedent(f"""\
+
+def _filter_resolved_body(activity: FilterActivity) -> str:
+    """Returns the notebook body for a Filter whose condition was resolved to Python."""
+    import_block = "\n".join(activity.condition_imports or [])
+    items_default = repr(activity.items_expression)
+    original_expression_comment = _safe_inline_comment(activity.condition_expression)
+    return textwrap.dedent(f"""\
         import json
+        {import_block}
 
-        # Parameters
-        items_expression = dbutils.widgets.get("items_expression") or '''{activity.items_expression}'''
-        condition_expression = dbutils.widgets.get("condition_expression") or '''{activity.condition_expression}'''
-
-        # Evaluate the input array
-        # If the items expression is a task value reference, evaluate it;
-        # otherwise treat it as a JSON-encoded list.
-        try:
-            items = eval(items_expression)
-        except Exception:
-            items = json.loads(items_expression)
-
+        # ``items_expression`` carries either a JSON-encoded array (when DAB
+        # substitutes a {{{{tasks.X.values.Y}}}} reference) or a raw JSON literal
+        # -- both parse via ``json.loads``.
+        items_expression = dbutils.widgets.get("items_expression") or {items_default}
+        items = json.loads(items_expression) if items_expression else []
         if not isinstance(items, list):
-            items = list(items) if hasattr(items, '__iter__') else [items]
+            items = [items]
 
-        # Apply the filter condition
-        # The condition expression should be a Python lambda or expression string.
-        # For ADF @equals(item().status, 'active') style conditions, we wrap in a
-        # lambda that receives each item.
-        try:
-            filter_fn = eval(f"lambda item: {{condition_expression}}")
-            filtered = [item for item in items if filter_fn(item)]
-        except Exception:
-            # Fallback: keep all items if the condition cannot be evaluated
-            print(f"WARNING: Could not evaluate filter condition: {{condition_expression}}")
-            print("Returning all items unfiltered. Please review the condition expression.")
-            filtered = items
+        # Pre-translated condition (no eval on widget input).
+        # Original ADF expression: {original_expression_comment}
+        filtered = [item for item in items if {activity.condition_code}]
 
-        # Set the filtered result as a task value for downstream tasks
-        result = json.dumps(filtered)
-        dbutils.jobs.taskValues.set(key="output", value=result)
+        dbutils.jobs.taskValues.set(key="output", value=json.dumps(filtered))
         print(f"Filtered {{len(items)}} items to {{len(filtered)}} items")
-
     """)
 
-    return header + _command_separator() + body
+
+def _filter_placeholder_body(activity: FilterActivity) -> str:
+    """Returns a TODO placeholder body for a Filter whose condition didn't translate."""
+    items_default = repr(activity.items_expression)
+    original_expression_comment = _safe_inline_comment(activity.condition_expression)
+    activity_name_literal = repr(activity.name)
+    return textwrap.dedent(f"""\
+        import json
+
+        items_expression = dbutils.widgets.get("items_expression") or {items_default}
+        items = json.loads(items_expression) if items_expression else []
+        if not isinstance(items, list):
+            items = [items]
+
+        # The translator could not safely lower the original ADF condition
+        # to Python without invoking ``eval()`` on widget input.  Implement
+        # the per-item check below by hand, then drop this NotImplementedError.
+        # Original ADF expression: {original_expression_comment}
+        def _matches(item):
+            raise NotImplementedError(
+                f"Implement filter condition for activity {activity_name_literal}"
+            )
+
+        filtered = [item for item in items if _matches(item)]
+
+        dbutils.jobs.taskValues.set(key="output", value=json.dumps(filtered))
+        print(f"Filtered {{len(items)}} items to {{len(filtered)}} items")
+    """)
+
+
+def _safe_inline_comment(text: str) -> str:
+    """Returns *text* on a single line, suitable for an inline ``#`` comment."""
+    return text.replace("\n", " ").replace("\r", " ").strip()
 
 
 def generate_append_variable_notebook(activity: AppendVariableActivity) -> str:

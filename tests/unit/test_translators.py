@@ -372,6 +372,38 @@ class TestFilterTranslator:
         assert result.items_expression is not None
         assert result.condition_expression is not None
 
+    def test_translate_filter_lowers_simple_condition(self):
+        """``@equals(item().X, 'Y')`` lowers to a Python expression with item.get(X)."""
+        from orchestra.translator.activity_translators.filter import translate
+
+        activity = _make_activity(
+            "Filter Active",
+            "Filter",
+            {
+                "items": {"type": "Expression", "value": "@activity('Lookup').output.value"},
+                "condition": {"type": "Expression", "value": "@equals(item().status, 'active')"},
+            },
+        )
+        result = translate(activity, _base_kwargs(), _context(), _EMPTY_DEFS)
+        assert result.condition_code is not None
+        assert "item.get('status')" in result.condition_code
+        assert "dbutils.widgets.get" not in result.condition_code
+
+    def test_translate_filter_falls_back_to_placeholder_for_unresolvable(self):
+        """A condition that doesn't lower cleanly leaves condition_code=None."""
+        from orchestra.translator.activity_translators.filter import translate
+
+        activity = _make_activity(
+            "Filter Mystery",
+            "Filter",
+            {
+                "items": {"type": "Expression", "value": "@activity('X').output.value"},
+                "condition": {"type": "Expression", "value": "@nonexistent_function(item())"},
+            },
+        )
+        result = translate(activity, _base_kwargs(), _context(), _EMPTY_DEFS)
+        assert result.condition_code is None
+
 
 class TestForEachTranslator:
     def test_translate_foreach_basic(self):

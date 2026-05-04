@@ -379,6 +379,59 @@ class TestGenerateFilterNotebook:
         assert "dbutils.jobs.taskValues.set" in content
         assert "filter" in content.lower() or "filtered" in content
 
+    def test_resolved_condition_emits_inline_comprehension(self):
+        """When the translator pre-resolves the condition, no eval() call appears."""
+        activity = FilterActivity(
+            **_make_base("FilterActive", "filter_active"),
+            items_expression="{{tasks.Lookup.values.result}}",
+            condition_expression="@equals(item().status, 'active')",
+            condition_code="(item.get('status') == 'active')",
+        )
+        content = generate_filter_notebook(activity)
+        _assert_valid_python(content, "filter_active")
+        assert _contains_eval_call(content) is False, "resolved condition path must not contain an eval() call"
+        assert "filtered = [item for item in items if (item.get('status') == 'active')]" in content
+        assert "json.loads(items_expression)" in content
+        assert "NotImplementedError" not in content
+
+    def test_unresolved_condition_falls_back_to_placeholder(self):
+        """When condition_code is None, the notebook is a TODO placeholder (no eval call)."""
+        activity = FilterActivity(
+            **_make_base("FilterMystery", "filter_mystery"),
+            items_expression="@variables('myList')",
+            condition_expression="@some_function_we_dont_translate(item())",
+            condition_code=None,
+        )
+        content = generate_filter_notebook(activity)
+        _assert_valid_python(content, "filter_mystery")
+        assert _contains_eval_call(content) is False, "placeholder path must not contain an eval() call"
+        assert "NotImplementedError" in content
+        assert "Implement filter condition" in content
+
+    def test_no_eval_in_either_branch_with_quotes_in_expressions(self):
+        """ADF expressions containing single quotes don't break the notebook syntax."""
+        for resolved_code in (None, "(item.get('region') == 'us-west-1')"):
+            activity = FilterActivity(
+                **_make_base("FilterQ", "filter_q"),
+                items_expression="@activity('GetList').output.value",
+                condition_expression="@equals(item().region, 'us-west-1')",
+                condition_code=resolved_code,
+            )
+            content = generate_filter_notebook(activity)
+            _assert_valid_python(content, "filter_q")
+            assert _contains_eval_call(content) is False
+
+
+def _contains_eval_call(source: str) -> bool:
+    """Returns True if the parsed Python source contains a real ``eval(...)`` call."""
+    import ast
+
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "eval":
+            return True
+    return False
+
 
 # ---------------------------------------------------------------------------
 # Append variable notebook generator
