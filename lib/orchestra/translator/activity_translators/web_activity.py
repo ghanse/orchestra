@@ -8,7 +8,7 @@ from orchestra.models.adf_ast import AdfActivity, AdfDefinitions
 from orchestra.models.ir import Activity, TranslationContext
 from orchestra.models.ir import WebActivity as WebActivityIR
 from orchestra.parser.expression_parser import resolve_expression
-from orchestra.translator.activity_translators._resolve import resolve_dict_values, resolve_field
+from orchestra.translator.activity_translators.resolve import resolve_dict_values, resolve_field
 
 
 def translate(

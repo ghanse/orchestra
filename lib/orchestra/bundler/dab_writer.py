@@ -50,7 +50,7 @@ from orchestra.preparer.code_generator import (
     generate_wait_notebook,
     generate_web_activity_notebook,
 )
-from orchestra.preparer.activity_preparers._naming import notebook_filename
+from orchestra.preparer.activity_preparers.naming import notebook_filename
 from orchestra.preparer.activity_preparers.switch import resolve_switch_on_expression, sanitize_case_key
 from orchestra.preparer.workflow_preparer import PreparedWorkflow, run_if_from_adf_outcomes
 from orchestra.preparer.workspace_downloader import download_notebook

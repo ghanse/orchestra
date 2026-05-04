@@ -7,7 +7,7 @@ from typing import Any
 from orchestra.models.adf_ast import AdfActivity, AdfDefinitions
 from orchestra.models.ir import Activity, ForEachActivity, TranslationContext
 from orchestra.parser.expression_parser import resolve_expression
-from orchestra.translator.activity_translators._resolve import resolve_field_int
+from orchestra.translator.activity_translators.resolve import resolve_field_int
 
 
 def translate(

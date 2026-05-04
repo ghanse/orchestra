@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from orchestra.models.dab import DabNotebook
-from orchestra.preparer.activity_preparers._helpers import resolve_param_value
+from orchestra.preparer.activity_preparers.helpers import resolve_param_value
 from orchestra.preparer.workflow_preparer import PreparedActivity, build_common_task_fields
 from orchestra.preparer.workspace_downloader import download_dbfs_file
 

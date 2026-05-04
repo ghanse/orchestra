@@ -6,11 +6,11 @@ from typing import TYPE_CHECKING
 
 from orchestra.models.dab import SecretInstruction
 from orchestra.models.source_types import JDBC_SOURCE_TYPES
-from orchestra.preparer.activity_preparers._helpers import (
+from orchestra.preparer.activity_preparers.helpers import (
     build_notebook_activity_task,
     make_jdbc_secrets,
 )
-from orchestra.preparer.activity_preparers._naming import notebook_filename
+from orchestra.preparer.activity_preparers.naming import notebook_filename
 from orchestra.preparer.code_generator import generate_lookup_notebook
 from orchestra.preparer.workflow_preparer import PreparedActivity
 

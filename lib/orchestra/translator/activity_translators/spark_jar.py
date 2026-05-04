@@ -7,7 +7,7 @@ from typing import Any
 from orchestra.models.adf_ast import AdfActivity, AdfDefinitions
 from orchestra.models.ir import Activity, SparkJarActivity, TranslationContext
 from orchestra.parser.expression_parser import resolve_expression, resolve_interpolated_string
-from orchestra.translator.activity_translators._resolve import resolve_field
+from orchestra.translator.activity_translators.resolve import resolve_field
 
 
 def translate(

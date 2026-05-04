@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 from orchestra.models.dab import DabNotebook
 from orchestra.models.ir import TranslationContext
 from orchestra.parser.expression_parser import resolve_expression, resolve_interpolated_string
-from orchestra.preparer.activity_preparers._naming import notebook_filename
+from orchestra.preparer.activity_preparers.naming import notebook_filename
 from orchestra.preparer.workflow_preparer import PreparedActivity, build_common_task_fields
 from orchestra.preparer.workspace_downloader import download_notebook
 

@@ -5,11 +5,11 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from orchestra.models.dab import SecretInstruction
-from orchestra.preparer.activity_preparers._helpers import (
+from orchestra.preparer.activity_preparers.helpers import (
     build_notebook_activity_task,
     resolve_param_value,
 )
-from orchestra.preparer.activity_preparers._naming import notebook_filename
+from orchestra.preparer.activity_preparers.naming import notebook_filename
 from orchestra.preparer.code_generator import generate_web_activity_notebook
 from orchestra.preparer.workflow_preparer import PreparedActivity
 

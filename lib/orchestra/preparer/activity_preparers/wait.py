@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from orchestra.preparer.activity_preparers._helpers import build_notebook_activity_task
-from orchestra.preparer.activity_preparers._naming import notebook_filename
+from orchestra.preparer.activity_preparers.helpers import build_notebook_activity_task
+from orchestra.preparer.activity_preparers.naming import notebook_filename
 from orchestra.preparer.code_generator import generate_wait_notebook
 from orchestra.preparer.workflow_preparer import PreparedActivity
 

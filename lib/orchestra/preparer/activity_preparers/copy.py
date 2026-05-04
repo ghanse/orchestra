@@ -9,11 +9,11 @@ from dataclasses import dataclass
 from orchestra.models.dab import SecretInstruction, SetupTask
 from orchestra.models.ir import CopyActivity
 from orchestra.models.source_types import FILE_SOURCE_TYPES, JDBC_SOURCE_TYPES
-from orchestra.preparer.activity_preparers._helpers import (
+from orchestra.preparer.activity_preparers.helpers import (
     build_notebook_activity_task,
     make_jdbc_secrets,
 )
-from orchestra.preparer.activity_preparers._naming import notebook_filename
+from orchestra.preparer.activity_preparers.naming import notebook_filename
 from orchestra.preparer.code_generator import generate_copy_notebook
 from orchestra.preparer.workflow_preparer import PreparedActivity
 
