@@ -182,6 +182,34 @@ class TestWriteBundle:
             content = yaml.safe_load(yml_file.read_text())
             assert content is not None, f"YAML file {yml_file} parsed as None"
 
+    def test_module_state_does_not_leak_across_calls(self, tmp_path):
+        """Successive write_bundle calls don't accumulate warnings or cross-bundle vars.
+
+        Regression: ``_bundle_warnings`` and ``_cross_bundle_variables`` used to
+        be cleared only by ``main()`` (the CLI), so library callers iterating
+        over multiple workflows leaked state from one bundle into the next.
+        """
+        from orchestra.bundler.dab_writer import _bundle_warnings, _cross_bundle_variables
+
+        first_dir = tmp_path / "first"
+        second_dir = tmp_path / "second"
+        first_dir.mkdir()
+        second_dir.mkdir()
+
+        _bundle_warnings.append("- **stale_task**: stale warning from a prior bundle")
+        _cross_bundle_variables["stale_var"] = "stale-pipeline"
+
+        write_bundle(_simple_workflow("first"), first_dir)
+        write_bundle(_simple_workflow("second"), second_dir)
+
+        first_yml = yaml.safe_load((first_dir / "databricks.yml").read_text())
+        second_yml = yaml.safe_load((second_dir / "databricks.yml").read_text())
+        assert "stale_var" not in (first_yml.get("variables") or {})
+        assert "stale_var" not in (second_yml.get("variables") or {})
+        # No WARNINGS.md should appear when the workflow itself produces no warnings.
+        assert not (first_dir / "WARNINGS.md").exists()
+        assert not (second_dir / "WARNINGS.md").exists()
+
 
 class TestSetupGenerator:
     def test_secrets_setup_notebook_content(self):

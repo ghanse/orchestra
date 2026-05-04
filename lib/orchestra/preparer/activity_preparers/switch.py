@@ -25,37 +25,34 @@ if TYPE_CHECKING:
     from orchestra.models.ir import SwitchActivity
 
 
-def _sanitize_key(value: str) -> str:
-    """Sanitizes a case value for use in a task key.
+def sanitize_case_key(value: str) -> str:
+    """Returns a task-key-safe form of a switch case value.
 
-    Args:
-        value: Raw case value string.
-
-    Returns:
-        Alphanumeric + underscore string safe for task keys.
+    Used by both the in-process Switch preparer and the JSON-reload path in
+    ``dab_writer`` so the rendered task graph is identical regardless of
+    which path produced it.
     """
     sanitized = re.sub(r"[^a-zA-Z0-9_]", "_", value)
     sanitized = re.sub(r"_+", "_", sanitized).strip("_")
     return sanitized or "empty"
 
 
-def _resolve_on_expression(on_expr: str) -> str:
+def resolve_switch_on_expression(on_expression: str) -> str:
     """Resolves the switch ``on`` expression to a DAB dynamic value ref.
 
-    Args:
-        on_expr: Raw ADF on-expression string.
-
-    Returns:
-        Resolved DAB ref string, or the original expression if unresolvable.
+    Idempotent: an already-resolved DAB ref (``{{job.parameters.X}}``) or
+    plain literal passes through unchanged.  Both the in-process preparer
+    and the JSON-reload path call this so a hand-edited IR with a raw
+    ``@variables(...)`` is still resolved before being written to YAML.
     """
     context = TranslationContext()
-    if "@{" in on_expr:
-        return resolve_interpolated_string(on_expr, context)
-    if on_expr.startswith("@"):
-        result = resolve_expression(on_expr, context)
+    if "@{" in on_expression:
+        return resolve_interpolated_string(on_expression, context)
+    if on_expression.startswith("@"):
+        result = resolve_expression(on_expression, context)
         if result is not None and result.kind in ("dab_ref", "literal"):
             return result.value
-    return on_expr
+    return on_expression
 
 
 def prepare(activity: SwitchActivity, *, scope: str = "") -> PreparedActivity:
@@ -72,7 +69,7 @@ def prepare(activity: SwitchActivity, *, scope: str = "") -> PreparedActivity:
     artifacts = PreparedArtifacts()
     extra_tasks: list[dict[str, Any]] = []
 
-    resolved_expr = _resolve_on_expression(activity.on_expression)
+    resolved_expr = resolve_switch_on_expression(activity.on_expression)
 
     if not activity.cases:
         task = build_common_task_fields(activity)
@@ -104,7 +101,7 @@ def prepare(activity: SwitchActivity, *, scope: str = "") -> PreparedActivity:
     case_keys: list[str] = []
     for index, case in enumerate(activity.cases):
         is_first = index == 0
-        case_key = f"{activity.task_key}_case_{_sanitize_key(case.value)}"
+        case_key = f"{activity.task_key}_case_{sanitize_case_key(case.value)}"
         case_keys.append(case_key)
 
         condition_task: dict[str, Any] = {

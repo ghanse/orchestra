@@ -357,6 +357,79 @@ class TestRunJobPreparer:
         prepared = prepare_activity(activity)
         assert "run_job_task" in prepared.task
 
+    def test_run_job_round_trips_through_translation_report_json(self, tmp_path):
+        """RunJobActivity.job_parameters survive the JSON serialise/reload cycle.
+
+        Regression: the engine used to omit ``job_parameters`` from the
+        serialised IR, and dab_writer's reload path read ``parameters`` (which
+        only ExecutePipelineActivity emits), silently dropping every
+        RunJobActivity's parameters when bundles were produced via the CLI
+        ``--report`` flow.
+        """
+        import json
+
+        import yaml
+
+        from orchestra.bundler.dab_writer import _load_report, write_bundle
+        from orchestra.translator.engine import _activity_to_dict, _pipeline_to_dict
+
+        run_job = RunJobActivity(
+            **_make_base("Nightly Aggregator", "nightly_aggregator"),
+            job_name="nightly-agg",
+            existing_job_id="12345",
+            job_parameters={"window_start": "2024-01-01", "table": "orders"},
+        )
+        pipeline = Pipeline(name="rj_pipeline", tasks=[run_job])
+        pipeline_dict = _pipeline_to_dict(pipeline)
+        # Sanity: serialiser must include job_parameters.
+        run_job_dict = next(t for t in pipeline_dict["tasks"] if t["task_key"] == "nightly_aggregator")
+        assert run_job_dict["job_parameters"] == {"window_start": "2024-01-01", "table": "orders"}
+        assert _activity_to_dict(run_job)["job_parameters"] == run_job.job_parameters
+
+        report_path = tmp_path / "rj.json"
+        report_path.write_text(json.dumps(pipeline_dict))
+        workflows = _load_report(report_path)
+        bundle_dir = tmp_path / "bundle"
+        bundle_dir.mkdir()
+        write_bundle(workflows[0], bundle_dir)
+
+        job_yml = next((bundle_dir / "resources").iterdir())
+        job = yaml.safe_load(job_yml.read_text())
+        task = job["resources"]["jobs"]["rj_pipeline"]["tasks"][0]
+        assert task["run_job_task"]["job_parameters"] == {
+            "window_start": "2024-01-01",
+            "table": "orders",
+        }
+
+
+class TestMotifPreparer:
+    def test_motif_preparer_registered(self):
+        """prepare_activity dispatches MotifActivity to the motif preparer.
+
+        Regression: the motif system was added without a registered preparer,
+        so any pipeline whose translation matched a motif raised
+        ``ValueError("No preparer registered for activity type MotifActivity")``
+        when prepare_workflow ran.
+        """
+        from orchestra.models.ir import MotifActivity
+
+        activity = MotifActivity(
+            **_make_base("Bulk Ingest", "bulk_ingest"),
+            motif_id="metadata_driven_bulk_copy",
+            display_name="Metadata-driven bulk copy",
+            databricks_replacement="for_each_ingestion",
+            matched_activity_names=["GetTableList", "ForEachTable", "CopyTable"],
+            source_type_hint="database",
+            confidence_notes=["Lookup feeds ForEach feeds Copy"],
+            original_activities=[],
+            motif_config={"sink_table": "raw.{schema_name}_{table_name}"},
+        )
+        prepared = prepare_activity(activity)
+        assert "notebook_task" in prepared.task
+        assert prepared.task["notebook_task"]["notebook_path"].endswith("bulk_ingest.py")
+        assert len(prepared.notebooks) == 1
+        assert "metadata_driven_bulk_copy" in prepared.notebooks[0].content
+
 
 class TestSwitchPreparer:
     def test_prepare_switch_generates_condition_task(self):
@@ -452,6 +525,61 @@ class TestSwitchPreparer:
         prepared = prepare_activity(activity)
         cond = prepared.task["condition_task"]
         assert cond["left"] == "{{job.parameters.env}}"
+
+    def test_reload_path_resolves_unresolved_on_expression(self, tmp_path):
+        """dab_writer's reload path resolves a leftover @variables() before emitting YAML.
+
+        Regression: ``_handle_switch`` used to read ``on_expression`` straight
+        from the IR JSON, so a hand-edited or future-translator-produced IR
+        carrying an unresolved ``@variables(...)`` leaked the raw ADF syntax
+        into ``condition_task.left``, which ``databricks bundle validate``
+        would reject.
+        """
+        import json
+
+        import yaml
+
+        from orchestra.bundler.dab_writer import _load_report, write_bundle
+
+        pipeline_dict = {
+            "name": "switch_pipeline",
+            "tasks": [
+                {
+                    "type": "SwitchActivity",
+                    "name": "Route",
+                    "task_key": "route",
+                    "on_expression": "@pipeline().parameters.env",
+                    "cases": [
+                        {
+                            "value": "dev",
+                            "activities": [
+                                {
+                                    "type": "WaitActivity",
+                                    "name": "Wait",
+                                    "task_key": "wait",
+                                    "wait_time_seconds": 1,
+                                }
+                            ],
+                        }
+                    ],
+                    "default_activities": [],
+                }
+            ],
+        }
+        report_path = tmp_path / "switch.json"
+        report_path.write_text(json.dumps(pipeline_dict))
+        workflows = _load_report(report_path)
+        bundle_dir = tmp_path / "bundle"
+        bundle_dir.mkdir()
+        write_bundle(workflows[0], bundle_dir)
+
+        job_yml = next((bundle_dir / "resources").iterdir())
+        job = yaml.safe_load(job_yml.read_text())
+        switch_task = next(
+            t for t in job["resources"]["jobs"]["switch_pipeline"]["tasks"] if "condition_task" in t
+        )
+        assert switch_task["condition_task"]["left"] == "{{job.parameters.env}}"
+        assert switch_task["task_key"].endswith("_case_dev")
 
 
 class TestPlaceholderPreparer:

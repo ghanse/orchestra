@@ -195,11 +195,11 @@ class TestActivityTypeTranslation:
         """Switch cases produce correct case branches."""
         pipeline = pipeline_by_name("pipeline_foreach_switch")
         report = translate_pipeline(pipeline, adf_definitions)
-        # The Switch is inside the ForEach, so check the ForEach's child
         foreach_tasks = [t for t in report.pipeline.tasks if isinstance(t, ForEachActivity)]
         assert len(foreach_tasks) == 1
-        child = foreach_tasks[0].child_activity
-        assert isinstance(child, SwitchActivity)
+        switch_children = [a for a in foreach_tasks[0].inner_activities if isinstance(a, SwitchActivity)]
+        assert len(switch_children) == 1
+        child = switch_children[0]
         assert len(child.cases) == 2
         assert child.cases[0].value == "full"
         assert child.cases[1].value == "incremental"

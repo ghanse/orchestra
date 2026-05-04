@@ -632,6 +632,8 @@ def _activity_extra_fields(activity: Activity) -> dict[str, Any]:
             extra["job_name"] = activity.job_name
             if activity.existing_job_id:
                 extra["existing_job_id"] = activity.existing_job_id
+            if activity.job_parameters:
+                extra["job_parameters"] = activity.job_parameters
         case MotifActivity():
             extra["motif_id"] = activity.motif_id
             extra["display_name"] = activity.display_name

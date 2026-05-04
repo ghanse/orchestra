@@ -16,6 +16,7 @@ from orchestra.models.ir import (
     ForEachActivity,
     IfConditionActivity,
     LookupActivity,
+    MotifActivity,
     NotebookActivity,
     Pipeline,
     PlaceholderActivity,
@@ -119,6 +120,7 @@ def prepare_activity(
         for_each,
         if_condition,
         lookup,
+        motif,
         notebook,
         set_variable,
         spark_jar,
@@ -145,6 +147,7 @@ def prepare_activity(
         RunJobActivity: databricks_job.prepare,
         SwitchActivity: switch.prepare,
         WaitActivity: wait.prepare,
+        MotifActivity: motif.prepare,
     }
 
     preparer_fn = dispatch.get(type(activity))
