@@ -1,6 +1,6 @@
 import './global.css';
 import type { ReactNode } from 'react';
-import { RootProvider } from 'fumadocs-ui/provider';
+import { RootProvider } from 'fumadocs-ui/provider/next';
 import { Inter } from 'next/font/google';
 
 const inter = Inter({
@@ -13,7 +13,7 @@ export const metadata = {
     template: '%s | Orchestra',
   },
   description:
-    'Translate Azure Data Factory pipelines to Databricks Lakeflow Jobs via Declarative Automation Bundles.',
+    'Translate Azure Data Factory pipelines to Databricks Lakeflow Jobs.',
 };
 
 export default function Layout({ children }: { children: ReactNode }) {
