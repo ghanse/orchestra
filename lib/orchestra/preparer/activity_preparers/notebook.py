@@ -7,22 +7,19 @@ from typing import TYPE_CHECKING
 from orchestra.models.dab import DabNotebook
 from orchestra.models.ir import TranslationContext
 from orchestra.parser.expression_parser import resolve_expression, resolve_interpolated_string
+from orchestra.preparer.activity_preparers._naming import notebook_filename
 from orchestra.preparer.workflow_preparer import PreparedActivity, _build_common_task_fields
+from orchestra.preparer.workspace_downloader import download_notebook
 
 if TYPE_CHECKING:
     from orchestra.models.ir import NotebookActivity
 
 
 def _notebook_placeholder(original_path: str, activity_name: str, filename: str) -> str:
-    """Generate placeholder notebook content with export instructions.
+    """Return placeholder notebook content with manual-export instructions.
 
-    Args:
-        original_path: The original workspace path from ADF.
-        activity_name: The ADF activity name.
-        filename: The filename for the placeholder notebook.
-
-    Returns:
-        Placeholder notebook content as a string.
+    Used when the source notebook can't be downloaded automatically and the
+    user has to export it themselves with ``databricks workspace export``.
     """
     return (
         "# Databricks notebook source\n"
@@ -51,57 +48,38 @@ def _resolve_base_parameters(
     *,
     variable_task_keys: dict[str, str] | None = None,
 ) -> dict[str, str]:
-    """Resolve ADF expression dicts and map to DAB dynamic value references.
+    """Resolve ADF expressions in ``base_parameters`` to DAB-compatible values.
 
-    Uses the unified ``resolve_expression()`` to determine parameter values.
-    Only ``literal`` and ``dab_ref`` kinds are placed in base_parameters.
-    ``notebook_code`` kinds are excluded (they must go in the notebook body).
-
-    Args:
-        params: Raw base_parameters dict from the NotebookActivity.
-        variable_task_keys: Mapping of variable names to the task keys that
-            set them, used to resolve ``@variables('name')`` references.
-
-    Returns:
-        Resolved dict with DAB dynamic value references where possible.
+    Only ``literal`` and ``dab_ref`` results are kept -- ``notebook_code``
+    results would emit Python source into a base_parameter (which DAB cannot
+    evaluate).  Unresolvable values fall back to their string form for
+    manual review.
     """
     context = TranslationContext()
     resolved: dict[str, str] = {}
     for key, value in params.items():
         result = resolve_expression(value, context, variable_task_keys=variable_task_keys)
-        if result is not None:
-            if result.kind in ("literal", "dab_ref"):
-                resolved[key] = result.value
-                continue
-            # notebook_code: skip -- must not go in base_parameters
+        if result is not None and result.kind in ("literal", "dab_ref"):
+            resolved[key] = result.value
             continue
-
-        # Fallback for unresolvable values: keep as literal string
-        if isinstance(value, dict):
-            if value.get("type") == "Expression" and "value" in value:
-                # Keep the raw expression string for manual review
-                resolved[key] = str(value["value"])
-            else:
-                resolved[key] = str(value)
+        if result is not None:
+            # ``notebook_code`` cannot live in base_parameters; skip it so
+            # the notebook body's resolution path takes over.
+            continue
+        if isinstance(value, dict) and value.get("type") == "Expression" and "value" in value:
+            resolved[key] = str(value["value"])
         else:
             resolved[key] = str(value)
     return resolved
 
 
 def _resolve_notebook_path(path: str) -> str:
-    """Resolve any ADF expressions remaining in a notebook path.
-
-    Args:
-        path: Notebook workspace path that may contain ADF expressions.
-
-    Returns:
-        Resolved path string.
-    """
-    ctx = TranslationContext()
+    """Resolve any ADF expression embedded in a notebook workspace path."""
+    context = TranslationContext()
     if "@{" in path:
-        return resolve_interpolated_string(path, ctx)
+        return resolve_interpolated_string(path, context)
     if path.startswith("@"):
-        result = resolve_expression(path, ctx)
+        result = resolve_expression(path, context)
         if result is not None and result.kind in ("dab_ref", "literal"):
             return result.value
     return path
@@ -115,55 +93,37 @@ def prepare(
 ) -> PreparedActivity:
     """Convert a NotebookActivity into a DAB notebook_task definition.
 
-    Rewrites the notebook_path to a bundle-relative path and creates a
-    placeholder notebook with export instructions.
-
-    Args:
-        activity: The translated notebook activity from the IR.
-
-    Returns:
-        A PreparedActivity containing the notebook_task dict and placeholder notebook.
+    An absolute workspace path (``/Shared/...``) points at an existing
+    notebook -- the task is bound to that path directly so the original
+    stays the source of truth.  A relative path triggers a synthesised
+    placeholder under ``src/notebooks/`` so the user can fill it in.
     """
-    # Resolve any remaining ADF expressions in notebook_path.
     resolved_path = _resolve_notebook_path(activity.notebook_path)
-
     task = _build_common_task_fields(activity)
 
-    # If the ADF activity already references an existing workspace notebook
-    # (an absolute path like /Shared/team/my_notebook), point the task at the
-    # existing path rather than copying the notebook into the bundle.  The
-    # original notebook is the source of truth; copying it into the bundle
-    # would create a divergent, stale copy.
-    if resolved_path.startswith("/"):
-        task["notebook_task"] = {"notebook_path": resolved_path}
-        if activity.base_parameters:
-            task["notebook_task"]["base_parameters"] = _resolve_base_parameters(
-                dict(activity.base_parameters),
-                variable_task_keys=variable_task_keys,
-            )
-        return PreparedActivity(task=task)
-
-    # Otherwise the ADF activity referenced a relative path that does not
-    # resolve to an absolute workspace location.  Synthesise a placeholder
-    # notebook in the bundle with snake_case naming derived from the
-    # activity name.
-    from orchestra.preparer.activity_preparers._naming import notebook_filename
-
-    notebook_filename_str = notebook_filename(activity.task_key, activity.name)
-    notebook_rel_path = f"notebooks/{notebook_filename_str}"
-
-    from orchestra.preparer.workspace_downloader import download_notebook
-
-    content = download_notebook(resolved_path)
-    if content is None:
-        content = _notebook_placeholder(resolved_path, activity.name, notebook_filename_str)
-
-    task["notebook_task"] = {"notebook_path": f"../src/{notebook_rel_path}"}
+    base_parameters: dict[str, str] | None = None
     if activity.base_parameters:
-        task["notebook_task"]["base_parameters"] = _resolve_base_parameters(
+        base_parameters = _resolve_base_parameters(
             dict(activity.base_parameters),
             variable_task_keys=variable_task_keys,
         )
 
-    notebooks = [DabNotebook(relative_path=notebook_rel_path, content=content)]
+    if resolved_path.startswith("/"):
+        task["notebook_task"] = {"notebook_path": resolved_path}
+        if base_parameters is not None:
+            task["notebook_task"]["base_parameters"] = base_parameters
+        return PreparedActivity(task=task)
+
+    placeholder_filename = notebook_filename(activity.task_key, activity.name)
+    notebook_relative_path = f"notebooks/{placeholder_filename}"
+    content = (
+        download_notebook(resolved_path)
+        or _notebook_placeholder(resolved_path, activity.name, placeholder_filename)
+    )
+
+    task["notebook_task"] = {"notebook_path": f"../src/{notebook_relative_path}"}
+    if base_parameters is not None:
+        task["notebook_task"]["base_parameters"] = base_parameters
+
+    notebooks = [DabNotebook(relative_path=notebook_relative_path, content=content)]
     return PreparedActivity(task=task, notebooks=notebooks)

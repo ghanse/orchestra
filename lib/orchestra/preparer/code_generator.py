@@ -11,13 +11,15 @@ Each generator produces a self-contained Databricks notebook with:
 from __future__ import annotations
 
 import json
+import re
 import textwrap
 from typing import TYPE_CHECKING, Any
 
-from orchestra.models.source_types import (
-    FILE_SOURCE_TYPES as _FILE_SOURCE_TYPES,
-    JDBC_SOURCE_TYPES as _JDBC_SOURCE_TYPES,
-    REST_SOURCE_TYPES as _REST_SOURCE_TYPES,
+from orchestra.models.ir import TranslationContext
+from orchestra.models.source_types import FILE_SOURCE_TYPES, JDBC_SOURCE_TYPES, REST_SOURCE_TYPES
+from orchestra.parser.expression_parser import (
+    resolve_expression,
+    resolve_interpolated_string_for_notebook,
 )
 
 if TYPE_CHECKING:
@@ -51,7 +53,7 @@ def generate_lookup_notebook(activity: LookupActivity, *, scope: str = "") -> st
     # (e.g. contains dbutils.widgets.get() calls from expression resolution).
     is_dynamic_query = "dbutils.widgets.get" in query or "dbutils.jobs.taskValues" in query
 
-    if source_type in _JDBC_SOURCE_TYPES:
+    if source_type in JDBC_SOURCE_TYPES:
         scope = scope or activity.task_key
 
         if is_dynamic_query:
@@ -398,11 +400,11 @@ def generate_copy_notebook(activity: CopyActivity, *, scope: str = "") -> str:
     header = _notebook_header(f"Copy: {activity.name}")
     source_type = activity.source_type or ""
 
-    if source_type in _FILE_SOURCE_TYPES:
+    if source_type in FILE_SOURCE_TYPES:
         body = _generate_autoloader_body(activity)
-    elif source_type in _JDBC_SOURCE_TYPES:
+    elif source_type in JDBC_SOURCE_TYPES:
         body = _generate_jdbc_body(activity, scope=scope)
-    elif source_type in _REST_SOURCE_TYPES:
+    elif source_type in REST_SOURCE_TYPES:
         body = _generate_rest_copy_body(activity)
     else:
         body = _generate_generic_copy_body(activity)
@@ -540,7 +542,7 @@ def generate_append_variable_notebook(activity: AppendVariableActivity) -> str:
         lines.append("")
         lines.append("# Read the current array from task values (or start with empty list)")
         lines.append("# `source_task_key` is populated at deploy time with the task that most")
-        lines.append("# recently set this variable.  An empty value falls back to []." )
+        lines.append("# recently set this variable.  An empty value falls back to [].")
         lines.append("source_task_key = dbutils.widgets.get('source_task_key')")
         lines.append("current: list = []")
         lines.append("if source_task_key:")
@@ -624,32 +626,33 @@ def _command_separator() -> str:
     return "\n# COMMAND ----------\n\n"
 
 
+_DAB_REF_PARAMETER_RE = re.compile(r"\{\{job\.parameters\.(\w+)\}\}")
+_DAB_REF_RUN_ID_RE = re.compile(r"\{\{job\.run_id\}\}")
+_DAB_REF_JOB_NAME_RE = re.compile(r"\{\{job\.name\}\}")
+_DAB_REF_START_TIME_RE = re.compile(r"\{\{job\.start_time\.iso_datetime\}\}")
+_DAB_REF_TASK_VALUE_RE = re.compile(r"\{\{tasks\.([^.]+)\.values\.(\w+)\}\}")
+
+
 def _dab_ref_to_fstring_expr(ref: str) -> str:
-    """Convert a DAB ref like {{job.name}} to a Python f-string expression.
+    """Convert a DAB ref (``{{job.name}}``) to a Python f-string expression.
 
-    Args:
-        ref: A DAB dynamic value reference string.
-
-    Returns:
-        A Python f-string expression like ``{dbutils.widgets.get('name')}``.
+    The returned snippet is meant to be inlined in an f-string, so it always
+    evaluates to a string at notebook runtime via ``dbutils`` or
+    ``spark.conf.get``.
     """
-    import re as _re
-
-    match = _re.match(r"\{\{job\.parameters\.(\w+)\}\}", ref)
-    if match:
-        return "{dbutils.widgets.get('" + match.group(1) + "')}"
-    match = _re.match(r"\{\{job\.run_id\}\}", ref)
-    if match:
+    parameter_match = _DAB_REF_PARAMETER_RE.match(ref)
+    if parameter_match:
+        return "{dbutils.widgets.get('" + parameter_match.group(1) + "')}"
+    if _DAB_REF_RUN_ID_RE.match(ref):
         return "{spark.conf.get('spark.databricks.job.runId', 'unknown')}"
-    match = _re.match(r"\{\{job\.name\}\}", ref)
-    if match:
+    if _DAB_REF_JOB_NAME_RE.match(ref):
         return "{spark.conf.get('spark.databricks.job.parentName', 'unknown')}"
-    match = _re.match(r"\{\{job\.start_time\.iso_datetime\}\}", ref)
-    if match:
+    if _DAB_REF_START_TIME_RE.match(ref):
         return "{spark.conf.get('spark.databricks.job.triggerTime', 'unknown')}"
-    match = _re.match(r"\{\{tasks\.([^.]+)\.values\.(\w+)\}\}", ref)
-    if match:
-        return "{dbutils.jobs.taskValues.get(taskKey='" + match.group(1) + "', key='" + match.group(2) + "')}"
+    task_value_match = _DAB_REF_TASK_VALUE_RE.match(ref)
+    if task_value_match:
+        task_key, value_key = task_value_match.group(1), task_value_match.group(2)
+        return "{dbutils.jobs.taskValues.get(taskKey='" + task_key + "', key='" + value_key + "')}"
     return ref
 
 
@@ -680,77 +683,90 @@ def _resolve_body(body: Any) -> str:
     """
     if body is None:
         return "None"
-
-    from orchestra.models.ir import TranslationContext
-    from orchestra.parser.expression_parser import (
-        resolve_expression,
-        resolve_interpolated_string_for_notebook,
-    )
-
-    context = TranslationContext()
-
     if isinstance(body, str):
-        if "@{" in body:
-            resolved_str = resolve_interpolated_string_for_notebook(body, context)
-            return f"f{json.dumps(resolved_str)}"
-        if body.startswith("@"):
-            result = resolve_expression(body, context)
-            if result is not None:
-                if result.kind == "notebook_code":
-                    return result.value
-                if result.kind == "literal":
-                    return json.dumps(result.value)
-                if result.kind == "dab_ref":
-                    return json.dumps(result.value)
+        return _resolve_string_body(body)
+    if isinstance(body, dict):
+        return _resolve_dict_body(body)
+    return json.dumps(body) if body else "''"
+
+
+def _resolve_string_body(body: str) -> str:
+    """Render a string-shaped WebActivity body as Python source."""
+    context = TranslationContext()
+    if "@{" in body:
+        resolved_str = resolve_interpolated_string_for_notebook(body, context)
+        return f"f{json.dumps(resolved_str)}"
+    if not body.startswith("@"):
         return json.dumps(body)
 
-    if isinstance(body, dict):
-        # Unwrap {"type": "Expression", "value": "@..."} — the body itself
-        # is an ADF expression, not a plain dict with keys "type" and "value".
-        if body.get("type") == "Expression" and "value" in body:
-            return _resolve_body(body["value"])
+    result = resolve_expression(body, context)
+    if result is None:
+        return json.dumps(body)
+    if result.kind == "notebook_code":
+        return result.value
+    return json.dumps(result.value)
 
-        # Check if any values need runtime resolution (DAB refs or expressions).
-        # If so, build the dict as a Python expression using f-strings.
-        needs_fstring = False
-        resolved: dict[str, Any] = {}
-        for k, v in body.items():
-            if isinstance(v, str) and "@{" in v:
-                needs_fstring = True
-                resolved[k] = resolve_interpolated_string_for_notebook(v, context)
-            elif isinstance(v, str) and v.startswith("@"):
-                result = resolve_expression(v, context)
-                if result and result.kind == "dab_ref":
-                    needs_fstring = True
-                    resolved[k] = _dab_ref_to_fstring_expr(result.value)
-                elif result and result.kind == "literal":
-                    resolved[k] = result.value
-                else:
-                    resolved[k] = v
-            elif isinstance(v, dict) and v.get("type") == "Expression":
-                result = resolve_expression(v, context)
-                if result and result.kind == "dab_ref":
-                    needs_fstring = True
-                    resolved[k] = _dab_ref_to_fstring_expr(result.value)
-                elif result and result.kind == "literal":
-                    resolved[k] = result.value
-                else:
-                    resolved[k] = v.get("value", str(v))
-            else:
-                resolved[k] = v
 
-        if needs_fstring:
-            # Build a Python dict literal with f-string expressions
-            parts = []
-            for k, v in resolved.items():
-                if isinstance(v, str) and "{" in v and "dbutils" in v:
-                    parts.append(f'"{k}": f"{v}"')
-                else:
-                    parts.append(f'"{k}": {json.dumps(v)}')
-            return "{" + ", ".join(parts) + "}"
+def _resolve_dict_body(body: dict[str, Any]) -> str:
+    """Render a dict-shaped WebActivity body as Python source.
+
+    Unwraps the ``{"type": "Expression", "value": "@..."}`` shape (the body
+    itself is an ADF expression).  Otherwise resolves each value -- when at
+    least one value resolves to a DAB ref or interpolation, the result is a
+    Python f-string-bearing dict literal so runtime values flow through.
+    """
+    if body.get("type") == "Expression" and "value" in body:
+        return _resolve_body(body["value"])
+
+    context = TranslationContext()
+    needs_fstring = False
+    resolved: dict[str, Any] = {}
+    for key, value in body.items():
+        new_value, value_needs_fstring = _resolve_dict_value(value, context)
+        resolved[key] = new_value
+        needs_fstring = needs_fstring or value_needs_fstring
+
+    if not needs_fstring:
         return json.dumps(resolved)
 
-    return json.dumps(body) if body else "''"
+    parts: list[str] = []
+    for key, value in resolved.items():
+        if isinstance(value, str) and "{" in value and "dbutils" in value:
+            parts.append(f'"{key}": f"{value}"')
+        else:
+            parts.append(f'"{key}": {json.dumps(value)}')
+    return "{" + ", ".join(parts) + "}"
+
+
+def _resolve_dict_value(value: Any, context: TranslationContext) -> tuple[Any, bool]:
+    """Resolve a single dict value; return ``(new_value, needs_fstring)``."""
+    if isinstance(value, str) and "@{" in value:
+        return resolve_interpolated_string_for_notebook(value, context), True
+    if isinstance(value, str) and value.startswith("@"):
+        return _resolve_expression_value(value, context, fallback=value)
+    if isinstance(value, dict) and value.get("type") == "Expression":
+        fallback = value.get("value", str(value))
+        return _resolve_expression_value(value, context, fallback=fallback)
+    return value, False
+
+
+def _resolve_expression_value(
+    raw: Any, context: TranslationContext, *, fallback: Any
+) -> tuple[Any, bool]:
+    """Resolve a string/dict expression to either an f-string or a literal.
+
+    Returns ``(value, needs_fstring)``.  ``dab_ref`` results are turned into
+    f-string fragments; ``literal`` results pass through; anything else
+    falls back to the supplied raw form.
+    """
+    result = resolve_expression(raw, context)
+    if result is None:
+        return fallback, False
+    if result.kind == "dab_ref":
+        return _dab_ref_to_fstring_expr(result.value), True
+    if result.kind == "literal":
+        return result.value, False
+    return fallback, False
 
 
 def _resolve_headers(headers: dict[str, str] | None) -> tuple[str, str]:
@@ -768,9 +784,6 @@ def _resolve_headers(headers: dict[str, str] | None) -> tuple[str, str]:
     if not headers:
         return "{}", ""
 
-    from orchestra.models.ir import TranslationContext
-    from orchestra.parser.expression_parser import resolve_expression
-
     context = TranslationContext()
     static_headers: dict[str, str] = {}
     preamble_lines: list[str] = []
@@ -778,28 +791,24 @@ def _resolve_headers(headers: dict[str, str] | None) -> tuple[str, str]:
     for key, value in headers.items():
         result = resolve_expression(value, context)
         if result is None:
-            # Unresolvable — keep as literal string representation
-            static_headers[key] = str(value) if not isinstance(value, str) else value
+            static_headers[key] = value if isinstance(value, str) else str(value)
         elif result.kind == "literal":
             static_headers[key] = result.value
         elif result.kind == "dab_ref":
-            # DAB ref in a header value — read from widget at runtime
             preamble_lines.append(f'headers["{key}"] = dbutils.widgets.get("{key}")')
         elif result.kind == "notebook_code":
-            # Python code — compute the value at runtime
-            for imp in result.imports:
-                preamble_lines.insert(0, imp)
+            for import_line in result.imports:
+                preamble_lines.insert(0, import_line)
             preamble_lines.append(f'headers["{key}"] = {result.value}')
 
     headers_literal = json.dumps(static_headers) if static_headers else "{}"
     preamble = ""
     if preamble_lines:
-        # Deduplicate imports
-        seen: set[str] = set()
+        seen_lines: set[str] = set()
         unique_lines: list[str] = []
         for line in preamble_lines:
-            if line not in seen:
-                seen.add(line)
+            if line not in seen_lines:
+                seen_lines.add(line)
                 unique_lines.append(line)
         preamble = "\n".join(unique_lines) + "\n"
 
@@ -871,7 +880,7 @@ def _render_sink_write(
             return (
                 f"{preamble}"
                 f"{indent}# Volume root is bound by the task's ``output_path_root`` parameter\n"
-                f'{indent}# (resolved by DAB to /Volumes/<catalog>/<schema>/<volume>).\n'
+                f"{indent}# (resolved by DAB to /Volumes/<catalog>/<schema>/<volume>).\n"
                 f'{indent}output_path_root = dbutils.widgets.get("output_path_root")\n'
                 f'{indent}output_path = f"{{output_path_root}}/{rel_literal}"\n'
                 f'{indent}{df_var}.write.format("{fmt}"){opts_str}.mode("{mode}").save(output_path)\n'
@@ -881,8 +890,8 @@ def _render_sink_write(
         # widget the user fills in.  Common when the linked service uses
         # a masked connection string and we can't reconstruct any path.
         return (
-            f'{indent}# The ADF output dataset path could not be resolved at translation time.\n'
-            f'{indent}# Set ``output_path`` on this task to the destination URI.\n'
+            f"{indent}# The ADF output dataset path could not be resolved at translation time.\n"
+            f"{indent}# Set ``output_path`` on this task to the destination URI.\n"
             f'{indent}output_path = dbutils.widgets.get("output_path")\n'
             f'{indent}{df_var}.write.format("{fmt}"){opts_str}.mode("{mode}").save(output_path)\n'
         )
@@ -899,8 +908,7 @@ def _render_sink_write(
             f'.option("overwriteSchema", "true").saveAsTable(target_table)\n'
         )
 
-    # Last-resort fallback for an unhandled format string.
-    return f'{indent}{df_var}.write.format("{fmt}").mode("{mode}").save("{path or chr(34) + chr(34)}")\n'
+    raise ValueError("Invalid fmt string")
 
 
 def _infer_file_format(source_type: str | None, source_properties: dict | None) -> str:
@@ -1069,7 +1077,8 @@ def _generate_jdbc_body(activity: CopyActivity, *, scope: str = "") -> str:
         # Generate a notebook that reads the current ForEach item from the
         # "item" widget (set to {{input}} by the for_each_task) and builds
         # the SQL query dynamically.
-        return textwrap.dedent(f"""\
+        return (
+            textwrap.dedent(f"""\
             import json
 
             # Parameters
@@ -1106,27 +1115,27 @@ def _generate_jdbc_body(activity: CopyActivity, *, scope: str = "") -> str:
             # Write to the sink defined by the ADF output dataset.  No
             # count/print: those trigger an extra Spark action and can
             # double the read cost.
-        """) + _render_sink_write(activity, mode="append", indent="") + textwrap.dedent("""\
+        """)
+            + _render_sink_write(activity, mode="append", indent="")
+            + textwrap.dedent("""\
 
         """)
+        )
 
-    # Static query or table name — resolve any @{...} interpolation in SQL strings
     if table_name:
         read_option = f'    .option("dbtable", "{table_name}")'
+    elif query and "@{" in query:
+        # ``@{...}`` interpolation in a SQL query becomes an f-string so
+        # ``dbutils.widgets.get(...)`` resolves at runtime.
+        resolved_query = resolve_interpolated_string_for_notebook(query, TranslationContext())
+        read_option = f'    .option("query", f"""{resolved_query}""")'
     elif query:
-        if "@{" in query:
-            from orchestra.models.ir import TranslationContext as _TC
-            from orchestra.parser.expression_parser import resolve_interpolated_string_for_notebook as _risn
-
-            resolved_query = _risn(query, _TC())
-            # The resolved query uses f-string expressions for runtime parameter access.
-            read_option = f'    .option("query", f"""{resolved_query}""")'
-        else:
-            read_option = f'    .option("query", """{query}""")'
+        read_option = f'    .option("query", """{query}""")'
     else:
         read_option = '    .option("dbtable", "REPLACE_WITH_TABLE_NAME")'
 
-    return textwrap.dedent(f"""\
+    return (
+        textwrap.dedent(f"""\
         # Parameters
         target_table = dbutils.widgets.get("target_table") if dbutils.widgets.get("target_table") else "{sink_table}"
 
@@ -1148,9 +1157,12 @@ def _generate_jdbc_body(activity: CopyActivity, *, scope: str = "") -> str:
         # Write to the sink defined by the ADF output dataset.  No count/
         # print: those trigger an extra Spark action and can double the
         # read cost.
-    """) + _render_sink_write(activity, mode="overwrite", indent="") + textwrap.dedent("""\
+    """)
+        + _render_sink_write(activity, mode="overwrite", indent="")
+        + textwrap.dedent("""\
 
     """)
+    )
 
 
 def _generate_rest_copy_body(activity: CopyActivity) -> str:
@@ -1161,7 +1173,8 @@ def _generate_rest_copy_body(activity: CopyActivity) -> str:
     url = source_properties.get("url", source_properties.get("relativeUrl", ""))
     sink_table = sink_properties.get("table", sink_properties.get("tableName", f"{activity.task_key}_raw"))
 
-    return textwrap.dedent(f"""\
+    return (
+        textwrap.dedent(f"""\
         import json
         import requests
 
@@ -1186,9 +1199,12 @@ def _generate_rest_copy_body(activity: CopyActivity) -> str:
 
         # Write to the sink defined by the ADF output dataset.
         df = spark.createDataFrame(data)
-    """) + _render_sink_write(activity, mode="overwrite", indent="") + textwrap.dedent("""\
+    """)
+        + _render_sink_write(activity, mode="overwrite", indent="")
+        + textwrap.dedent("""\
 
     """)
+    )
 
 
 def _generate_generic_copy_body(activity: CopyActivity) -> str:
@@ -1204,7 +1220,8 @@ def _generate_generic_copy_body(activity: CopyActivity) -> str:
     sink_table = sink_properties.get("table", sink_properties.get("tableName", f"{activity.task_key}_raw"))
     file_format = _infer_file_format(activity.source_type, source_properties)
 
-    return textwrap.dedent(f"""\
+    return (
+        textwrap.dedent(f"""\
         # Parameters
         source_path = dbutils.widgets.get("source_path") if dbutils.widgets.get("source_path") else "{source_path}"
         target_table = dbutils.widgets.get("target_table") if dbutils.widgets.get("target_table") else "{sink_table}"
@@ -1213,6 +1230,9 @@ def _generate_generic_copy_body(activity: CopyActivity) -> str:
         df = spark.read.format("{file_format}").load(source_path)
 
         # Write to the sink defined by the ADF output dataset.
-    """) + _render_sink_write(activity, mode="overwrite", indent="") + textwrap.dedent("""\
+    """)
+        + _render_sink_write(activity, mode="overwrite", indent="")
+        + textwrap.dedent("""\
 
     """)
+    )

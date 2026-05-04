@@ -13,8 +13,9 @@ bundler and code generator can produce the appropriate output.
 from __future__ import annotations
 
 import logging
+from typing import Any
 
-from orchestra.models.ir import Activity, Dependency, MotifActivity, Pipeline
+from orchestra.models.ir import Activity, CopyActivity, Dependency, LookupActivity, MotifActivity, Pipeline
 from orchestra.models.motifs import DetectedMotif
 
 logger = logging.getLogger(__name__)
@@ -150,9 +151,6 @@ def _build_motif_config(
     itself — otherwise the ``items`` widget has no upstream writer and the
     motif is a guaranteed no-op.
     """
-    # Local import avoids a module-load cycle (collapser → ir → collapser).
-    from orchestra.models.ir import CopyActivity, LookupActivity
-
     if databricks_replacement != "for_each_ingestion":
         return {}
 

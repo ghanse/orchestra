@@ -36,19 +36,33 @@ from orchestra.models.adf_ast import (
 from orchestra.models.ir import (
     Activity,
     AgenticGap,
+    AppendVariableActivity,
+    CopyActivity,
     Dependency,
+    DeleteActivity,
+    ExecutePipelineActivity,
+    FilterActivity,
     ForEachActivity,
     IfConditionActivity,
+    LookupActivity,
+    MotifActivity,
+    NotebookActivity,
     Pipeline,
     PlaceholderActivity,
+    RunJobActivity,
     SetVariableActivity,
+    SparkJarActivity,
+    SparkPythonActivity,
     SwitchActivity,
     TranslationContext,
     TranslationReport,
     UnsupportedActivity,
     WaitActivity,
+    WebActivity,
 )
-from orchestra.parser.adf_loader import classify_activity
+from orchestra.motifs.collapser import collapse_motifs
+from orchestra.motifs.detector import detect_motifs
+from orchestra.parser.adf_loader import classify_activity, load_adf_definitions
 from orchestra.translator.activity_translators import (
     append_variable,
     copy,
@@ -163,9 +177,6 @@ def translate_pipeline(pipeline: AdfPipeline, definitions: AdfDefinitions) -> Tr
 
     # Motif detection and collapsing: scan for known multi-activity patterns
     # and replace matched groups with single MotifActivity nodes.
-    from orchestra.motifs.collapser import collapse_motifs
-    from orchestra.motifs.detector import detect_motifs
-
     detected_motifs = detect_motifs(pipeline, definitions)
     if detected_motifs:
         pipeline_ir = collapse_motifs(pipeline_ir, detected_motifs)
@@ -576,21 +587,6 @@ def _activity_extra_fields(activity: Activity) -> dict[str, Any]:
     Returns:
         Dictionary of extra fields beyond the base Activity.
     """
-    from orchestra.models.ir import (
-        AppendVariableActivity,
-        CopyActivity,
-        DeleteActivity,
-        ExecutePipelineActivity,
-        FilterActivity,
-        LookupActivity,
-        MotifActivity,
-        NotebookActivity,
-        RunJobActivity,
-        SparkJarActivity,
-        SparkPythonActivity,
-        WebActivity,
-    )
-
     extra: dict[str, Any] = {}
 
     match activity:
@@ -795,8 +791,6 @@ def _pipeline_to_debug_dict(pipeline: Pipeline) -> dict[str, Any]:
 
 
 if __name__ == "__main__":
-    from orchestra.parser.adf_loader import load_adf_definitions
-
     parser = argparse.ArgumentParser(description="Translate ADF pipelines to Databricks IR.")
     parser.add_argument("--source-dir", required=True, type=Path, help="Root directory containing ADF JSON exports.")
     parser.add_argument(

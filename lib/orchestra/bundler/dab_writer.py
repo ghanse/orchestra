@@ -23,11 +23,13 @@ import json
 import re
 import sys
 from pathlib import Path
+from collections.abc import Iterator
 from typing import Any
 
 import yaml
 
 from orchestra.bundler.inner_job_params import (
+    _normalize_value,
     collect_inner_job_params,
     normalize_inner_task_params,
 )
@@ -62,7 +64,9 @@ from orchestra.preparer.code_generator import (
     generate_wait_notebook,
     generate_web_activity_notebook,
 )
+from orchestra.preparer.activity_preparers._naming import notebook_filename
 from orchestra.preparer.workflow_preparer import PreparedWorkflow, _run_if_from_adf_outcomes
+from orchestra.preparer.workspace_downloader import download_notebook
 from orchestra.utils import normalize_task_key
 
 
@@ -75,6 +79,7 @@ class _BundleYamlDumper(yaml.SafeDumper):
     to disable the "sort keys" behaviour; the str representer is left at
     PyYAML's default so output looks hand-written.
     """
+
 
 # Module-level warnings collector — reset per write_bundle call.
 _bundle_warnings: list[str] = []
@@ -165,13 +170,9 @@ def write_bundle(
     #    existing-notebook tasks before serialising — these are surfaced
     #    in SETUP.md (§Existing-notebook parameter handling) further down
     #    and shouldn't ship in the YAML as malformed widget values.
-    manual_parameters: list[ManualParameter] = (
-        _extract_manual_parameters_from_existing_notebook_tasks(workflow.tasks)
-    )
+    manual_parameters: list[ManualParameter] = _extract_manual_parameters_from_existing_notebook_tasks(workflow.tasks)
     for inner in workflow.inner_workflows:
-        manual_parameters.extend(
-            _extract_manual_parameters_from_existing_notebook_tasks(inner.tasks)
-        )
+        manual_parameters.extend(_extract_manual_parameters_from_existing_notebook_tasks(inner.tasks))
 
     resources_dir = output_dir / "resources"
     resources_dir.mkdir(parents=True, exist_ok=True)
@@ -434,7 +435,10 @@ def _build_databricks_yml(
     }
     if include_cluster_variables:
         variables["node_type_id"] = {
-            "description": "Instance type for the default job_cluster — override per cloud (e.g. i3.xlarge on AWS, n1-standard-4 on GCP).",
+            "description": (
+                "Instance type for the default job_cluster — override per cloud "
+                "(e.g. i3.xlarge on AWS, n1-standard-4 on GCP)."
+            ),
             "default": node_type_id,
         }
         variables["spark_version"] = {
@@ -448,7 +452,7 @@ def _build_databricks_yml(
         variables[variable_name] = {
             "description": (
                 f"Numeric job ID for pipeline '{target_pipeline}' (defined in a sibling bundle). "
-                f"Populate via `databricks bundle deploy --var \"{variable_name}=<job_id>\"` or set "
+                f'Populate via `databricks bundle deploy --var "{variable_name}=<job_id>"` or set '
                 "the default here."
             ),
         }
@@ -529,93 +533,81 @@ def _extract_manual_parameters_from_existing_notebook_tasks(
     them from the YAML** so the task doesn't deploy with a literal,
     non-executable string as a widget value.
     """
-    manual: list[ManualParameter] = []
+    manual_parameters: list[ManualParameter] = []
+    for task in _iter_tasks_recursively(tasks):
+        notebook_task = task.get("notebook_task") or {}
+        notebook_path = notebook_task.get("notebook_path", "")
+        base_params = notebook_task.get("base_parameters")
+        # Bundle-relative paths (``../src/...``) can have their notebook
+        # bodies patched to inline the runtime computation; absolute paths
+        # belong to the user's existing notebooks and must be surfaced.
+        if not notebook_path.startswith("/") or not isinstance(base_params, dict):
+            continue
+        keys_to_drop: list[str] = []
+        for key, value in base_params.items():
+            if not _value_needs_manual_handling(value):
+                continue
+            manual_parameters.append(
+                ManualParameter(
+                    task_key=task.get("task_key", ""),
+                    widget_name=key,
+                    notebook_path=notebook_path,
+                    raw_expression=str(value),
+                )
+            )
+            keys_to_drop.append(key)
+        for key in keys_to_drop:
+            del base_params[key]
+        if not base_params:
+            notebook_task.pop("base_parameters", None)
+    return manual_parameters
 
-    def _walk(task_iterable: list[dict[str, Any]]) -> None:
-        for task in task_iterable:
-            notebook_task = task.get("notebook_task") or {}
-            path = notebook_task.get("notebook_path", "")
-            base_params = notebook_task.get("base_parameters")
-            # Only existing-notebook tasks (absolute paths) qualify — for
-            # bundle-bundled notebooks (``../src/...``), the generator can
-            # be patched to compute the value inline.
-            if path.startswith("/") and isinstance(base_params, dict):
-                drops: list[str] = []
-                for key, value in base_params.items():
-                    if _value_needs_manual_handling(value):
-                        manual.append(
-                            ManualParameter(
-                                task_key=task.get("task_key", ""),
-                                widget_name=key,
-                                notebook_path=path,
-                                raw_expression=str(value),
-                            )
-                        )
-                        drops.append(key)
-                for key in drops:
-                    del base_params[key]
-                if not base_params:
-                    notebook_task.pop("base_parameters", None)
-            for_each = task.get("for_each_task")
-            if for_each and isinstance(for_each.get("task"), dict):
-                _walk([for_each["task"]])
 
-    _walk(tasks)
-    return manual
+def _iter_tasks_recursively(tasks: list[dict[str, Any]]) -> Iterator[dict[str, Any]]:
+    """Yield every task in *tasks*, descending into ``for_each_task.task``."""
+    for task in tasks:
+        yield task
+        for_each = task.get("for_each_task") or {}
+        inner = for_each.get("task")
+        if isinstance(inner, dict):
+            yield from _iter_tasks_recursively([inner])
+
+
+_CLUSTER_BINDING_KEYS = ("existing_cluster_id", "new_cluster", "job_cluster_key")
 
 
 def _any_task_uses_classic_cluster(tasks: list[dict[str, Any]]) -> bool:
     """Return True if any task (recursively) is bound to a job_cluster_key.
 
-    Walks ``for_each_task.task`` so a ForEach body that wraps an existing
-    notebook still counts.  Used to decide whether to emit a ``job_clusters``
-    block at the job level and the cluster-related variables in
-    ``databricks.yml``.
+    Used to decide whether to emit a ``job_clusters`` block at the job
+    level and the cluster-related variables in ``databricks.yml``.
     """
-    for task in tasks:
-        if task.get("job_cluster_key"):
-            return True
-        for_each = task.get("for_each_task") or {}
-        inner = for_each.get("task")
-        if isinstance(inner, dict):
-            if _any_task_uses_classic_cluster([inner]):
-                return True
-    return False
+    return any(task.get("job_cluster_key") for task in _iter_tasks_recursively(tasks))
 
 
 def _bind_cluster_to_notebook_tasks(tasks: list[dict[str, Any]]) -> None:
     """Attach the default job_cluster_key to existing-notebook tasks.
 
     Generated notebooks (bundle-relative paths like ``../src/notebooks/...``)
-    install no Python libraries, so we leave them with no compute binding —
+    install no Python libraries, so we leave them with no compute binding --
     Databricks applies the workspace's default serverless config at runtime.
-    Existing notebooks (absolute workspace paths) get the classic job cluster
-    so any cluster-installed libraries or init scripts they depend on still
-    resolve.
+    Existing notebooks (absolute workspace paths) get the classic job
+    cluster so any cluster-installed libraries or init scripts they depend
+    on still resolve.
 
-    Recurses into ``for_each_task.task`` so a ForEach body inherits the same
-    treatment.  Idempotent: tasks that already declare a cluster binding
-    (``existing_cluster_id``, ``new_cluster``, ``job_cluster_key``) are left
-    untouched.
-
-    Args:
-        tasks: Tasks list (mutated in place).
+    Idempotent: tasks that already declare a cluster binding are left
+    untouched.  Mutates *tasks* in place.
     """
-    for task in tasks:
-        notebook_task = task.get("notebook_task") or {}
+    for task in _iter_tasks_recursively(tasks):
+        notebook_task = task.get("notebook_task")
+        if notebook_task is None:
+            continue
         notebook_path = notebook_task.get("notebook_path", "")
-        is_generated = notebook_path.startswith("../src/")
-        if (
-            "notebook_task" in task
-            and not is_generated
-            and not any(
-                key in task for key in ("existing_cluster_id", "new_cluster", "job_cluster_key")
-            )
-        ):
-            task["job_cluster_key"] = _DEFAULT_JOB_CLUSTER_KEY
-        for_each = task.get("for_each_task")
-        if for_each and isinstance(for_each.get("task"), dict):
-            _bind_cluster_to_notebook_tasks([for_each["task"]])
+        if notebook_path.startswith("../src/"):
+            continue
+        if any(key in task for key in _CLUSTER_BINDING_KEYS):
+            continue
+        task["job_cluster_key"] = _DEFAULT_JOB_CLUSTER_KEY
 
 
 def _rewrite_post_branch_dependencies(tasks: list[dict[str, Any]]) -> None:
@@ -723,6 +715,7 @@ def _strip_dangling_task_value_refs(tasks: list[dict[str, Any]], all_task_keys: 
         all_task_keys: Task keys that do exist in this job (including those
             inside ``for_each_task.task`` bodies).
     """
+
     def visit(task: dict[str, Any]) -> None:
         notebook_task = task.get("notebook_task") or {}
         base_parameters = notebook_task.get("base_parameters") or {}
@@ -864,8 +857,6 @@ def _normalize_base_parameters(
     Returns:
         Dict with all values resolved to strings.
     """
-    from orchestra.bundler.inner_job_params import _normalize_value
-
     resolved: dict[str, str] = {}
     for key, value in params.items():
         normalized = _normalize_value(value)
@@ -879,17 +870,6 @@ def _normalize_base_parameters(
             )
         resolved[key] = normalized
     return resolved
-
-
-def _normalize_value_import(value: Any) -> str:
-    """Thin wrapper to normalise a value — avoids circular import issues.
-
-    Delegates to :func:`_normalize_value` from the inner_job_params module
-    that is already imported at module level.
-    """
-    from orchestra.bundler.inner_job_params import _normalize_value
-
-    return _normalize_value(value)
 
 
 # Report loading and IR reconstruction
@@ -1015,7 +995,7 @@ def _pipeline_dict_to_workflow(pipeline_dict: dict[str, Any]) -> PreparedWorkflo
     for param in pipeline_dict.get("parameters") or []:
         param_entry: dict[str, Any] = {"name": param["name"]}
         if "default" in param and param["default"] is not None:
-            param_entry["default"] = _normalize_value_import(str(param["default"]))
+            param_entry["default"] = _normalize_value(str(param["default"]))
         parameters.append(param_entry)
 
     # The CLI reload path doesn't carry the IR-level SecretInstructions, so
@@ -1033,7 +1013,9 @@ def _pipeline_dict_to_workflow(pipeline_dict: dict[str, Any]) -> PreparedWorkflo
                 SecretInstruction(
                     scope=scope_name,
                     key=key,
-                    value_source=f"Credential for scope '{scope_name}', key '{key}' — referenced by generated notebooks.",
+                    value_source=(
+                        f"Credential for scope '{scope_name}', key '{key}' — referenced by generated notebooks."
+                    ),
                 )
             )
 
@@ -1499,7 +1481,7 @@ def _web_activity_notebook(task_key: str, activity_name: str, task_ir: dict[str,
     body_raw = task_ir.get("body")
     headers_raw = task_ir.get("headers")
 
-    normalised_url = _normalize_value_import(url)
+    normalised_url = _normalize_value(url)
 
     body_code = ""
     if body_raw:
@@ -1509,9 +1491,7 @@ def _web_activity_notebook(task_key: str, activity_name: str, task_ir: dict[str,
                 f"# ADF expression: {expression}\n# TODO: Translate the body expression to Python\npayload = {{}}"
             )
         elif isinstance(body_raw, dict):
-            import json as _json
-
-            body_code = f"payload = {_json.dumps(body_raw, indent=4)}"
+            body_code = f"payload = {json.dumps(body_raw, indent=4)}"
         elif isinstance(body_raw, str):
             body_code = f'payload = "{body_raw}"'
         else:
@@ -1521,9 +1501,7 @@ def _web_activity_notebook(task_key: str, activity_name: str, task_ir: dict[str,
 
     headers_code = "headers = None"
     if headers_raw and isinstance(headers_raw, dict):
-        import json as _json
-
-        headers_code = f"headers = {_json.dumps(headers_raw, indent=4)}"
+        headers_code = f"headers = {json.dumps(headers_raw, indent=4)}"
 
     lines = [
         "# Databricks notebook source",
@@ -1586,8 +1564,6 @@ def _download_or_placeholder(
         Notebook source content as a string.
     """
     if workspace_path:
-        from orchestra.preparer.workspace_downloader import download_notebook
-
         content = download_notebook(workspace_path)
         if content is not None:
             return content
@@ -1654,8 +1630,6 @@ def _task_ir_to_dab(
         _handle_if_condition(task, task_ir, task_key, notebooks, inner_workflows, extra_tasks)
 
     elif task_type_name == "NotebookActivity":
-        from orchestra.preparer.activity_preparers._naming import notebook_filename
-
         original_path = task_ir.get("notebook_path", "")
 
         # If the ADF activity already references a real workspace notebook
@@ -1694,7 +1668,7 @@ def _task_ir_to_dab(
         if task_ir.get("parameters"):
             resolved_params = []
             for param in task_ir["parameters"]:
-                resolved_params.append(_normalize_value_import(param))
+                resolved_params.append(_normalize_value(param))
             task["spark_jar_task"]["parameters"] = resolved_params
         if task_ir.get("libraries"):
             task["libraries"] = task_ir["libraries"]
@@ -1725,7 +1699,7 @@ def _task_ir_to_dab(
         if task_ir.get("parameters"):
             job_params: dict[str, str] = {}
             for key, value in task_ir["parameters"].items():
-                normalized = _normalize_value_import(value)
+                normalized = _normalize_value(value)
                 if "dbutils.widgets.get" in normalized or "dbutils.jobs.taskValues" in normalized:
                     _warn(
                         task_key,
@@ -1747,8 +1721,6 @@ def _task_ir_to_dab(
         "FilterActivity",
         "AppendVariableActivity",
     ):
-        from orchestra.preparer.activity_preparers._naming import notebook_filename
-
         notebook_relative_path = f"notebooks/{notebook_filename(task_key, activity_name)}"
         # Generated notebooks (Lookup, SetVariable, Wait, Filter, WebActivity,
         # Delete, AppendVariable, Copy) inherit the workspace's default
@@ -1789,27 +1761,25 @@ def _task_ir_to_dab(
                 # Volume root is DAB-substituted in the YAML; the notebook
                 # reads it as ``output_path_root`` and joins the resolved
                 # relative path on top.
-                base_parameters["output_path_root"] = (
-                    f"/Volumes/${{var.catalog}}/${{var.schema}}/{volume_name}"
-                )
+                base_parameters["output_path_root"] = f"/Volumes/${{var.catalog}}/${{var.schema}}/{volume_name}"
             if base_parameters:
                 task["notebook_task"]["base_parameters"] = base_parameters
         elif task_type_name == "WebActivity":
             task["notebook_task"]["base_parameters"] = {
-                "url": _normalize_value_import(task_ir.get("url", "")),
+                "url": _normalize_value(task_ir.get("url", "")),
                 "method": task_ir.get("method", "GET"),
             }
         elif task_type_name == "SetVariableActivity":
             set_variable_params: dict[str, str] = {"variable_name": task_ir.get("variable_name", "")}
             if task_ir.get("value_kind") in ("literal", "dab_ref"):
-                set_variable_params["value"] = _normalize_value_import(task_ir.get("variable_value", ""))
+                set_variable_params["value"] = _normalize_value(task_ir.get("variable_value", ""))
             for widget_name, dab_ref in (task_ir.get("required_parameters") or {}).items():
                 set_variable_params.setdefault(widget_name, dab_ref)
             task["notebook_task"]["base_parameters"] = set_variable_params
         elif task_type_name == "AppendVariableActivity":
             append_variable_params: dict[str, str] = {"variable_name": task_ir.get("variable_name", "")}
             if task_ir.get("value_kind") in ("literal", "dab_ref"):
-                append_variable_params["value"] = _normalize_value_import(task_ir.get("append_value", ""))
+                append_variable_params["value"] = _normalize_value(task_ir.get("append_value", ""))
             for widget_name, dab_ref in (task_ir.get("required_parameters") or {}).items():
                 append_variable_params.setdefault(widget_name, dab_ref)
             task["notebook_task"]["base_parameters"] = append_variable_params

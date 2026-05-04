@@ -5,31 +5,12 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from orchestra.models.dab import DabNotebook
-from orchestra.models.ir import TranslationContext
-from orchestra.parser.expression_parser import resolve_expression, resolve_interpolated_string
+from orchestra.preparer.activity_preparers._helpers import resolve_param_value
 from orchestra.preparer.workflow_preparer import PreparedActivity, _build_common_task_fields
+from orchestra.preparer.workspace_downloader import download_dbfs_file
 
 if TYPE_CHECKING:
     from orchestra.models.ir import SparkPythonActivity
-
-
-def _resolve_param_value(value: str) -> str:
-    """Resolve an ADF expression parameter value to a DAB ref.
-
-    Args:
-        value: A parameter value string that may contain ADF expressions.
-
-    Returns:
-        Resolved value string.
-    """
-    ctx = TranslationContext()
-    if "@{" in value:
-        return resolve_interpolated_string(value, ctx)
-    if value.startswith("@"):
-        result = resolve_expression(value, ctx)
-        if result is not None and result.kind in ("dab_ref", "literal"):
-            return result.value
-    return value
 
 
 def _python_placeholder(original_path: str, activity_name: str) -> str:
@@ -67,22 +48,19 @@ def prepare(activity: SparkPythonActivity, *, scope: str = "") -> PreparedActivi
     """
     task = _build_common_task_fields(activity)
 
-    # Resolve any ADF expressions in python_file path, then rewrite to bundle-relative
-    original_path = _resolve_param_value(activity.python_file) if activity.python_file else ""
+    original_path = resolve_param_value(activity.python_file) if activity.python_file else ""
     if original_path and ("dbfs:" in original_path or "/" in original_path):
         filename = original_path.rsplit("/", 1)[-1] if "/" in original_path else original_path
     else:
         filename = f"{activity.task_key}.py"
     script_rel_path = f"scripts/{filename}"
 
-    # Try to download the actual Python file from DBFS
-    from orchestra.preparer.workspace_downloader import download_dbfs_file
-
     downloaded = download_dbfs_file(original_path)
-    if downloaded is not None:
-        content = downloaded.decode("utf-8")
-    else:
-        content = _python_placeholder(original_path, activity.name)
+    content = (
+        downloaded.decode("utf-8")
+        if downloaded is not None
+        else _python_placeholder(original_path, activity.name)
+    )
     notebooks = [
         DabNotebook(
             relative_path=script_rel_path,

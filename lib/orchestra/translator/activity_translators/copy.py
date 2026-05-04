@@ -14,7 +14,6 @@ from orchestra.parser.expression_parser import (
     resolve_interpolated_string_for_notebook,
 )
 
-
 _DATASET_TYPE_TO_SPARK_FORMAT: dict[str, str] = {
     "DelimitedText": "csv",
     "Parquet": "parquet",
@@ -183,9 +182,7 @@ def _resolve_storage_account(linked_service: Any) -> str | None:
     return None
 
 
-def _resolve_dataset_path(
-    dataset_props: dict[str, Any], definitions: AdfDefinitions
-) -> str | None:
+def _resolve_dataset_path(dataset_props: dict[str, Any], definitions: AdfDefinitions) -> str | None:
     """Resolve a dataset's storage path using its location + linked service.
 
     Handles both ADLS Gen2 (``fileSystem`` / ``folderPath``) and Blob Storage
@@ -251,12 +248,8 @@ def _resolve_path_info(
         effective,
         context,
     )
-    folder = _resolve_param_value(
-        location.get("folderPath"), effective, context, for_notebook=True
-    ).strip("/")
-    filename = _resolve_param_value(
-        location.get("fileName"), effective, context, for_notebook=True
-    ).strip("/")
+    folder = _resolve_param_value(location.get("folderPath"), effective, context, for_notebook=True).strip("/")
+    filename = _resolve_param_value(location.get("fileName"), effective, context, for_notebook=True).strip("/")
 
     if not container:
         return None
@@ -272,9 +265,7 @@ def _resolve_path_info(
         external_url = _LOCATION_URL_TEMPLATE[location_type].format(bucket=container)
     else:
         account_token = storage_account or "${var.storage_account}"
-        external_url = _LOCATION_URL_TEMPLATE[location_type].format(
-            container=container, account=account_token
-        )
+        external_url = _LOCATION_URL_TEMPLATE[location_type].format(container=container, account=account_token)
 
     volume_name = _sanitize_volume_name(container)
     parts = [folder, filename]
@@ -379,9 +370,7 @@ def translate(
             # path so the notebook writes through Unity Catalog and the
             # bundler can emit the matching SetupTask (storage credential
             # + external location + external volume).
-            sink_path_info = _resolve_path_info(
-                sink_dataset_ref, sink_dataset_props, definitions, context
-            )
+            sink_path_info = _resolve_path_info(sink_dataset_ref, sink_dataset_props, definitions, context)
             if sink_path_info is not None:
                 sink_resolved_path = sink_path_info.uc_volume_path
                 sink_properties = {
@@ -400,9 +389,7 @@ def translate(
 
             type_props = sink_dataset_props.get("typeProperties") or sink_dataset_props
             sink_table_name = (
-                type_props.get("tableName")
-                or type_props.get("table")
-                or sink_dataset_props.get("tableName")
+                type_props.get("tableName") or type_props.get("table") or sink_dataset_props.get("tableName")
             )
 
     if sink_table_name:

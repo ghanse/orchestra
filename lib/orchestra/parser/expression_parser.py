@@ -1402,10 +1402,7 @@ def _handle_add_to_time(args: list[ExpressionResult]) -> ExpressionResult | None
     format_string = _get_format_arg(args, 3)
     return ExpressionResult(
         kind="notebook_code",
-        value=(
-            f"({timestamp_dt}"
-            f" + timedelta({timedelta_keyword}={interval})).strftime({format_string})"
-        ),
+        value=(f"({timestamp_dt} + timedelta({timedelta_keyword}={interval})).strftime({format_string})"),
         imports=_DATETIME_IMPORTS + _collect_imports(*args),
     )
 
@@ -1507,11 +1504,7 @@ def _handle_start_of_day(args: list[ExpressionResult]) -> ExpressionResult | Non
     format_string = _get_format_arg(args, 1)
     return ExpressionResult(
         kind="notebook_code",
-        value=(
-            f"{timestamp_dt}"
-            f".replace(hour=0, minute=0, second=0, microsecond=0)"
-            f".strftime({format_string})"
-        ),
+        value=(f"{timestamp_dt}.replace(hour=0, minute=0, second=0, microsecond=0).strftime({format_string})"),
         imports=_DATETIME_IMPORTS + _collect_imports(*args),
     )
 
@@ -1524,9 +1517,7 @@ def _handle_start_of_hour(args: list[ExpressionResult]) -> ExpressionResult | No
     format_string = _get_format_arg(args, 1)
     return ExpressionResult(
         kind="notebook_code",
-        value=(
-            f"{timestamp_dt}.replace(minute=0, second=0, microsecond=0).strftime({format_string})"
-        ),
+        value=(f"{timestamp_dt}.replace(minute=0, second=0, microsecond=0).strftime({format_string})"),
         imports=_DATETIME_IMPORTS + _collect_imports(*args),
     )
 
@@ -1539,11 +1530,7 @@ def _handle_start_of_month(args: list[ExpressionResult]) -> ExpressionResult | N
     format_string = _get_format_arg(args, 1)
     return ExpressionResult(
         kind="notebook_code",
-        value=(
-            f"{timestamp_dt}"
-            f".replace(day=1, hour=0, minute=0, second=0, microsecond=0)"
-            f".strftime({format_string})"
-        ),
+        value=(f"{timestamp_dt}.replace(day=1, hour=0, minute=0, second=0, microsecond=0).strftime({format_string})"),
         imports=_DATETIME_IMPORTS + _collect_imports(*args),
     )
 
@@ -1563,10 +1550,7 @@ def _handle_subtract_from_time(args: list[ExpressionResult]) -> ExpressionResult
     format_string = _get_format_arg(args, 3)
     return ExpressionResult(
         kind="notebook_code",
-        value=(
-            f"({timestamp_dt}"
-            f" - timedelta({timedelta_keyword}={interval})).strftime({format_string})"
-        ),
+        value=(f"({timestamp_dt} - timedelta({timedelta_keyword}={interval})).strftime({format_string})"),
         imports=_DATETIME_IMPORTS + _collect_imports(*args),
     )
 
@@ -1632,10 +1616,7 @@ def _handle_convert_time_zone(args: list[ExpressionResult]) -> ExpressionResult 
     fmt = _get_format_arg(args, 3)
     return ExpressionResult(
         kind="notebook_code",
-        value=(
-            f"{src}.replace(tzinfo=ZoneInfo({src_tz}))"
-            f".astimezone(ZoneInfo({dst_tz})).strftime({fmt})"
-        ),
+        value=(f"{src}.replace(tzinfo=ZoneInfo({src_tz})).astimezone(ZoneInfo({dst_tz})).strftime({fmt})"),
         imports=_ZONEINFO_IMPORTS + _collect_imports(*args),
     )
 
@@ -1647,10 +1628,7 @@ def _handle_ticks(args: list[ExpressionResult]) -> ExpressionResult | None:
     src = _datetime_arg_code(args[0])
     return ExpressionResult(
         kind="notebook_code",
-        value=(
-            f"int(({src} - datetime(1, 1, 1, tzinfo=timezone.utc))"
-            f".total_seconds() * 10_000_000)"
-        ),
+        value=(f"int(({src} - datetime(1, 1, 1, tzinfo=timezone.utc)).total_seconds() * 10_000_000)"),
         imports=_DATETIME_IMPORTS + _collect_imports(*args),
     )
 

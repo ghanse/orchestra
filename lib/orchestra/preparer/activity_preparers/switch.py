@@ -153,18 +153,18 @@ def prepare(activity: SwitchActivity, *, scope: str = "") -> PreparedActivity:
         extra_tasks.extend(case_branch_tasks)
 
     # Default branch fires when the last case did not match.
-    default_tasks: list[dict[str, Any]] = []
+    branch_default_tasks: list[dict[str, Any]] = []
     for child in activity.default_activities:
         prepared = prepare_activity(child, scope=scope)
-        default_tasks.append(prepared.task)
-        default_tasks.extend(prepared.extra_tasks)
+        branch_default_tasks.append(prepared.task)
+        branch_default_tasks.extend(prepared.extra_tasks)
         all_notebooks.extend(prepared.notebooks)
         all_secrets.extend(prepared.secrets)
         all_setup_tasks.extend(prepared.setup_tasks)
         all_inner_workflows.extend(prepared.inner_workflows)
-    if default_tasks:
-        _inject_outcome_dependency(default_tasks, case_keys[-1], "false")
-        extra_tasks.extend(default_tasks)
+    if branch_default_tasks:
+        _inject_outcome_dependency(branch_default_tasks, case_keys[-1], "false")
+        extra_tasks.extend(branch_default_tasks)
 
     # Tell prepare_workflow to remap any depends_on that referenced the
     # original Switch task_key onto the renamed first case.

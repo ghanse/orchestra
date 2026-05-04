@@ -11,6 +11,7 @@ from typing import Any
 
 from orchestra.models.adf_ast import AdfActivity, AdfDefinitions
 from orchestra.models.ir import Activity, SwitchActivity, SwitchCase, TranslationContext
+from orchestra.parser.adf_loader import _parse_activity
 from orchestra.parser.expression_parser import resolve_expression, resolve_interpolated_string
 from orchestra.translator.activity_translators._resolve import resolve_field
 
@@ -130,8 +131,6 @@ def _ensure_adf_activities(raw_activities: list[Any]) -> list[AdfActivity]:
     Returns:
         List of AdfActivity instances.
     """
-    from orchestra.parser.adf_loader import _parse_activity
-
     result: list[AdfActivity] = []
     for item in raw_activities:
         if isinstance(item, AdfActivity):

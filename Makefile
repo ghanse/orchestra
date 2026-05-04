@@ -1,4 +1,4 @@
-.PHONY: clean dev ci test integration fmt help
+f.PHONY: clean dev ci test integration fmt help
 
 clean:
 	rm -rf .venv .pytest_cache .ruff_cache .mypy_cache __pycache__

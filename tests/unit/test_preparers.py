@@ -417,9 +417,7 @@ class TestSwitchPreparer:
         assert "route_case_staging" in extra_by_key
         assert "route_case_prod" in extra_by_key
         assert extra_by_key["route_case_staging"]["depends_on"] == [{"task_key": "route_case_dev", "outcome": "false"}]
-        assert extra_by_key["route_case_prod"]["depends_on"] == [
-            {"task_key": "route_case_staging", "outcome": "false"}
-        ]
+        assert extra_by_key["route_case_prod"]["depends_on"] == [{"task_key": "route_case_staging", "outcome": "false"}]
         # Case bodies hang off their own condition with outcome=true.
         assert extra_by_key["wait1"]["depends_on"] == [{"task_key": "route_case_dev", "outcome": "true"}]
         assert extra_by_key["wait2"]["depends_on"] == [{"task_key": "route_case_staging", "outcome": "true"}]

@@ -209,7 +209,7 @@ def collect_missing_notebooks(
         bundle_relative_notebook_path = f"../src/{notebook.relative_path}"
         task = task_by_path.get(bundle_relative_notebook_path)
         task_key = task.get("task_key", notebook.relative_path) if task else notebook.relative_path
-        base_parameters = {}
+        base_parameters: dict[str, str] = {}
         if task and "notebook_task" in task:
             base_parameters = task["notebook_task"].get("base_parameters") or {}
         widget_names = sorted(base_parameters.keys())
@@ -312,8 +312,8 @@ def collect_network_endpoints(notebooks: list[DabNotebook]) -> list[NetworkEndpo
         r"""dbutils\.secrets\.get\(\s*scope\s*=\s*["']([^"']+)["']\s*,\s*key\s*=\s*["']jdbc-url["']""",
     )
     requests_re = re.compile(r"\brequests\.(?:get|post|put|patch|delete|request)\(")
-    https_url_re = re.compile(r'https?://[A-Za-z0-9.\-]+(?::\d+)?/?')
-    storage_url_re = re.compile(r'(?:abfss|wasbs)://[A-Za-z0-9_.\-@/]+')
+    https_url_re = re.compile(r"https?://[A-Za-z0-9.\-]+(?::\d+)?/?")
+    storage_url_re = re.compile(r"(?:abfss|wasbs)://[A-Za-z0-9_.\-@/]+")
 
     for notebook in notebooks:
         content = notebook.content
@@ -471,7 +471,7 @@ def render_setup_md(prereqs: Prereqs, *, bundle_name: str) -> str:
         lines.append("```")
         lines.append("")
         lines.append(
-            "`put-secret` opens an editor by default; pass `--json '{\"string_value\": \"…\"}'` "
+            '`put-secret` opens an editor by default; pass `--json \'{"string_value": "…"}\'` '
             "for a non-interactive flow."
         )
         lines.append("")
@@ -488,10 +488,16 @@ def render_setup_md(prereqs: Prereqs, *, bundle_name: str) -> str:
         lines.append("")
         lines.append("| Task | Workspace path (ADF) | Stub in bundle | Widgets available |")
         lines.append("|---|---|---|---|")
-        for entry in prereqs.missing_notebooks:
-            source_cell = f"`{entry.workspace_path}`" if entry.workspace_path else "*(none)*"
-            widgets_cell = ", ".join(f"`{name}`" for name in entry.widget_names) if entry.widget_names else "*(none)*"
-            lines.append(f"| `{entry.task_key}` | {source_cell} | `{entry.bundle_path}` | {widgets_cell} |")
+        for missing_notebook in prereqs.missing_notebooks:
+            source_cell = f"`{missing_notebook.workspace_path}`" if missing_notebook.workspace_path else "*(none)*"
+            widgets_cell = (
+                ", ".join(f"`{name}`" for name in missing_notebook.widget_names)
+                if missing_notebook.widget_names
+                else "*(none)*"
+            )
+            lines.append(
+                f"| `{missing_notebook.task_key}` | {source_cell} | `{missing_notebook.bundle_path}` | {widgets_cell} |"
+            )
         lines.append("")
         lines.append(
             "If the workspace path exists in a reachable Databricks workspace, you can "
@@ -509,7 +515,7 @@ def render_setup_md(prereqs: Prereqs, *, bundle_name: str) -> str:
             "one (`${var.<name>}`) so `databricks bundle validate` passes. "
             "Before running, populate the variable with the numeric job ID the "
             "target pipeline was deployed under — either set a `default:` in "
-            "`databricks.yml` or pass `--var \"<name>=<job_id>\"` at deploy time."
+            '`databricks.yml` or pass `--var "<name>=<job_id>"` at deploy time.'
         )
         lines.append("")
         lines.append("| Variable | Target pipeline |")
@@ -532,8 +538,8 @@ def render_setup_md(prereqs: Prereqs, *, bundle_name: str) -> str:
         lines.append("")
         lines.append("| Task | Widget |")
         lines.append("|---|---|")
-        for entry in prereqs.empty_parameters:
-            lines.append(f"| `{entry.task_key}` | `{entry.widget_name}` |")
+        for empty_parameter in prereqs.empty_parameters:
+            lines.append(f"| `{empty_parameter.task_key}` | `{empty_parameter.widget_name}` |")
         lines.append("")
 
     if prereqs.compute_notes:
@@ -557,10 +563,10 @@ def render_setup_md(prereqs: Prereqs, *, bundle_name: str) -> str:
         lines.append("")
         lines.append("| Task | Existing notebook | Widget | Original ADF expression |")
         lines.append("|---|---|---|---|")
-        for entry in prereqs.manual_parameters:
+        for manual_parameter in prereqs.manual_parameters:
             lines.append(
-                f"| `{entry.task_key}` | `{entry.notebook_path}` "
-                f"| `{entry.widget_name}` | `{entry.raw_expression}` |"
+                f"| `{manual_parameter.task_key}` | `{manual_parameter.notebook_path}` "
+                f"| `{manual_parameter.widget_name}` | `{manual_parameter.raw_expression}` |"
             )
         lines.append("")
 
