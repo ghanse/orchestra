@@ -130,15 +130,49 @@ def _build_setup_tasks(
     volume_binding: _VolumeBinding | None,
 ) -> list[SetupTask]:
     """Returns the SetupTasks (UC volumes etc.) a Copy activity needs."""
-    if source_type not in FILE_SOURCE_TYPES or volume_binding is None:
-        return []
-    return [
-        SetupTask(
-            type="volume",
-            config={
-                "volume_name": volume_binding.volume_name,
-                "volume_type": "EXTERNAL",
-                "location": volume_binding.container_location,
-            },
+    setup_tasks: list[SetupTask] = []
+    if source_type in FILE_SOURCE_TYPES and volume_binding is not None:
+        setup_tasks.append(
+            SetupTask(
+                type="volume",
+                config={
+                    "volume_name": volume_binding.volume_name,
+                    "volume_type": "EXTERNAL",
+                    "location": volume_binding.container_location,
+                },
+            )
         )
-    ]
+
+    sink_volume = _build_sink_volume_setup_task(activity)
+    if sink_volume is not None:
+        setup_tasks.append(sink_volume)
+
+    return setup_tasks
+
+
+def _build_sink_volume_setup_task(activity: CopyActivity) -> SetupTask | None:
+    """Returns a UC volume SetupTask for the sink side of *activity*, or None.
+
+    Sink-side volume info is populated by the Copy translator when the
+    output dataset resolves to a cloud-storage location.  The setup task
+    creates the External Location and External Volume so the generated
+    notebook can write into ``/Volumes/<catalog>/<schema>/<volume>/...``.
+    """
+    sink_properties = activity.sink_properties or {}
+    volume_name = sink_properties.get("volume_name")
+    external_location = sink_properties.get("volume_external_location")
+    if not volume_name or not external_location:
+        return None
+    return SetupTask(
+        type="volume",
+        config={
+            "volume_name": volume_name,
+            "volume_type": "EXTERNAL",
+            "location": external_location,
+            # ``location_type`` drives the storage-credential DDL the setup
+            # notebook emits (Azure managed identity vs S3 IAM vs GCS service
+            # account); omitting it leaves the user a manual TODO.
+            "location_type": sink_properties.get("volume_location_type", ""),
+            "storage_account": sink_properties.get("volume_storage_account", ""),
+        },
+    )

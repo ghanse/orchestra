@@ -43,8 +43,20 @@ def _resolve_base_parameters(
     params: dict[str, str],
     *,
     variable_task_keys: dict[str, str] | None = None,
+    existing_notebook: bool = False,
 ) -> dict[str, str]:
-    """Resolves ADF expressions in ``base_parameters`` to DAB-compatible values."""
+    """Resolves ADF expressions in ``base_parameters`` to DAB-compatible values.
+
+    For *existing* notebooks (absolute workspace paths) we keep ``notebook_code``
+    parameters as their raw original expression so the downstream
+    ``_extract_manual_parameters_from_existing_notebook_tasks`` scanner can
+    pick them up and surface them in SETUP.md -- orchestra cannot patch the
+    notebook body, so the user has to compute the value in-line themselves.
+
+    For bundle-generated notebooks the embedded notebook body owns the
+    runtime computation (via ``required_parameters``), so ``notebook_code``
+    parameters are dropped here.
+    """
     context = TranslationContext()
     resolved: dict[str, str] = {}
     for key, value in params.items():
@@ -52,15 +64,22 @@ def _resolve_base_parameters(
         if result is not None and result.kind in ("literal", "dab_ref"):
             resolved[key] = result.value
             continue
-        if result is not None:
-            # ``notebook_code`` cannot live in base_parameters; skip it so
-            # the notebook body's resolution path takes over.
+        if result is not None and result.kind == "notebook_code":
+            if existing_notebook:
+                resolved[key] = _raw_expression(value)
             continue
         if isinstance(value, dict) and value.get("type") == "Expression" and "value" in value:
             resolved[key] = str(value["value"])
         else:
             resolved[key] = str(value)
     return resolved
+
+
+def _raw_expression(value: object) -> str:
+    """Returns the original ADF expression text for an unresolved parameter."""
+    if isinstance(value, dict) and value.get("type") == "Expression" and "value" in value:
+        return str(value["value"])
+    return str(value)
 
 
 def _resolve_notebook_path(path: str) -> str:
@@ -84,15 +103,17 @@ def prepare(
     """Converts a NotebookActivity into a DAB notebook_task definition."""
     resolved_path = _resolve_notebook_path(activity.notebook_path)
     task = build_common_task_fields(activity)
+    is_existing_notebook = resolved_path.startswith("/")
 
     base_parameters: dict[str, str] | None = None
     if activity.base_parameters:
         base_parameters = _resolve_base_parameters(
             dict(activity.base_parameters),
             variable_task_keys=variable_task_keys,
+            existing_notebook=is_existing_notebook,
         )
 
-    if resolved_path.startswith("/"):
+    if is_existing_notebook:
         task["notebook_task"] = {"notebook_path": resolved_path}
         if base_parameters is not None:
             task["notebook_task"]["base_parameters"] = base_parameters

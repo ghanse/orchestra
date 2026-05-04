@@ -27,17 +27,29 @@ from orchestra.bundler.prereqs_writer import (
 from orchestra.bundler.setup_generator import generate_setup_tasks
 from orchestra.models.dab import DabNotebook, SecretInstruction, SetupTask
 from orchestra.models.ir import (
+    Activity,
     AppendVariableActivity,
     CopyActivity,
     DeleteActivity,
+    Dependency,
+    ExecutePipelineActivity,
     FilterActivity,
+    ForEachActivity,
+    IfConditionActivity,
     LookupActivity,
     MotifActivity,
+    NotebookActivity,
+    Pipeline,
+    PlaceholderActivity,
+    RunJobActivity,
     SetVariableActivity,
+    SparkJarActivity,
+    SparkPythonActivity,
+    SwitchActivity,
+    SwitchCase,
+    UnsupportedActivity,
     WaitActivity,
-)
-from orchestra.models.ir import (
-    WebActivity as WebActivityIR,
+    WebActivity,
 )
 from orchestra.preparer.code_generator import (
     generate_append_variable_notebook,
@@ -52,7 +64,7 @@ from orchestra.preparer.code_generator import (
 )
 from orchestra.preparer.activity_preparers.naming import notebook_filename
 from orchestra.preparer.activity_preparers.switch import resolve_switch_on_expression, sanitize_case_key
-from orchestra.preparer.workflow_preparer import PreparedWorkflow, run_if_from_adf_outcomes
+from orchestra.preparer.workflow_preparer import PreparedWorkflow, prepare_workflow, run_if_from_adf_outcomes
 from orchestra.preparer.workspace_downloader import download_notebook
 from orchestra.utils import normalize_task_key
 
@@ -833,145 +845,45 @@ def _load_report(report_path: Path) -> list[PreparedWorkflow]:
 
 
 def _pipeline_dict_to_workflow(pipeline_dict: dict[str, Any]) -> PreparedWorkflow:
-    """Converts a serialized pipeline IR dict to a PreparedWorkflow.
+    """Converts a serialised pipeline IR dict to a PreparedWorkflow.
 
-    Args:
-        pipeline_dict: Dict loaded from a pipeline IR JSON file.
-
-    Returns:
-        A PreparedWorkflow with tasks extracted from the IR.
+    Rehydrates every task into a typed Activity via :func:`_reconstruct_ir`
+    and routes through :func:`prepare_workflow` so the JSON-reload path
+    shares one code path with the in-process translator.  This guarantees
+    feature parity for secrets, setup tasks, manual parameters,
+    expression resolution, and motif handling without duplicating the
+    per-activity preparer logic.
     """
-    tasks: list[dict[str, Any]] = []
-    notebooks: list[DabNotebook] = []
-    inner_workflows: list[PreparedWorkflow] = []
-    cluster_hints: list[dict[str, Any]] = []
-    task_key_remap: dict[str, str] = {}
+    activities = [_reconstruct_ir(task_ir) for task_ir in pipeline_dict.get("tasks", [])]
 
-    for task_ir in pipeline_dict.get("tasks", []):
-        result = _task_ir_to_dab(task_ir, task_key_remap=task_key_remap)
-        tasks.append(result["task"])
-        tasks.extend(result.get("extra_tasks", []))
-        notebooks.extend(result["notebooks"])
-        inner_workflows.extend(result["inner_workflows"])
-        cluster = task_ir.get("cluster")
-        if cluster:
-            cluster_hints.append(dict(cluster))
-
-    # Apply Switch-case renames: any task whose ``depends_on`` referenced
-    # a Switch's bare task_key is rewired to the renamed first case.
-    if task_key_remap:
-        for task in tasks:
-            for dep in task.get("depends_on", []) or []:
-                old = dep.get("task_key")
-                if old in task_key_remap:
-                    dep["task_key"] = task_key_remap[old]
-
-    # Carry pipeline-level parameters through to the job definition.
-    # Normalise ADF expressions in defaults so `@pipeline().RunId` etc. become
-    # DAB dynamic value references.
     parameters: list[dict[str, Any]] = []
     for param in pipeline_dict.get("parameters") or []:
-        param_entry: dict[str, Any] = {"name": param["name"]}
+        entry: dict[str, Any] = {"name": param["name"]}
         if "default" in param and param["default"] is not None:
-            param_entry["default"] = normalize_value(str(param["default"]))
-        parameters.append(param_entry)
+            entry["default"] = normalize_value(str(param["default"]))
+        parameters.append(entry)
 
-    # The CLI reload path doesn't carry the IR-level SecretInstructions, so
-    # mine them back out of the notebook bodies we just generated.  That way
-    # the setup notebook generator and SETUP.md writer both see the same
-    # set of scopes/keys the runtime code will demand.
-    secret_refs = scan_notebooks_for_secrets(notebooks)
-    for inner in inner_workflows:
-        for scope_name, keys in scan_notebooks_for_secrets(inner.notebooks).items():
-            secret_refs.setdefault(scope_name, set()).update(keys)
-    secrets: list[SecretInstruction] = []
-    for scope_name in sorted(secret_refs):
-        for key in sorted(secret_refs[scope_name]):
-            secrets.append(
-                SecretInstruction(
-                    scope=scope_name,
-                    key=key,
-                    value_source=(
-                        f"Credential for scope '{scope_name}', key '{key}' — referenced by generated notebooks."
-                    ),
-                )
-            )
-
-    # Reconstitute SetupTasks from the IR.  The CLI reload path doesn't
-    # carry the in-process preparer's setup_tasks list, so we mine the
-    # serialised CopyActivity sink/source properties for ``volume_*`` hints
-    # and emit one SetupTask per unique external location.  Without this,
-    # bundles produced via ``dab_writer.py --report ...`` would silently
-    # drop the volume-creation step.
-    setup_tasks = _collect_setup_tasks_from_ir(pipeline_dict)
-
-    return PreparedWorkflow(
+    pipeline = Pipeline(
         name=pipeline_dict.get("name", "unknown"),
-        tasks=tasks,
-        notebooks=notebooks,
-        secrets=secrets,
-        setup_tasks=setup_tasks,
-        inner_workflows=inner_workflows,
-        parameters=parameters,
-        cluster_hints=cluster_hints,
+        tasks=activities,
+        parameters=parameters or None,
     )
 
-
-def _collect_setup_tasks_from_ir(pipeline_dict: dict[str, Any]) -> list[SetupTask]:
-    """Walks a pipeline IR dict and emit setup tasks for sink-side UC volumes."""
-    setup_tasks: list[SetupTask] = []
-    seen_volumes: set[str] = set()
-
-    def _walk(tasks_iterable):
-        for task_ir in tasks_iterable:
-            if task_ir.get("type") == "CopyActivity":
-                sink_props = task_ir.get("sink_properties") or {}
-                volume_name = sink_props.get("volume_name")
-                external_location = sink_props.get("volume_external_location")
-                location_type = sink_props.get("volume_location_type") or ""
-                if volume_name and external_location and volume_name not in seen_volumes:
-                    seen_volumes.add(volume_name)
-                    setup_tasks.append(
-                        SetupTask(
-                            type="volume",
-                            config={
-                                "volume_name": volume_name,
-                                "volume_type": "EXTERNAL",
-                                "location": external_location,
-                                "location_type": location_type,
-                                "storage_account": sink_props.get("volume_storage_account"),
-                            },
-                        )
-                    )
-            for inner in task_ir.get("inner_activities") or []:
-                _walk([inner])
-            for case in task_ir.get("cases") or []:
-                _walk(case.get("activities") or [])
-            _walk(task_ir.get("default_activities") or [])
-            _walk(task_ir.get("if_true_activities") or [])
-            _walk(task_ir.get("if_false_activities") or [])
-
-    _walk(pipeline_dict.get("tasks", []))
-    return setup_tasks
+    workflow = prepare_workflow(pipeline)
+    if parameters:
+        workflow.parameters.extend(parameters)
+    return workflow
 
 
-def _reconstruct_ir(task_ir: dict[str, Any]) -> Any:
-    """Reconstruct a typed IR activity object from a serialized dict.
+def _reconstruct_ir(task_ir: dict[str, Any]) -> Activity:
+    """Rehydrates a typed Activity from its serialised IR dict.
 
-    Args:
-        task_ir: Serialized IR task dict from the translate phase JSON.
-
-    Returns:
-        A typed IR activity instance, or ``None`` if the type is not
-        recognised.
+    Recurses into control-flow inner activities (ForEach, IfCondition,
+    Switch).  Unknown ``type`` strings fall back to PlaceholderActivity
+    so the rest of the pipeline can still be prepared.
     """
-    task_key = task_ir.get("task_key", "")
-    name = task_ir.get("name", task_key)
-    timeout = task_ir.get("timeout_seconds")
-    max_retries = task_ir.get("max_retries")
     task_type = task_ir.get("type", "")
-
-    base = dict(name=name, task_key=task_key, timeout_seconds=timeout, max_retries=max_retries)
+    base = _common_activity_kwargs(task_ir)
 
     if task_type == "LookupActivity":
         return LookupActivity(
@@ -994,7 +906,7 @@ def _reconstruct_ir(task_ir: dict[str, Any]) -> Any:
             column_mapping=task_ir.get("column_mapping"),
         )
     if task_type == "WebActivity":
-        return WebActivityIR(
+        return WebActivity(
             **base,
             url=task_ir.get("url", ""),
             method=task_ir.get("method", "GET"),
@@ -1010,7 +922,6 @@ def _reconstruct_ir(task_ir: dict[str, Any]) -> Any:
             value_kind=task_ir.get("value_kind", "literal"),
             notebook_code=task_ir.get("notebook_code"),
             notebook_imports=task_ir.get("notebook_imports", []),
-            required_parameters=task_ir.get("required_parameters", {}),
         )
     if task_type == "WaitActivity":
         return WaitActivity(
@@ -1030,19 +941,6 @@ def _reconstruct_ir(task_ir: dict[str, Any]) -> Any:
             items_expression=task_ir.get("items_expression", ""),
             condition_expression=task_ir.get("condition_expression", ""),
         )
-    if task_type == "MotifActivity":
-        return MotifActivity(
-            **base,
-            motif_id=task_ir.get("motif_id", "unknown"),
-            display_name=task_ir.get("display_name", name),
-            databricks_replacement=task_ir.get("databricks_replacement", "notebook"),
-            matched_activity_names=list(task_ir.get("matched_activity_names", [])),
-            source_type_hint=task_ir.get("source_type_hint"),
-            confidence_notes=list(task_ir.get("confidence_notes", [])),
-            original_activities=[],
-            notebook_template=task_ir.get("notebook_template"),
-            motif_config=task_ir.get("motif_config") or {},
-        )
     if task_type == "AppendVariableActivity":
         return AppendVariableActivity(
             **base,
@@ -1051,681 +949,132 @@ def _reconstruct_ir(task_ir: dict[str, Any]) -> Any:
             value_kind=task_ir.get("value_kind", "literal"),
             notebook_code=task_ir.get("notebook_code"),
             notebook_imports=task_ir.get("notebook_imports", []),
-            required_parameters=task_ir.get("required_parameters", {}),
         )
-    return None
+    if task_type == "NotebookActivity":
+        return NotebookActivity(
+            **base,
+            notebook_path=task_ir.get("notebook_path", ""),
+            base_parameters=task_ir.get("base_parameters"),
+        )
+    if task_type == "SparkJarActivity":
+        return SparkJarActivity(
+            **base,
+            main_class_name=task_ir.get("main_class_name", ""),
+            parameters=task_ir.get("parameters"),
+            libraries=task_ir.get("libraries"),
+        )
+    if task_type == "SparkPythonActivity":
+        return SparkPythonActivity(
+            **base,
+            python_file=task_ir.get("python_file", ""),
+            parameters=task_ir.get("parameters"),
+        )
+    if task_type == "ExecutePipelineActivity":
+        return ExecutePipelineActivity(
+            **base,
+            pipeline_name=task_ir.get("pipeline_name", ""),
+            parameters=task_ir.get("parameters"),
+            wait_on_completion=task_ir.get("wait_on_completion", True),
+        )
+    if task_type == "RunJobActivity":
+        return RunJobActivity(
+            **base,
+            job_name=task_ir.get("job_name", ""),
+            existing_job_id=task_ir.get("existing_job_id"),
+            job_parameters=task_ir.get("job_parameters") or task_ir.get("parameters"),
+        )
+    if task_type == "ForEachActivity":
+        return ForEachActivity(
+            **base,
+            items_expression=task_ir.get("items_expression", ""),
+            inner_activities=[_reconstruct_ir(child) for child in task_ir.get("inner_activities") or []],
+            concurrency=task_ir.get("concurrency"),
+        )
+    if task_type == "IfConditionActivity":
+        return IfConditionActivity(
+            **base,
+            op=task_ir.get("op", "EQUAL_TO"),
+            left=task_ir.get("left", ""),
+            right=task_ir.get("right", ""),
+            if_true_activities=[_reconstruct_ir(child) for child in task_ir.get("if_true_activities") or []],
+            if_false_activities=[_reconstruct_ir(child) for child in task_ir.get("if_false_activities") or []],
+        )
+    if task_type == "SwitchActivity":
+        return SwitchActivity(
+            **base,
+            on_expression=task_ir.get("on_expression", ""),
+            cases=[
+                SwitchCase(
+                    value=case.get("value", ""),
+                    activities=[_reconstruct_ir(child) for child in case.get("activities") or []],
+                )
+                for case in task_ir.get("cases") or []
+            ],
+            default_activities=[
+                _reconstruct_ir(child) for child in task_ir.get("default_activities") or []
+            ],
+        )
+    if task_type == "MotifActivity":
+        return MotifActivity(
+            **base,
+            motif_id=task_ir.get("motif_id", "unknown"),
+            display_name=task_ir.get("display_name", base["name"]),
+            databricks_replacement=task_ir.get("databricks_replacement", "notebook"),
+            matched_activity_names=list(task_ir.get("matched_activity_names", [])),
+            source_type_hint=task_ir.get("source_type_hint"),
+            confidence_notes=list(task_ir.get("confidence_notes", [])),
+            original_activities=[],
+            notebook_template=task_ir.get("notebook_template"),
+            motif_config=task_ir.get("motif_config") or {},
+        )
+    if task_type == "UnsupportedActivity":
+        return UnsupportedActivity(
+            **base,
+            original_type=task_ir.get("original_type", "unknown"),
+            reason=task_ir.get("reason"),
+        )
+    if task_type == "PlaceholderActivity":
+        return PlaceholderActivity(
+            **base,
+            original_type=task_ir.get("original_type", task_type),
+            notebook_path=task_ir.get("notebook_path", "/UNSUPPORTED_ADF_ACTIVITY"),
+            comment=task_ir.get("comment"),
+        )
+    return PlaceholderActivity(
+        **base,
+        original_type=task_type or "unknown",
+        comment=f"Unknown activity type {task_type!r}; produced as placeholder during JSON-reload.",
+    )
+
+
+def _common_activity_kwargs(task_ir: dict[str, Any]) -> dict[str, Any]:
+    """Extracts the base Activity fields shared by every IR class."""
+    task_key = task_ir.get("task_key", "")
+    return {
+        "name": task_ir.get("name", task_key),
+        "task_key": task_key,
+        "description": task_ir.get("description"),
+        "timeout_seconds": task_ir.get("timeout_seconds"),
+        "max_retries": task_ir.get("max_retries"),
+        "min_retry_interval_millis": task_ir.get("min_retry_interval_millis"),
+        "depends_on": _reconstruct_dependencies(task_ir.get("depends_on")),
+        "cluster": task_ir.get("cluster"),
+        "required_parameters": dict(task_ir.get("required_parameters") or {}),
+    }
+
+
+def _reconstruct_dependencies(raw: list[dict[str, Any]] | None) -> list[Dependency] | None:
+    if not raw:
+        return None
+    return [Dependency(task_key=dep.get("task_key", ""), outcome=dep.get("outcome")) for dep in raw]
 
 
 # Notebook content generators
 
 
 
-def _placeholder_notebook(task_key: str, activity_name: str, activity_type: str, original_path: str = "") -> str:
-    """Generates placeholder notebook content for the JSON reload path.
 
-    Args:
-        task_key: The sanitized task key used for the notebook filename.
-        activity_name: The original ADF activity name.
-        activity_type: The IR activity type (e.g. ``"SetVariableActivity"``).
-        original_path: The original workspace notebook path, if any.
 
-    Returns:
-        Placeholder notebook content as a string.
-    """
-    lines = [
-        "# Databricks notebook source",
-        "# MAGIC %md",
-        f"# MAGIC # {activity_name}",
-        "# MAGIC",
-        f"# MAGIC **ADF activity type**: `{activity_type}`",
-    ]
-    if original_path:
-        lines.extend(
-            [
-                "# MAGIC",
-                f"# MAGIC **Source workspace path**: `{original_path}`",
-                "# MAGIC",
-                "# MAGIC Export from workspace:",
-                "# MAGIC ```",
-                f'# MAGIC databricks workspace export "{original_path}" --format SOURCE -o src/notebooks/{task_key}.py',
-                "# MAGIC ```",
-            ]
-        )
-    else:
-        lines.extend(
-            [
-                "# MAGIC",
-                f"# MAGIC This notebook replaces ADF `{activity_type}` activity `{activity_name}`.",
-                "# MAGIC Implement the equivalent Databricks logic below.",
-            ]
-        )
-    lines.extend(
-        [
-            "",
-            "# COMMAND ----------",
-            "",
-            f"# TODO: Implement {activity_type} logic for '{activity_name}'",
-            "raise NotImplementedError(",
-            f'    "Implement {activity_type} logic for {activity_name}"',
-            ")",
-            "",
-        ]
-    )
-    return "\n".join(lines)
-
-
-def _web_activity_notebook(task_key: str, activity_name: str, task_ir: dict[str, Any]) -> str:
-    """Generates a notebook that performs an HTTP request for a WebActivity.
-
-    Args:
-        task_key: Sanitised task key for the notebook filename.
-        activity_name: Original ADF activity display name.
-        task_ir: The full serialised WebActivity IR dict.
-
-    Returns:
-        Notebook source content as a string.
-    """
-    url = task_ir.get("url", "")
-    method = task_ir.get("method", "POST").upper()
-    body_raw = task_ir.get("body")
-    headers_raw = task_ir.get("headers")
-
-    normalised_url = normalize_value(url)
-
-    body_code = ""
-    if body_raw:
-        if isinstance(body_raw, dict) and body_raw.get("type") == "Expression":
-            expression = body_raw.get("value", "")
-            body_code = (
-                f"# ADF expression: {expression}\n# TODO: Translate the body expression to Python\npayload = {{}}"
-            )
-        elif isinstance(body_raw, dict):
-            body_code = f"payload = {json.dumps(body_raw, indent=4)}"
-        elif isinstance(body_raw, str):
-            body_code = f'payload = "{body_raw}"'
-        else:
-            body_code = f"payload = {body_raw!r}"
-    else:
-        body_code = "payload = None"
-
-    headers_code = "headers = None"
-    if headers_raw and isinstance(headers_raw, dict):
-        headers_code = f"headers = {json.dumps(headers_raw, indent=4)}"
-
-    lines = [
-        "# Databricks notebook source",
-        "# MAGIC %md",
-        f"# MAGIC # {activity_name}",
-        "# MAGIC",
-        f"# MAGIC **Migrated from ADF**: `WebActivity` ({method})",
-        "",
-        "# COMMAND ----------",
-        "",
-        "import requests",
-        "",
-        "# COMMAND ----------",
-        "",
-        f'url = "{normalised_url}"',
-        "",
-        body_code,
-        "",
-        headers_code,
-        "",
-        "# COMMAND ----------",
-        "",
-    ]
-
-    if method in ("POST", "PUT", "PATCH"):
-        lines.append(
-            f"response = requests.{method.lower()}(url, json=payload, headers=headers, timeout=60)",
-        )
-    else:
-        lines.append(
-            f"response = requests.{method.lower()}(url, headers=headers, timeout=60)",
-        )
-
-    lines.extend(
-        [
-            "response.raise_for_status()",
-            f'print(f"{activity_name}: HTTP {{response.status_code}}")',
-            "",
-        ]
-    )
-
-    return "\n".join(lines)
-
-
-def _download_or_placeholder(
-    workspace_path: str,
-    task_key: str,
-    activity_name: str,
-    task_type_name: str,
-) -> str:
-    """Tries to download a notebook from the workspace; fall back to a placeholder.
-
-    Args:
-        workspace_path: Original workspace path from the ADF definition.
-        task_key: Sanitised task key (used in the placeholder filename).
-        activity_name: ADF activity display name.
-        task_type_name: IR activity type name.
-
-    Returns:
-        Notebook source content as a string.
-    """
-    if workspace_path:
-        content = download_notebook(workspace_path)
-        if content is not None:
-            return content
-
-    return _placeholder_notebook(task_key, activity_name, task_type_name, workspace_path)
-
-
-
-
-def _task_ir_to_dab(
-    task_ir: dict[str, Any],
-    *,
-    task_key_remap: dict[str, str] | None = None,
-) -> dict[str, Any]:
-    """Converts a single serialized task IR dict to a DAB task dict.
-
-    Args:
-        task_ir: Dict for a single task from the serialized IR JSON.
-        task_key_remap: Mutable mapping of original task_key to renamed
-            task_key.  Currently only ``_handle_switch`` writes into it
-            (when the first switch case is renamed to ``__case_<value>``);
-            the caller applies the remap to all tasks at the end of the
-            pipeline conversion to preserve depends_on edges.
-
-    Returns:
-        Dict with ``task`` (DAB task dict), ``extra_tasks`` (siblings),
-        ``notebooks`` (list of DabNotebook), and ``inner_workflows``
-        (list of PreparedWorkflow).
-    """
-    task_key = task_ir.get("task_key", "")
-    activity_name = task_ir.get("name", task_key)
-    task: dict[str, Any] = {"task_key": task_key}
-    task_type_name = task_ir.get("type", "")
-    extra_tasks: list[dict[str, Any]] = []
-    notebooks: list[DabNotebook] = []
-    inner_workflows: list[PreparedWorkflow] = []
-
-    if task_ir.get("depends_on"):
-        task["depends_on"] = [{"task_key": dep["task_key"]} for dep in task_ir["depends_on"]]
-        run_if = run_if_from_adf_outcomes([dep.get("outcome") for dep in task_ir["depends_on"]])
-        if run_if:
-            task["run_if"] = run_if
-    if task_ir.get("timeout_seconds"):
-        task["timeout_seconds"] = task_ir["timeout_seconds"]
-    if task_ir.get("max_retries"):
-        task["max_retries"] = task_ir["max_retries"]
-    if task_ir.get("min_retry_interval_millis"):
-        task["min_retry_interval_millis"] = task_ir["min_retry_interval_millis"]
-
-    if task_type_name == "ForEachActivity":
-        _handle_for_each(task, task_ir, task_key, notebooks, inner_workflows)
-
-    elif task_type_name == "SwitchActivity":
-        _handle_switch(task, task_ir, task_key, notebooks, inner_workflows, extra_tasks, task_key_remap)
-
-    elif task_type_name == "IfConditionActivity":
-        _handle_if_condition(task, task_ir, task_key, notebooks, inner_workflows, extra_tasks)
-
-    elif task_type_name == "NotebookActivity":
-        original_path = task_ir.get("notebook_path", "")
-
-        # If the ADF activity already references a real workspace notebook
-        # (an absolute path like /Shared/team/foo), bind the task to that
-        # path directly — the existing notebook is the source of truth and
-        # bundling a copy creates divergence.
-        if original_path.startswith("/"):
-            task["notebook_task"] = {"notebook_path": original_path}
-            if task_ir.get("base_parameters"):
-                task["notebook_task"]["base_parameters"] = _normalize_base_parameters(
-                    task_ir["base_parameters"],
-                    task_key=task_key,
-                )
-        else:
-            notebook_relative_path = f"notebooks/{notebook_filename(task_key, activity_name)}"
-            task["notebook_task"] = {
-                "notebook_path": f"../src/{notebook_relative_path}",
-            }
-            if task_ir.get("base_parameters"):
-                task["notebook_task"]["base_parameters"] = _normalize_base_parameters(
-                    task_ir["base_parameters"],
-                    task_key=task_key,
-                )
-            content = _download_or_placeholder(original_path, task_key, activity_name, task_type_name)
-            notebooks.append(
-                DabNotebook(
-                    relative_path=notebook_relative_path,
-                    content=content,
-                )
-            )
-
-    elif task_type_name == "SparkJarActivity":
-        task["spark_jar_task"] = {
-            "main_class_name": task_ir.get("main_class_name", ""),
-        }
-        if task_ir.get("parameters"):
-            resolved_params = []
-            for param in task_ir["parameters"]:
-                resolved_params.append(normalize_value(param))
-            task["spark_jar_task"]["parameters"] = resolved_params
-        if task_ir.get("libraries"):
-            task["libraries"] = task_ir["libraries"]
-
-    elif task_type_name == "SparkPythonActivity":
-        task["spark_python_task"] = {
-            "python_file": task_ir.get("python_file", ""),
-        }
-        if task_ir.get("parameters"):
-            task["spark_python_task"]["parameters"] = task_ir["parameters"]
-
-    elif task_type_name in ("ExecutePipelineActivity", "RunJobActivity"):
-        run_job: dict[str, Any] = {}
-        if task_ir.get("existing_job_id"):
-            run_job["job_id"] = task_ir["existing_job_id"]
-        elif task_ir.get("pipeline_name"):
-            # Cross-bundle references can't resolve via ${resources.jobs.X.id} —
-            # the referenced job lives in a sibling bundle.  Emit a bundle
-            # variable instead so `bundle validate` passes; the SETUP writer
-            # picks this up and tells the user to populate it with a numeric
-            # job ID.
-            ref_key = normalize_task_key(task_ir["pipeline_name"])
-            variable_name = f"{ref_key}_job_id"
-            run_job["job_id"] = f"${{var.{variable_name}}}"
-            _cross_bundle_variables.setdefault(variable_name, task_ir["pipeline_name"])
-        elif task_ir.get("job_name"):
-            run_job["job_id"] = f"${{resources.jobs.{task_ir['job_name']}.id}}"
-        # ExecutePipelineActivity serialises params under ``parameters``;
-        # RunJobActivity under ``job_parameters``.  Both flow into DAB's
-        # ``run_job_task.job_parameters``.
-        raw_params = task_ir.get("job_parameters") or task_ir.get("parameters")
-        if raw_params:
-            job_params: dict[str, str] = {}
-            for key, value in raw_params.items():
-                normalized = normalize_value(value)
-                if "dbutils.widgets.get" in normalized or "dbutils.jobs.taskValues" in normalized:
-                    _warn(
-                        task_key,
-                        f"Parameter `{key}` contains a computed expression that cannot be "
-                        f"expressed as a DAB dynamic value reference for run_job_task. "
-                        f"Value: `{normalized}`",
-                    )
-                job_params[key] = normalized
-            run_job["job_parameters"] = job_params
-        task["run_job_task"] = run_job
-
-    elif task_type_name in (
-        "WebActivity",
-        "LookupActivity",
-        "CopyActivity",
-        "SetVariableActivity",
-        "WaitActivity",
-        "DeleteActivity",
-        "FilterActivity",
-        "AppendVariableActivity",
-    ):
-        notebook_relative_path = f"notebooks/{notebook_filename(task_key, activity_name)}"
-        # Generated notebooks (Lookup, SetVariable, Wait, Filter, WebActivity,
-        # Delete, AppendVariable, Copy) inherit the workspace's default
-        # serverless config -- they install no Python libraries, so we don't
-        # bind them to an ``environment_key`` or emit an ``environments`` block.
-        ir_activity = _reconstruct_ir(task_ir)
-        if ir_activity is not None:
-            _generators: dict[str, Any] = {
-                "WebActivity": generate_web_activity_notebook,
-                "LookupActivity": generate_lookup_notebook,
-                "CopyActivity": generate_copy_notebook,
-                "SetVariableActivity": generate_set_variable_notebook,
-                "WaitActivity": generate_wait_notebook,
-                "DeleteActivity": generate_delete_notebook,
-                "FilterActivity": generate_filter_notebook,
-                "AppendVariableActivity": generate_append_variable_notebook,
-            }
-            generator_function = _generators[task_type_name]
-            content = generator_function(ir_activity)
-        else:
-            content = _placeholder_notebook(task_key, activity_name, task_type_name)
-
-        task["notebook_task"] = {"notebook_path": f"../src/{notebook_relative_path}"}
-
-        if task_type_name == "LookupActivity":
-            task["notebook_task"]["base_parameters"] = {
-                "first_row_only": str(task_ir.get("first_row_only", True)).lower(),
-            }
-        elif task_type_name == "CopyActivity":
-            base_parameters: dict[str, str] = {}
-            if task_ir.get("source_type"):
-                base_parameters["source_type"] = task_ir["source_type"]
-            if task_ir.get("sink_type"):
-                base_parameters["sink_type"] = task_ir["sink_type"]
-            sink_props = task_ir.get("sink_properties") or {}
-            volume_name = sink_props.get("volume_name")
-            if volume_name:
-                # Volume root is DAB-substituted in the YAML; the notebook
-                # reads it as ``output_path_root`` and joins the resolved
-                # relative path on top.
-                base_parameters["output_path_root"] = f"/Volumes/${{var.catalog}}/${{var.schema}}/{volume_name}"
-            if base_parameters:
-                task["notebook_task"]["base_parameters"] = base_parameters
-        elif task_type_name == "WebActivity":
-            task["notebook_task"]["base_parameters"] = {
-                "url": normalize_value(task_ir.get("url", "")),
-                "method": task_ir.get("method", "GET"),
-            }
-        elif task_type_name == "SetVariableActivity":
-            set_variable_params: dict[str, str] = {"variable_name": task_ir.get("variable_name", "")}
-            if task_ir.get("value_kind") in ("literal", "dab_ref"):
-                set_variable_params["value"] = normalize_value(task_ir.get("variable_value", ""))
-            for widget_name, dab_ref in (task_ir.get("required_parameters") or {}).items():
-                set_variable_params.setdefault(widget_name, dab_ref)
-            task["notebook_task"]["base_parameters"] = set_variable_params
-        elif task_type_name == "AppendVariableActivity":
-            append_variable_params: dict[str, str] = {"variable_name": task_ir.get("variable_name", "")}
-            if task_ir.get("value_kind") in ("literal", "dab_ref"):
-                append_variable_params["value"] = normalize_value(task_ir.get("append_value", ""))
-            for widget_name, dab_ref in (task_ir.get("required_parameters") or {}).items():
-                append_variable_params.setdefault(widget_name, dab_ref)
-            task["notebook_task"]["base_parameters"] = append_variable_params
-
-        notebooks.append(
-            DabNotebook(
-                relative_path=notebook_relative_path,
-                content=content,
-            )
-        )
-
-    elif task_type_name == "MotifActivity":
-        notebook_relative_path = f"notebooks/{task_key}.py"
-        task["notebook_task"] = {"notebook_path": f"../src/{notebook_relative_path}"}
-        motif_activity = _reconstruct_ir(task_ir)
-        if motif_activity is not None:
-            content = generate_motif_notebook(motif_activity)
-        else:
-            content = _placeholder_notebook(task_key, activity_name, task_type_name)
-        notebooks.append(DabNotebook(relative_path=notebook_relative_path, content=content))
-
-    elif task_type_name in ("PlaceholderActivity", "UnsupportedActivity"):
-        notebook_relative_path = f"notebooks/{task_key or 'placeholder'}.py"
-        task["notebook_task"] = {"notebook_path": f"../src/{notebook_relative_path}"}
-        notebooks.append(
-            DabNotebook(
-                relative_path=notebook_relative_path,
-                content=_placeholder_notebook(task_key, activity_name, task_type_name),
-            )
-        )
-
-    else:
-        notebook_relative_path = f"notebooks/{task_key or 'unknown'}.py"
-        task["notebook_task"] = {
-            "notebook_path": f"../src/{notebook_relative_path}",
-        }
-        notebooks.append(
-            DabNotebook(
-                relative_path=notebook_relative_path,
-                content=_placeholder_notebook(task_key, activity_name, task_type_name),
-            )
-        )
-
-    return {
-        "task": task,
-        "extra_tasks": extra_tasks,
-        "notebooks": notebooks,
-        "inner_workflows": inner_workflows,
-    }
-
-
-
-
-def inject_outcome_dependency(tasks: list[dict[str, Any]], condition_key: str, outcome: str) -> None:
-    """Gate root tasks in a branch on the condition's outcome.
-
-    Args:
-        tasks: Tasks in one branch (mutated in place).
-        condition_key: Task key of the enclosing condition task.
-        outcome: ``"true"`` or ``"false"``.
-    """
-    branch_keys = {task.get("task_key") for task in tasks}
-    for task in tasks:
-        deps = task.get("depends_on") or []
-        refers_to_branch_sibling = any(dep.get("task_key") in branch_keys for dep in deps)
-        if not deps or not refers_to_branch_sibling:
-            task["depends_on"] = [{"task_key": condition_key, "outcome": outcome}]
-
-
-def _collect_branch_tasks(
-    child_irs: list[dict[str, Any]],
-    notebooks: list[DabNotebook],
-    inner_workflows: list[PreparedWorkflow],
-) -> list[dict[str, Any]]:
-    """Prepares a branch of child IR dicts into a flat list of DAB task dicts.
-
-    Args:
-        child_irs: Serialized IR dicts for one branch.
-        notebooks: Accumulator for generated notebooks (mutated).
-        inner_workflows: Accumulator for inner job workflows (mutated).
-
-    Returns:
-        Flat list of DAB task dicts for the branch.
-    """
-    branch_tasks: list[dict[str, Any]] = []
-    for child_ir in child_irs:
-        result = _task_ir_to_dab(child_ir)
-        branch_tasks.append(result["task"])
-        branch_tasks.extend(result.get("extra_tasks", []))
-        notebooks.extend(result["notebooks"])
-        inner_workflows.extend(result["inner_workflows"])
-    return branch_tasks
-
-
-def _handle_if_condition(
-    task: dict[str, Any],
-    task_ir: dict[str, Any],
-    task_key: str,
-    notebooks: list[DabNotebook],
-    inner_workflows: list[PreparedWorkflow],
-    extra_tasks: list[dict[str, Any]],
-) -> None:
-    """Builds a condition_task and flatten both branches into sibling tasks.
-
-    Args:
-        task: The DAB task dict being built (mutated in place).
-        task_ir: Serialized IfConditionActivity dict from the IR JSON.
-        task_key: Task key for the IfCondition activity.
-        notebooks: Accumulator for generated notebooks.
-        inner_workflows: Accumulator for inner job workflows.
-        extra_tasks: Accumulator for the flattened branch tasks (mutated).
-    """
-    task["condition_task"] = {
-        "op": task_ir.get("op", "EQUAL_TO"),
-        "left": task_ir.get("left", ""),
-        "right": task_ir.get("right", ""),
-    }
-
-    if_true_tasks = _collect_branch_tasks(task_ir.get("if_true_activities", []), notebooks, inner_workflows)
-    inject_outcome_dependency(if_true_tasks, task_key, "true")
-    extra_tasks.extend(if_true_tasks)
-
-    if_false_tasks = _collect_branch_tasks(task_ir.get("if_false_activities", []), notebooks, inner_workflows)
-    inject_outcome_dependency(if_false_tasks, task_key, "false")
-    extra_tasks.extend(if_false_tasks)
-
-
-def _handle_switch(
-    task: dict[str, Any],
-    task_ir: dict[str, Any],
-    task_key: str,
-    notebooks: list[DabNotebook],
-    inner_workflows: list[PreparedWorkflow],
-    extra_tasks: list[dict[str, Any]],
-    task_key_remap: dict[str, str] | None = None,
-) -> None:
-    """Builds a chain of condition_tasks from a SwitchActivity IR dict.
-
-    Args:
-        task: The DAB task dict being built (mutated in place) — becomes the
-            first case's condition task.
-        task_ir: Serialized SwitchActivity dict from the IR JSON.
-        task_key: Task key for the Switch activity.
-        notebooks: Accumulator for generated notebooks.
-        inner_workflows: Accumulator for inner job workflows.
-        extra_tasks: Accumulator for all subsequent condition tasks and
-            branch bodies (mutated).
-    """
-    # Resolve defensively in case the IR JSON carries an unresolved
-    # ``@variables(...)`` (hand-edited reports, future translators, etc.).
-    on_expression = resolve_switch_on_expression(task_ir.get("on_expression", ""))
-    cases = task_ir.get("cases", [])
-    default_activity_dicts = task_ir.get("default_activities", [])
-
-    if not cases:
-        task["condition_task"] = {"op": "EQUAL_TO", "left": "true", "right": "true"}
-        default_tasks = _collect_branch_tasks(default_activity_dicts, notebooks, inner_workflows)
-        inject_outcome_dependency(default_tasks, task_key, "true")
-        extra_tasks.extend(default_tasks)
-        return
-
-    # Every case (including the first) is named ``<switch>_case_<value>``.
-    # The first case keeps the Switch's original ``depends_on`` edges, but
-    # the task_key is renamed so the rendered job graph reads cleanly.  Any
-    # downstream task whose ``depends_on`` referenced the bare Switch key
-    # is rewritten by the caller after all tasks are converted (see
-    # ``task_key_remap`` in ``_pipeline_dict_to_workflow``).
-    case_keys: list[str] = []
-    for index, case in enumerate(cases):
-        case_value = case.get("value", "")
-        is_first = index == 0
-        case_key = f"{task_key}_case_{sanitize_case_key(case_value)}"
-        case_keys.append(case_key)
-
-        if is_first:
-            task["task_key"] = case_key
-            task["condition_task"] = {"op": "EQUAL_TO", "left": on_expression, "right": case_value}
-        else:
-            extra_tasks.append(
-                {
-                    "task_key": case_key,
-                    "depends_on": [{"task_key": case_keys[index - 1], "outcome": "false"}],
-                    "condition_task": {"op": "EQUAL_TO", "left": on_expression, "right": case_value},
-                }
-            )
-
-        branch_tasks = _collect_branch_tasks(case.get("activities", []), notebooks, inner_workflows)
-        inject_outcome_dependency(branch_tasks, case_key, "true")
-        extra_tasks.extend(branch_tasks)
-
-    # Record the rename so downstream tasks that referenced the bare
-    # Switch task_key are rewired to the new first-case key.
-    if task_key_remap is not None and case_keys:
-        task_key_remap[task_key] = case_keys[0]
-
-    default_tasks = _collect_branch_tasks(default_activity_dicts, notebooks, inner_workflows)
-    if default_tasks:
-        inject_outcome_dependency(default_tasks, case_keys[-1], "false")
-        extra_tasks.extend(default_tasks)
-
-
-def _handle_for_each(
-    task: dict[str, Any],
-    task_ir: dict[str, Any],
-    task_key: str,
-    notebooks: list[DabNotebook],
-    inner_workflows: list[PreparedWorkflow],
-) -> None:
-    """Builds a for_each_task from a serialized ForEachActivity IR dict.
-
-    Args:
-        task: The DAB task dict being built (mutated in place).
-        task_ir: Serialized ForEachActivity dict from the IR JSON.
-        task_key: Task key for the ForEach activity.
-        notebooks: Accumulator for generated notebooks.
-        inner_workflows: Accumulator for inner job workflows.
-    """
-    items_expression = task_ir.get("items_expression", "")
-    concurrency = task_ir.get("concurrency", 20)
-    inner_activity_dicts = task_ir.get("inner_activities", [])
-
-    if len(inner_activity_dicts) == 1:
-        result = _task_ir_to_dab(inner_activity_dicts[0])
-        inner_task = result["task"]
-        inner_key = inner_task.get("task_key", task_key)
-        if "notebook_task" in inner_task:
-            params = inner_task["notebook_task"].setdefault("base_parameters", {})
-            params["item"] = "{{input}}"
-
-        # Warn if the inner task is a non-code-gen notebook (placeholder) that
-        # receives JSON-valued {{input}} — it can't parse sub-properties.
-        inner_type = inner_activity_dicts[0].get("type", "")
-        if inner_type == "NotebookActivity":
-            _warn(
-                inner_key,
-                "This for_each inner task receives `{{input}}` as a JSON string. "
-                "The notebook must parse it with `json.loads(dbutils.widgets.get('item'))` "
-                "to access sub-properties like `partition_key` or `partition_value`.",
-            )
-
-        notebooks.extend(result["notebooks"])
-        inner_workflows.extend(result["inner_workflows"])
-
-        task["for_each_task"] = {
-            "inputs": items_expression,
-            "task": inner_task,
-            "concurrency": concurrency,
-        }
-
-    elif len(inner_activity_dicts) > 1:
-        inner_job_name = f"{task_key}_inner_tasks"
-        inner_job_key = normalize_task_key(inner_job_name)
-
-        inner_tasks: list[dict[str, Any]] = []
-        for inner_ir in inner_activity_dicts:
-            result = _task_ir_to_dab(inner_ir)
-            inner_tasks.append(result["task"])
-            notebooks.extend(result["notebooks"])
-            inner_workflows.extend(result["inner_workflows"])
-
-        normalize_inner_task_params(inner_tasks)
-
-        # Scan for all parameter references and build declarations + pass-through.
-        # Pass the raw IR dicts so fields consumed during conversion (e.g.
-        # WebActivity url/body) are also scanned.
-        parameters, job_parameters = collect_inner_job_params(
-            inner_tasks,
-            raw_ir_tasks=inner_activity_dicts,
-        )
-
-        inner_workflow = PreparedWorkflow(
-            name=inner_job_name,
-            tasks=inner_tasks,
-            notebooks=[],  # notebooks already collected above
-            secrets=[],
-            setup_tasks=[],
-            parameters=parameters,
-        )
-        inner_workflows.append(inner_workflow)
-
-        body_task: dict[str, Any] = {
-            "task_key": f"{task_key}_iteration",
-            "run_job_task": {
-                "job_id": f"${{resources.jobs.{inner_job_key}.id}}",
-                "job_parameters": job_parameters,
-            },
-        }
-
-        task["for_each_task"] = {
-            "inputs": items_expression,
-            "task": body_task,
-            "concurrency": concurrency,
-        }
-
-    else:
-        task["for_each_task"] = {
-            "inputs": items_expression,
-            "task": {"task_key": f"{task_key}_noop"},
-            "concurrency": concurrency,
-        }
 
 
 if __name__ == "__main__":
