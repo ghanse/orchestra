@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import json
 import re
 import textwrap
@@ -42,15 +43,10 @@ def generate_lookup_notebook(activity: LookupActivity, *, scope: str = "") -> st
     source_type = activity.source_type or ""
     query = activity.source_query or ""
 
-    is_dynamic_query = "dbutils.widgets.get" in query or "dbutils.jobs.taskValues" in query
+    query_assignment = _render_query_assignment(query)
 
     if source_type in JDBC_SOURCE_TYPES:
         scope = scope or activity.task_key
-
-        if is_dynamic_query:
-            query_assignment = f"query = {query}"
-        else:
-            query_assignment = f'query = """{query}"""'
 
         body = textwrap.dedent(f"""\
             import json
@@ -100,7 +96,7 @@ def generate_lookup_notebook(activity: LookupActivity, *, scope: str = "") -> st
             first_row_only = dbutils.widgets.get("first_row_only") == "true"
 
             # Execute lookup query via Spark SQL
-            query = \"\"\"{query}\"\"\"
+            {query_assignment}
             df = spark.sql(query)
 
             if first_row_only:
@@ -603,6 +599,28 @@ def _notebook_header(title: str) -> str:
 def _command_separator() -> str:
     """Return the Databricks cell separator comment."""
     return "\n# COMMAND ----------\n\n"
+
+
+def _render_query_assignment(query: str) -> str:
+    """Returns ``query = <expr>`` source for embedding a lookup query in a notebook.
+
+    The orchestra expression resolver may have pre-translated the original
+    ADF query into Python source that builds the SQL string at runtime
+    (e.g. ``"SELECT ... FROM " + dbutils.widgets.get('table')``).  When
+    that's the case the embedded text is *code*, not data, so we
+    defensively parse it as a Python expression before splicing it in --
+    if it doesn't parse, fall back to a safe string literal.
+
+    All other queries are embedded as ``repr()`` string literals so any
+    embedded quotes (including ``\"\"\"``) round-trip correctly.
+    """
+    if "dbutils.widgets.get" in query or "dbutils.jobs.taskValues" in query:
+        try:
+            ast.parse(query, mode="eval")
+        except SyntaxError:
+            return f"query = {query!r}"
+        return f"query = {query}"
+    return f"query = {query!r}"
 
 
 _DAB_REF_PARAMETER_RE = re.compile(r"\{\{job\.parameters\.(\w+)\}\}")

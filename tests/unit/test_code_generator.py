@@ -188,6 +188,43 @@ class TestGenerateLookupNotebook:
         assert "spark.sql" in content
         assert "jdbc" not in content
 
+    def test_query_with_triple_quotes_does_not_break_notebook(self):
+        """Regression: a query containing ``\\"\\"\\"`` used to break the embedded string."""
+        activity = LookupActivity(
+            **_make_base("LookupQQ", "lookup_qq"),
+            source_type="AzureSqlSource",
+            first_row_only=True,
+            source_query='SELECT \'""">\' AS q FROM dual',
+        )
+        content = generate_lookup_notebook(activity, scope="s")
+        _assert_valid_python(content, "lookup_qq (triple-quote in query)")
+
+    def test_dynamic_query_with_widget_passthrough(self):
+        """Pre-translated queries (containing dbutils.widgets.get) are spliced as code."""
+        activity = LookupActivity(
+            **_make_base("LookupDyn", "lookup_dyn"),
+            source_type="AzureSqlSource",
+            first_row_only=True,
+            source_query='"SELECT * FROM " + dbutils.widgets.get(\'table\')',
+        )
+        content = generate_lookup_notebook(activity, scope="s")
+        _assert_valid_python(content, "lookup_dyn")
+        assert "dbutils.widgets.get('table')" in content
+
+    def test_unparseable_dynamic_query_falls_back_to_literal(self):
+        """A pre-translated string that doesn't parse is embedded as a string literal."""
+        activity = LookupActivity(
+            **_make_base("LookupBad", "lookup_bad"),
+            source_type="AzureSqlSource",
+            first_row_only=True,
+            source_query="dbutils.widgets.get('x' BROKEN",
+        )
+        content = generate_lookup_notebook(activity, scope="s")
+        _assert_valid_python(content, "lookup_bad")
+        # The broken expression is embedded as a quoted string literal
+        # ("dbutils.widgets.get(..."), not as executable Python.
+        assert 'query = "dbutils.widgets.get(' in content
+
 
 # ---------------------------------------------------------------------------
 # Web activity notebook generator
