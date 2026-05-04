@@ -1,9 +1,4 @@
-"""DAB output models.
-
-These dataclasses represent the final Databricks Asset Bundle (DAB) artefacts
-produced by the bundler stage.  They are serialized to YAML/JSON and written
-to disk alongside generated notebooks and setup scripts.
-"""
+"""DAB output models."""
 
 from __future__ import annotations
 
@@ -23,11 +18,14 @@ class DabNotebook:
         relative_path: Path relative to the bundle root (e.g. ``"src/copy_data.py"``).
         content: Full notebook source content.
         language: Notebook language (``"python"``, ``"sql"``, ``"scala"``, ``"r"``).
+        binary_content: Raw bytes for binary files (e.g. JARs).  When set,
+            the notebook writer writes these bytes instead of ``content``.
     """
 
     relative_path: str
-    content: str
+    content: str = ""
     language: str = "python"
+    binary_content: bytes | None = None
 
 
 # ---------------------------------------------------------------------------

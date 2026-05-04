@@ -1,18 +1,4 @@
-"""Load ADF JSON files from a directory structure and produce typed AST objects.
-
-Supports two input formats:
-
-1. **Directory structure** — subdirectories for ``pipelines/``, ``datasets/``,
-   ``linked_services/``, and ``triggers/`` (with common name variants).
-2. **ARM template** — a single ``*.json`` file containing embedded ADF resource
-   definitions that are normalised before parsing.
-
-The public API exposes three entry points:
-
-* :func:`load_adf_definitions` — parse all JSON files into :class:`AdfDefinitions`.
-* :func:`classify_activity` — classify a single activity type.
-* :func:`build_inventory` — classify every activity in a set of definitions.
-"""
+"""Loads ADF JSON files from a directory structure and produce typed AST objects."""
 
 from __future__ import annotations
 
@@ -88,7 +74,7 @@ AGENTIC_TYPES: dict[str, str] = {
 
 
 def load_adf_definitions(source_dir: Path) -> AdfDefinitions:
-    """Load all ADF JSON files from *source_dir* and return an :class:`AdfDefinitions`.
+    """Loads all ADF JSON files from *source_dir* and return an :class:`AdfDefinitions`.
 
     Args:
         source_dir: Root directory containing ADF JSON exports.  May be a
@@ -100,17 +86,14 @@ def load_adf_definitions(source_dir: Path) -> AdfDefinitions:
     """
     source_dir = Path(source_dir).resolve()
 
-    # Single ARM-template file ---------------------------------------------------
     if source_dir.is_file() and source_dir.suffix == ".json":
         return _load_arm_template(source_dir)
 
-    # Directory tree -------------------------------------------------------------
     pipelines: list[AdfPipeline] = []
     datasets: dict[str, AdfDataset] = {}
     linked_services: dict[str, AdfLinkedService] = {}
     triggers: list[AdfTrigger] = []
 
-    # Pipelines
     pipeline_dir = _find_json_dir(source_dir, "pipelines", "pipeline")
     if pipeline_dir is not None:
         for json_file in sorted(pipeline_dir.glob("*.json")):
@@ -120,29 +103,26 @@ def load_adf_definitions(source_dir: Path) -> AdfDefinitions:
             except Exception:
                 logger.exception("Failed to parse pipeline file %s", json_file)
 
-    # Datasets
     dataset_dir = _find_json_dir(source_dir, "datasets", "dataset")
     if dataset_dir is not None:
         for json_file in sorted(dataset_dir.glob("*.json")):
             try:
                 data = json.loads(json_file.read_text(encoding="utf-8"))
-                ds = _parse_dataset_json(data, fallback_name=json_file.stem)
-                datasets[ds.name] = ds
+                dataset = _parse_dataset_json(data, fallback_name=json_file.stem)
+                datasets[dataset.name] = dataset
             except Exception:
                 logger.exception("Failed to parse dataset file %s", json_file)
 
-    # Linked services
-    ls_dir = _find_json_dir(source_dir, "linked_services", "linkedService", "linkedServices")
-    if ls_dir is not None:
-        for json_file in sorted(ls_dir.glob("*.json")):
+    linked_service_dir = _find_json_dir(source_dir, "linked_services", "linkedService", "linkedServices")
+    if linked_service_dir is not None:
+        for json_file in sorted(linked_service_dir.glob("*.json")):
             try:
                 data = json.loads(json_file.read_text(encoding="utf-8"))
-                ls = _parse_linked_service_json(data, fallback_name=json_file.stem)
-                linked_services[ls.name] = ls
+                linked_service = _parse_linked_service_json(data, fallback_name=json_file.stem)
+                linked_services[linked_service.name] = linked_service
             except Exception:
                 logger.exception("Failed to parse linked-service file %s", json_file)
 
-    # Triggers
     trigger_dir = _find_json_dir(source_dir, "triggers", "trigger")
     if trigger_dir is not None:
         for json_file in sorted(trigger_dir.glob("*.json")):
@@ -178,7 +158,7 @@ def classify_activity(activity_type: str) -> tuple[TranslationStrategy, str | No
 
 
 def build_inventory(definitions: AdfDefinitions) -> Inventory:
-    """Walk all pipelines in *definitions* and classify every activity.
+    """Walks all pipelines in *definitions* and classify every activity.
 
     Args:
         definitions: Parsed ADF definitions.
@@ -239,7 +219,7 @@ def _find_json_dir(source_dir: Path, *candidate_names: str) -> Path | None:
 
 
 def _parse_pipeline_json(data: dict[str, Any], *, fallback_name: str = "unknown") -> AdfPipeline:
-    """Parse a single pipeline JSON payload into an :class:`AdfPipeline`.
+    """Parses a single pipeline JSON payload into an :class:`AdfPipeline`.
 
     Args:
         data: Raw JSON dictionary (either a bare pipeline or wrapped in ``properties``).
@@ -253,7 +233,7 @@ def _parse_pipeline_json(data: dict[str, Any], *, fallback_name: str = "unknown"
     name = data.get("name") or props.get("name") or fallback_name
 
     activities_raw: list[dict[str, Any]] = props.get("activities", [])
-    activities = [_parse_activity(a) for a in activities_raw]
+    activities = [parse_activity(a) for a in activities_raw]
 
     parameters: dict[str, AdfParameter] | None = None
     raw_params = props.get("parameters")
@@ -295,8 +275,8 @@ def _parse_pipeline_json(data: dict[str, Any], *, fallback_name: str = "unknown"
     )
 
 
-def _parse_activity(data: dict[str, Any]) -> AdfActivity:
-    """Parse an activity dict into a typed :class:`AdfActivity` AST node.
+def parse_activity(data: dict[str, Any]) -> AdfActivity:
+    """Parses an activity dict into a typed :class:`AdfActivity` AST node.
 
     Args:
         data: Raw activity JSON dictionary.
@@ -307,7 +287,6 @@ def _parse_activity(data: dict[str, Any]) -> AdfActivity:
     name = data.get("name", "unnamed")
     adf_type = data.get("type", "Unknown")
 
-    # Dependencies
     depends_on: list[AdfDependency] | None = None
     raw_deps = data.get("dependsOn")
     if raw_deps:
@@ -319,7 +298,6 @@ def _parse_activity(data: dict[str, Any]) -> AdfActivity:
             for dep in raw_deps
         ]
 
-    # Policy
     policy: AdfPolicy | None = None
     raw_policy = data.get("policy")
     if raw_policy:
@@ -331,14 +309,15 @@ def _parse_activity(data: dict[str, Any]) -> AdfActivity:
             secure_output=raw_policy.get("secureOutput", False),
         )
 
-    # Type properties
+    # Type properties — prefer explicit typeProperties; fall back to
+    # collecting non-common top-level keys (flattened format).
     type_properties = data.get("typeProperties")
+    if type_properties is None:
+        type_properties = _collect_type_properties(data)
 
-    # Inputs / outputs
     inputs = _parse_dataset_refs(data.get("inputs"))
     outputs = _parse_dataset_refs(data.get("outputs"))
 
-    # Linked service
     linked_service_name: AdfLinkedServiceReference | None = None
     raw_ls = data.get("linkedServiceName")
     if raw_ls and isinstance(raw_ls, dict):
@@ -347,7 +326,6 @@ def _parse_activity(data: dict[str, Any]) -> AdfActivity:
             type=raw_ls.get("type", "LinkedServiceReference"),
         )
 
-    # Control-flow children
     if_true_activities: list[AdfActivity] | None = None
     if_false_activities: list[AdfActivity] | None = None
     child_activities: list[AdfActivity] | None = None
@@ -355,13 +333,13 @@ def _parse_activity(data: dict[str, Any]) -> AdfActivity:
     if type_properties:
         raw_if_true = type_properties.get("ifTrueActivities")
         if raw_if_true:
-            if_true_activities = [_parse_activity(a) for a in raw_if_true]
+            if_true_activities = [parse_activity(a) for a in raw_if_true]
         raw_if_false = type_properties.get("ifFalseActivities")
         if raw_if_false:
-            if_false_activities = [_parse_activity(a) for a in raw_if_false]
+            if_false_activities = [parse_activity(a) for a in raw_if_false]
         raw_children = type_properties.get("activities")
         if raw_children:
-            child_activities = [_parse_activity(a) for a in raw_children]
+            child_activities = [parse_activity(a) for a in raw_children]
 
     return AdfActivity(
         name=name,
@@ -378,8 +356,40 @@ def _parse_activity(data: dict[str, Any]) -> AdfActivity:
     )
 
 
+_COMMON_ACTIVITY_KEYS: frozenset[str] = frozenset(
+    {
+        "name",
+        "type",
+        "dependsOn",
+        "policy",
+        "userProperties",
+        "description",
+        "state",
+        "onInactiveMarkAs",
+        "additionalProperties",
+        "inputs",
+        "outputs",
+        "linkedServiceName",
+        "typeProperties",
+    }
+)
+
+
+def _collect_type_properties(data: dict[str, Any]) -> dict[str, Any] | None:
+    """Collects type-specific fields from a flattened activity dict.
+
+    Args:
+        data: Raw activity JSON dictionary.
+
+    Returns:
+        Synthesised type-properties dict, or ``None`` if no extra keys exist.
+    """
+    type_properties: dict[str, Any] = {k: v for k, v in data.items() if k not in _COMMON_ACTIVITY_KEYS}
+    return type_properties if type_properties else None
+
+
 def _parse_dataset_refs(raw: list[dict[str, Any]] | None) -> list[AdfDatasetReference] | None:
-    """Parse a list of dataset reference dicts into typed objects.
+    """Parses a list of dataset reference dicts into typed objects.
 
     Args:
         raw: Raw list of dataset reference dictionaries, or ``None``.
@@ -403,7 +413,7 @@ def _parse_dataset_refs(raw: list[dict[str, Any]] | None) -> list[AdfDatasetRefe
 
 
 def _parse_dataset_json(data: dict[str, Any], *, fallback_name: str = "unknown") -> AdfDataset:
-    """Parse a dataset JSON payload.
+    """Parses a dataset JSON payload.
 
     Args:
         data: Raw JSON dictionary.
@@ -428,7 +438,7 @@ def _parse_dataset_json(data: dict[str, Any], *, fallback_name: str = "unknown")
 
 
 def _parse_linked_service_json(data: dict[str, Any], *, fallback_name: str = "unknown") -> AdfLinkedService:
-    """Parse a linked-service JSON payload.
+    """Parses a linked-service JSON payload.
 
     Args:
         data: Raw JSON dictionary.
@@ -446,7 +456,7 @@ def _parse_linked_service_json(data: dict[str, Any], *, fallback_name: str = "un
 
 
 def _parse_trigger_json(data: dict[str, Any], *, fallback_name: str = "unknown") -> AdfTrigger:
-    """Parse a trigger JSON payload.
+    """Parses a trigger JSON payload.
 
     Args:
         data: Raw JSON dictionary.
@@ -472,10 +482,6 @@ def _parse_trigger_json(data: dict[str, Any], *, fallback_name: str = "unknown")
 def _normalize_arm(data: dict[str, Any]) -> dict[str, Any]:
     """If *data* is an ARM template wrapper, unwrap to the inner resource definition.
 
-    ARM templates wrap ADF resources in ``resources[].properties``.  This
-    function detects the ``$schema`` key and extracts the first resource whose
-    type ends with a known ADF resource suffix.
-
     Args:
         data: Possibly ARM-wrapped JSON dictionary.
 
@@ -489,15 +495,12 @@ def _normalize_arm(data: dict[str, Any]) -> dict[str, Any]:
     if not resources:
         return data
 
-    # Look for ADF resource types
     adf_suffixes = ("/pipelines", "/datasets", "/linkedServices", "/triggers")
     for resource in resources:
         rtype = resource.get("type", "")
         if any(rtype.endswith(suffix) for suffix in adf_suffixes):
-            # Return a dict with name + properties so callers find both
             result: dict[str, Any] = {}
             arm_name = resource.get("name", "")
-            # ARM names are often expressions like "[concat(factoryName, '/PipelineName')]"
             if "/" in arm_name:
                 result["name"] = arm_name.rsplit("/", 1)[-1].strip("'])")
             else:
@@ -509,7 +512,7 @@ def _normalize_arm(data: dict[str, Any]) -> dict[str, Any]:
 
 
 def _load_arm_template(template_path: Path) -> AdfDefinitions:
-    """Load all ADF resources from a single ARM template file.
+    """Loads all ADF resources from a single ARM template file.
 
     Args:
         template_path: Path to the ARM template JSON file.
@@ -529,7 +532,6 @@ def _load_arm_template(template_path: Path) -> AdfDefinitions:
         rtype = resource.get("type", "")
         props = resource.get("properties", {})
         raw_name = resource.get("name", "")
-        # Extract clean name from ARM expression
         if "/" in raw_name:
             name = raw_name.rsplit("/", 1)[-1].strip("'])")
         else:
@@ -544,14 +546,14 @@ def _load_arm_template(template_path: Path) -> AdfDefinitions:
                 logger.exception("Failed to parse ARM pipeline resource %s", name)
         elif rtype.endswith("/datasets"):
             try:
-                ds = _parse_dataset_json(wrapped, fallback_name=name)
-                datasets[ds.name] = ds
+                dataset = _parse_dataset_json(wrapped, fallback_name=name)
+                datasets[dataset.name] = dataset
             except Exception:
                 logger.exception("Failed to parse ARM dataset resource %s", name)
         elif rtype.endswith("/linkedServices"):
             try:
-                ls = _parse_linked_service_json(wrapped, fallback_name=name)
-                linked_services[ls.name] = ls
+                linked_service = _parse_linked_service_json(wrapped, fallback_name=name)
+                linked_services[linked_service.name] = linked_service
             except Exception:
                 logger.exception("Failed to parse ARM linked-service resource %s", name)
         elif rtype.endswith("/triggers"):
@@ -600,7 +602,6 @@ def _classify_activities(
             )
         )
 
-        # Recurse into children
         if activity.if_true_activities:
             _classify_activities(pipeline_name, activity.if_true_activities, items)
         if activity.if_false_activities:
@@ -685,7 +686,6 @@ if __name__ == "__main__":
     inventory_path.write_text(json.dumps(inventory_dict, indent=2), encoding="utf-8")
     logger.info("Wrote inventory to %s", inventory_path)
 
-    # Summary
     summary = inventory_dict["summary"]
     print("\nADF Ingestion Summary")
     print("=====================")

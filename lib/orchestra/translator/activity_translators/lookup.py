@@ -1,4 +1,4 @@
-"""Translate ADF Lookup activities to Databricks LookupActivity IR."""
+"""Translates ADF Lookup activities to Databricks LookupActivity IR."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ from typing import Any
 
 from orchestra.models.adf_ast import AdfActivity, AdfDefinitions
 from orchestra.models.ir import Activity, LookupActivity, TranslationContext
+from orchestra.translator.activity_translators.resolve import resolve_field
 
 
 def translate(
@@ -14,9 +15,7 @@ def translate(
     context: TranslationContext,
     definitions: AdfDefinitions,
 ) -> Activity:
-    """Translate a Lookup activity.
-
-    Extracts the source dataset reference, query, and firstRowOnly flag.
+    """Translates a Lookup activity.
 
     Args:
         activity: The ADF activity AST node.
@@ -27,18 +26,18 @@ def translate(
     Returns:
         A :class:`LookupActivity` IR node.
     """
-    tp = activity.type_properties or {}
+    type_properties = activity.type_properties or {}
 
-    source_raw = tp.get("source", {})
+    source_raw = type_properties.get("source", {})
     source_type = source_raw.get("type")
     source_properties = {k: v for k, v in source_raw.items() if k != "type"} if source_raw else {}
 
-    # The query can be in source.query, source.sqlReaderQuery, or source.sqlReaderStoredProcedureName
-    source_query = (
+    source_query_raw = (
         source_raw.get("query") or source_raw.get("sqlReaderQuery") or source_raw.get("sqlReaderStoredProcedureName")
     )
+    source_query = resolve_field(source_query_raw, context) if source_query_raw is not None else None
 
-    first_row_only = tp.get("firstRowOnly", True)
+    first_row_only = type_properties.get("firstRowOnly", True)
 
     return LookupActivity(
         **base_kwargs,

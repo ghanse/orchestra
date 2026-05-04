@@ -1,8 +1,4 @@
-"""Convert a translated Pipeline IR into a PreparedWorkflow.
-
-The PreparedWorkflow contains task dicts, generated notebooks, secret
-instructions, and setup tasks ready for the DAB bundle writer.
-"""
+"""Converts a translated Pipeline IR into a PreparedWorkflow."""
 
 from __future__ import annotations
 
@@ -20,6 +16,7 @@ from orchestra.models.ir import (
     ForEachActivity,
     IfConditionActivity,
     LookupActivity,
+    MotifActivity,
     NotebookActivity,
     Pipeline,
     PlaceholderActivity,
@@ -36,33 +33,23 @@ from orchestra.models.ir import (
 
 @dataclass(slots=True, kw_only=True)
 class PreparedActivity:
-    """Result of preparing a single activity for DAB deployment.
-
-    Attributes:
-        task: The DAB task dict ready for inclusion in a job definition.
-        notebooks: Generated notebooks this task depends on.
-        secrets: Secret creation instructions required by this task.
-        setup_tasks: One-time setup tasks required before this task can run.
-    """
+    """Result of preparing a single activity for DAB deployment."""
 
     task: dict[str, Any]
+    extra_tasks: list[dict[str, Any]] = field(default_factory=list)
     notebooks: list[DabNotebook] = field(default_factory=list)
     secrets: list[SecretInstruction] = field(default_factory=list)
     setup_tasks: list[SetupTask] = field(default_factory=list)
+    inner_workflows: list[PreparedWorkflow] = field(default_factory=list)
+    # Switch renames its first case from ``<activity>`` to
+    # ``<activity>_case_<value>``; ``prepare_workflow`` reads this map to
+    # rewrite ``depends_on`` edges that referenced the original key.
+    task_key_remap: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(slots=True, kw_only=True)
 class PreparedWorkflow:
-    """A fully prepared workflow ready for DAB bundle generation.
-
-    Attributes:
-        name: Human-readable workflow name.
-        tasks: Ordered list of DAB task dicts.
-        notebooks: All generated notebooks needed by the workflow.
-        secrets: All secret instructions aggregated across tasks.
-        setup_tasks: All one-time setup tasks aggregated across tasks.
-        inner_workflows: Nested workflows (from ExecutePipeline activities).
-    """
+    """A fully prepared workflow ready for DAB bundle generation."""
 
     name: str
     tasks: list[dict[str, Any]]
@@ -70,13 +57,24 @@ class PreparedWorkflow:
     secrets: list[SecretInstruction]
     setup_tasks: list[SetupTask]
     inner_workflows: list[PreparedWorkflow] = field(default_factory=list)
+    parameters: list[dict[str, Any]] = field(default_factory=list)
+    cluster_hints: list[dict[str, Any]] = field(default_factory=list)
 
 
-def _build_common_task_fields(activity: Activity) -> dict[str, Any]:
-    """Build the common task-level fields shared by all task types.
+def run_if_from_adf_outcomes(outcomes: list[str | None]) -> str | None:
+    """Maps a set of ADF dependency-edge outcomes to a single DAB ``run_if``."""
+    normalised = [outcome for outcome in outcomes if outcome]
+    if not normalised:
+        return None
+    if any(outcome in ("Completed", "Skipped") for outcome in normalised):
+        return "ALL_DONE"
+    if any(outcome == "Failed" for outcome in normalised):
+        return "AT_LEAST_ONE_FAILED"
+    return None
 
-    Args:
-        activity: Any IR activity node.
+
+def build_common_task_fields(activity: Activity) -> dict[str, Any]:
+    """Builds the task-level fields shared by every DAB task type.
 
     Returns:
         A dict with ``task_key``, ``depends_on``, ``timeout_seconds``, and
@@ -86,6 +84,9 @@ def _build_common_task_fields(activity: Activity) -> dict[str, Any]:
 
     if activity.depends_on:
         task["depends_on"] = [{"task_key": dep.task_key} for dep in activity.depends_on]
+        run_if = run_if_from_adf_outcomes([dep.outcome for dep in activity.depends_on])
+        if run_if:
+            task["run_if"] = run_if
 
     if activity.timeout_seconds is not None and activity.timeout_seconds > 0:
         task["timeout_seconds"] = activity.timeout_seconds
@@ -102,19 +103,13 @@ def _build_common_task_fields(activity: Activity) -> dict[str, Any]:
     return task
 
 
-def prepare_activity(activity: Activity) -> PreparedActivity:
-    """Dispatch to the appropriate activity preparer based on type.
-
-    Args:
-        activity: An IR activity node of any concrete type.
-
-    Returns:
-        A PreparedActivity with the task dict and any associated artifacts.
-
-    Raises:
-        ValueError: If the activity type has no registered preparer.
-    """
-    # Import activity preparers lazily to avoid circular imports
+def prepare_activity(
+    activity: Activity,
+    *,
+    scope: str = "",
+    variable_task_keys: dict[str, str] | None = None,
+) -> PreparedActivity:
+    """Dispatches to the appropriate activity preparer based on activity type."""
     from orchestra.preparer.activity_preparers import (
         append_variable,
         copy,
@@ -125,6 +120,7 @@ def prepare_activity(activity: Activity) -> PreparedActivity:
         for_each,
         if_condition,
         lookup,
+        motif,
         notebook,
         set_variable,
         spark_jar,
@@ -151,11 +147,10 @@ def prepare_activity(activity: Activity) -> PreparedActivity:
         RunJobActivity: databricks_job.prepare,
         SwitchActivity: switch.prepare,
         WaitActivity: wait.prepare,
+        MotifActivity: motif.prepare,
     }
 
     preparer_fn = dispatch.get(type(activity))
-
-    # Handle placeholder and unsupported activities with a generic notebook
     if preparer_fn is None:
         if isinstance(activity, (PlaceholderActivity, UnsupportedActivity)):
             return _prepare_placeholder(activity)
@@ -163,19 +158,18 @@ def prepare_activity(activity: Activity) -> PreparedActivity:
             f"No preparer registered for activity type {type(activity).__name__} (task_key={activity.task_key!r})"
         )
 
-    return preparer_fn(activity)
+    # NotebookActivity rewrites ``@variables()`` references; AppendVariable
+    # reads the prior writer's task_key to find the value to append to.
+    if type(activity) is NotebookActivity:
+        return preparer_fn(activity, scope=scope, variable_task_keys=variable_task_keys)
+    if type(activity) is AppendVariableActivity:
+        return preparer_fn(activity, scope=scope, variable_task_keys=variable_task_keys)
+    return preparer_fn(activity, scope=scope)
 
 
 def _prepare_placeholder(activity: Activity) -> PreparedActivity:
-    """Create a placeholder notebook task for unsupported or agentic activities.
-
-    Args:
-        activity: A PlaceholderActivity or UnsupportedActivity.
-
-    Returns:
-        A PreparedActivity with a stub notebook.
-    """
-    task = _build_common_task_fields(activity)
+    """Returns a PreparedActivity with a stub notebook for an unsupported activity."""
+    task = build_common_task_fields(activity)
 
     if isinstance(activity, PlaceholderActivity):
         comment = activity.comment or "This activity requires manual implementation."
@@ -214,36 +208,63 @@ def _prepare_placeholder(activity: Activity) -> PreparedActivity:
     return PreparedActivity(task=task, notebooks=[notebook])
 
 
+@dataclass(frozen=True, slots=True)
+class PreparedArtifacts:
+    """Immutable accumulator for the four artifact lists a workflow collects."""
+
+    notebooks: tuple[DabNotebook, ...] = ()
+    secrets: tuple[SecretInstruction, ...] = ()
+    setup_tasks: tuple[SetupTask, ...] = ()
+    inner_workflows: tuple[PreparedWorkflow, ...] = ()
+
+
+def merge_prepared_artifacts(
+    artifacts: PreparedArtifacts,
+    prepared: PreparedActivity,
+) -> PreparedArtifacts:
+    """Return a new :class:`PreparedArtifacts` extended with *prepared*'s artifacts."""
+    return PreparedArtifacts(
+        notebooks=artifacts.notebooks + tuple(prepared.notebooks),
+        secrets=artifacts.secrets + tuple(prepared.secrets),
+        setup_tasks=artifacts.setup_tasks + tuple(prepared.setup_tasks),
+        inner_workflows=artifacts.inner_workflows + tuple(prepared.inner_workflows),
+    )
+
+
 def prepare_workflow(pipeline: Pipeline) -> PreparedWorkflow:
-    """Convert a Pipeline IR into a PreparedWorkflow.
-
-    Iterates over all tasks in the pipeline, dispatches each to the
-    appropriate activity preparer, and aggregates the results into a
-    single PreparedWorkflow containing all task dicts, notebooks,
-    secrets, and setup tasks.
-
-    Args:
-        pipeline: The translated Pipeline IR to prepare.
-
-    Returns:
-        A PreparedWorkflow ready for the DAB bundle writer.
-    """
+    """Converts a Pipeline IR into a PreparedWorkflow ready for the DAB bundle writer."""
     all_tasks: list[dict[str, Any]] = []
-    all_notebooks: list[DabNotebook] = []
-    all_secrets: list[SecretInstruction] = []
-    all_setup_tasks: list[SetupTask] = []
+    artifacts = PreparedArtifacts()
+    cluster_hints: list[dict[str, Any]] = []
+    task_key_remap: dict[str, str] = {}
+
+    scope = pipeline.name
+    # Updated in pipeline-declaration order so AppendVariable sees the
+    # most-recent prior writer of each variable.
+    variable_task_keys_map: dict[str, str] = {}
 
     for activity in pipeline.tasks:
-        prepared = prepare_activity(activity)
+        prepared = prepare_activity(activity, scope=scope, variable_task_keys=variable_task_keys_map)
         all_tasks.append(prepared.task)
-        all_notebooks.extend(prepared.notebooks)
-        all_secrets.extend(prepared.secrets)
-        all_setup_tasks.extend(prepared.setup_tasks)
+        all_tasks.extend(prepared.extra_tasks)
+        artifacts = merge_prepared_artifacts(artifacts, prepared)
+        task_key_remap.update(prepared.task_key_remap)
+        if activity.cluster:
+            cluster_hints.append(dict(activity.cluster))
 
-    # Deduplicate secrets by (scope, key)
+        if isinstance(activity, (SetVariableActivity, AppendVariableActivity)):
+            variable_task_keys_map[activity.variable_name] = activity.task_key
+
+    if task_key_remap:
+        for task in all_tasks:
+            for dep in task.get("depends_on", []) or []:
+                original_key = dep.get("task_key")
+                if original_key in task_key_remap:
+                    dep["task_key"] = task_key_remap[original_key]
+
     seen_secrets: set[tuple[str, str]] = set()
     unique_secrets: list[SecretInstruction] = []
-    for secret in all_secrets:
+    for secret in artifacts.secrets:
         secret_id = (secret.scope, secret.key)
         if secret_id not in seen_secrets:
             seen_secrets.add(secret_id)
@@ -252,7 +273,9 @@ def prepare_workflow(pipeline: Pipeline) -> PreparedWorkflow:
     return PreparedWorkflow(
         name=pipeline.name,
         tasks=all_tasks,
-        notebooks=all_notebooks,
+        notebooks=list(artifacts.notebooks),
         secrets=unique_secrets,
-        setup_tasks=all_setup_tasks,
+        setup_tasks=list(artifacts.setup_tasks),
+        inner_workflows=list(artifacts.inner_workflows),
+        cluster_hints=cluster_hints,
     )

@@ -1,4 +1,4 @@
-"""Translate ADF Delete activities to Databricks DeleteActivity IR."""
+"""Translates ADF Delete activities to Databricks DeleteActivity IR."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ from typing import Any
 
 from orchestra.models.adf_ast import AdfActivity, AdfDefinitions
 from orchestra.models.ir import Activity, DeleteActivity, TranslationContext
+from orchestra.translator.activity_translators.resolve import resolve_field
 
 
 def translate(
@@ -14,9 +15,7 @@ def translate(
     context: TranslationContext,
     definitions: AdfDefinitions,
 ) -> Activity:
-    """Translate a Delete activity.
-
-    Extracts dataset reference, recursive flag, and wildcard patterns.
+    """Translates a Delete activity.
 
     Args:
         activity: The ADF activity AST node.
@@ -27,22 +26,26 @@ def translate(
     Returns:
         A :class:`DeleteActivity` IR node.
     """
-    tp = activity.type_properties or {}
+    type_properties = activity.type_properties or {}
 
-    # Dataset reference from inputs
     dataset_name = ""
     if activity.inputs:
         dataset_name = activity.inputs[0].reference_name
 
-    # Properties from typeProperties
-    recursive = tp.get("recursive", True)
-    folder_path = tp.get("dataset", {}).get("folderPath") if isinstance(tp.get("dataset"), dict) else None
+    recursive = type_properties.get("recursive", True)
+    folder_path_raw = (
+        type_properties.get("dataset", {}).get("folderPath")
+        if isinstance(type_properties.get("dataset"), dict)
+        else None
+    )
+    folder_path = resolve_field(folder_path_raw, context) if folder_path_raw is not None else None
 
-    # Also check storeSettings for wildcard paths
-    store_settings = tp.get("storeSettings", {})
-    wildcard_folder_path = store_settings.get("wildcardFolderPath")
+    store_settings = type_properties.get("storeSettings", {})
+    wildcard_folder_path_raw = store_settings.get("wildcardFolderPath")
+    wildcard_folder_path = (
+        resolve_field(wildcard_folder_path_raw, context) if wildcard_folder_path_raw is not None else None
+    )
 
-    # Build folder path from available data
     effective_folder = folder_path or wildcard_folder_path
 
     return DeleteActivity(

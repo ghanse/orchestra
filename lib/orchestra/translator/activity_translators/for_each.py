@@ -1,9 +1,4 @@
-"""Translate ADF ForEach activities to Databricks ForEachActivity IR.
-
-ForEach is a control-flow container that threads context through inner
-activity translation.  It returns a ``(Activity, TranslationContext)`` tuple
-so the engine can propagate any context changes from inner activities.
-"""
+"""Translates ADF ForEach activities to Databricks ForEachActivity IR."""
 
 from __future__ import annotations
 
@@ -11,6 +6,8 @@ from typing import Any
 
 from orchestra.models.adf_ast import AdfActivity, AdfDefinitions
 from orchestra.models.ir import Activity, ForEachActivity, TranslationContext
+from orchestra.parser.expression_parser import resolve_expression
+from orchestra.translator.activity_translators.resolve import resolve_field_int
 
 
 def translate(
@@ -21,7 +18,7 @@ def translate(
     *,
     translate_activities_fn: Any = None,
 ) -> tuple[Activity, TranslationContext]:
-    """Translate a ForEach activity with recursive inner translation.
+    """Translates a ForEach activity with recursive inner translation.
 
     Args:
         activity: The ADF activity AST node.
@@ -34,22 +31,31 @@ def translate(
     Returns:
         Tuple of ``(ForEachActivity, updated_context)``.
     """
-    tp = activity.type_properties or {}
+    type_properties = activity.type_properties or {}
 
-    items_expression = ""
-    items_raw = tp.get("items")
-    if isinstance(items_raw, dict) and items_raw.get("type") == "Expression":
-        items_expression = items_raw.get("value", "")
-    elif isinstance(items_raw, str):
-        items_expression = items_raw
+    items_raw = type_properties.get("items")
+    expr_result = resolve_expression(items_raw, context) if items_raw is not None else None
+    if expr_result is not None and expr_result.kind in ("dab_ref", "literal"):
+        items_expression = expr_result.value
+    else:
+        # Fallback: extract raw string
+        if isinstance(items_raw, dict) and items_raw.get("type") == "Expression":
+            items_expression = items_raw.get("value", "")
+        elif isinstance(items_raw, str):
+            items_expression = items_raw
+        else:
+            items_expression = ""
 
-    is_sequential = tp.get("isSequential", False)
-    batch_count_raw = tp.get("batchCount")
-    batch_count = int(batch_count_raw) if batch_count_raw is not None else (1 if is_sequential else 20)
+    is_sequential = type_properties.get("isSequential", False)
+    default_batch = 1 if is_sequential else 20
+    batch_count_raw = type_properties.get("batchCount")
+    batch_count = (
+        resolve_field_int(batch_count_raw, context, default=default_batch)
+        if batch_count_raw is not None
+        else default_batch
+    )
 
-    # Translate inner activities
     inner_activities: list[Activity] = []
-    inner_context = context
     child_adf_activities = activity.activities or []
 
     if translate_activities_fn and child_adf_activities:
@@ -57,17 +63,14 @@ def translate(
             activity_cache=context.activity_cache,
             registry=context.registry,
             variable_cache=context.variable_cache,
+            variable_value_cache=context.variable_value_cache,
         )
-        inner_activities, inner_context = translate_activities_fn(child_adf_activities, child_context, definitions)
+        inner_activities, _ = translate_activities_fn(child_adf_activities, child_context, definitions)
 
     foreach_activity = ForEachActivity(
         **base_kwargs,
         items_expression=items_expression,
-        child_activity=inner_activities[0]
-        if len(inner_activities) == 1
-        else inner_activities[0]
-        if inner_activities
-        else Activity(name="noop", task_key="noop"),
+        inner_activities=inner_activities,
         concurrency=batch_count,
     )
 

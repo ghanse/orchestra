@@ -36,10 +36,6 @@ from orchestra.models.ir import (
 )
 from orchestra.translator.engine import translate_pipeline
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 _EMPTY_DEFS = AdfDefinitions(pipelines=[], datasets={}, linked_services={}, triggers=[])
 
 
@@ -92,11 +88,6 @@ def _make_activity(
         activities=activities,
         policy=policy,
     )
-
-
-# ---------------------------------------------------------------------------
-# Copy translator
-# ---------------------------------------------------------------------------
 
 
 class TestCopyTranslator:
@@ -159,11 +150,6 @@ class TestCopyTranslator:
         assert result.sink_type is None
 
 
-# ---------------------------------------------------------------------------
-# Notebook translator
-# ---------------------------------------------------------------------------
-
-
 class TestNotebookTranslator:
     def test_translate_notebook_basic(self):
         from orchestra.translator.activity_translators.notebook import translate
@@ -191,11 +177,6 @@ class TestNotebookTranslator:
         assert result.base_parameters == {}
 
 
-# ---------------------------------------------------------------------------
-# SparkJar translator
-# ---------------------------------------------------------------------------
-
-
 class TestSparkJarTranslator:
     def test_translate_spark_jar(self):
         from orchestra.translator.activity_translators.spark_jar import translate
@@ -216,11 +197,6 @@ class TestSparkJarTranslator:
         assert result.libraries == [{"jar": "dbfs:/libs/my-job.jar"}]
 
 
-# ---------------------------------------------------------------------------
-# SparkPython translator
-# ---------------------------------------------------------------------------
-
-
 class TestSparkPythonTranslator:
     def test_translate_spark_python(self):
         from orchestra.translator.activity_translators.spark_python import translate
@@ -234,11 +210,6 @@ class TestSparkPythonTranslator:
         assert isinstance(result, SparkPythonActivity)
         assert result.python_file == "dbfs:/scripts/etl.py"
         assert result.parameters == ["--mode", "batch"]
-
-
-# ---------------------------------------------------------------------------
-# Lookup translator
-# ---------------------------------------------------------------------------
 
 
 class TestLookupTranslator:
@@ -273,11 +244,6 @@ class TestLookupTranslator:
         result = translate(activity, _base_kwargs(), _context(), _EMPTY_DEFS)
         assert isinstance(result, LookupActivity)
         assert result.first_row_only is False
-
-
-# ---------------------------------------------------------------------------
-# WebActivity translator
-# ---------------------------------------------------------------------------
 
 
 class TestWebActivityTranslator:
@@ -316,11 +282,6 @@ class TestWebActivityTranslator:
         assert result.authentication["type"] == "ServicePrincipal"
 
 
-# ---------------------------------------------------------------------------
-# Delete translator
-# ---------------------------------------------------------------------------
-
-
 class TestDeleteTranslator:
     def test_translate_delete(self):
         from orchestra.translator.activity_translators.delete import translate
@@ -335,11 +296,6 @@ class TestDeleteTranslator:
         assert isinstance(result, DeleteActivity)
         assert result.dataset_name == "ds_staging_folder"
         assert result.recursive is True
-
-
-# ---------------------------------------------------------------------------
-# ExecutePipeline translator
-# ---------------------------------------------------------------------------
 
 
 class TestExecutePipelineTranslator:
@@ -362,11 +318,6 @@ class TestExecutePipelineTranslator:
         assert result.wait_on_completion is True
 
 
-# ---------------------------------------------------------------------------
-# DatabricksJob translator
-# ---------------------------------------------------------------------------
-
-
 class TestDatabricksJobTranslator:
     def test_translate_databricks_job(self):
         from orchestra.translator.activity_translators.databricks_job import translate
@@ -380,11 +331,6 @@ class TestDatabricksJobTranslator:
         assert isinstance(result, RunJobActivity)
         assert result.job_name == "nightly-agg"
         assert result.existing_job_id == "12345"
-
-
-# ---------------------------------------------------------------------------
-# Wait translator
-# ---------------------------------------------------------------------------
 
 
 class TestWaitTranslator:
@@ -409,11 +355,6 @@ class TestWaitTranslator:
         assert result.wait_time_seconds == 0
 
 
-# ---------------------------------------------------------------------------
-# Filter translator
-# ---------------------------------------------------------------------------
-
-
 class TestFilterTranslator:
     def test_translate_filter(self):
         from orchestra.translator.activity_translators.filter import translate
@@ -431,10 +372,37 @@ class TestFilterTranslator:
         assert result.items_expression is not None
         assert result.condition_expression is not None
 
+    def test_translate_filter_lowers_simple_condition(self):
+        """``@equals(item().X, 'Y')`` lowers to a Python expression with item.get(X)."""
+        from orchestra.translator.activity_translators.filter import translate
 
-# ---------------------------------------------------------------------------
-# Control-flow translators (context-threading)
-# ---------------------------------------------------------------------------
+        activity = _make_activity(
+            "Filter Active",
+            "Filter",
+            {
+                "items": {"type": "Expression", "value": "@activity('Lookup').output.value"},
+                "condition": {"type": "Expression", "value": "@equals(item().status, 'active')"},
+            },
+        )
+        result = translate(activity, _base_kwargs(), _context(), _EMPTY_DEFS)
+        assert result.condition_code is not None
+        assert "item.get('status')" in result.condition_code
+        assert "dbutils.widgets.get" not in result.condition_code
+
+    def test_translate_filter_falls_back_to_placeholder_for_unresolvable(self):
+        """A condition that doesn't lower cleanly leaves condition_code=None."""
+        from orchestra.translator.activity_translators.filter import translate
+
+        activity = _make_activity(
+            "Filter Mystery",
+            "Filter",
+            {
+                "items": {"type": "Expression", "value": "@activity('X').output.value"},
+                "condition": {"type": "Expression", "value": "@nonexistent_function(item())"},
+            },
+        )
+        result = translate(activity, _base_kwargs(), _context(), _EMPTY_DEFS)
+        assert result.condition_code is None
 
 
 class TestForEachTranslator:
@@ -454,9 +422,10 @@ class TestForEachTranslator:
             },
             activities=[inner_activity],
         )
-        result, ctx = translate(activity, _base_kwargs("Loop_Items"), _context(), _EMPTY_DEFS)
+        result, context = translate(activity, _base_kwargs("Loop_Items"), _context(), _EMPTY_DEFS)
         assert isinstance(result, ForEachActivity)
-        assert result.items_expression == "@activity('GetList').output.value"
+        # The translator now resolves to a DAB ref
+        assert result.items_expression == "{{tasks.GetList.values.result}}"
         assert result.concurrency == 5
 
     def test_translate_foreach_sequential(self):
@@ -469,7 +438,7 @@ class TestForEachTranslator:
             {"items": "@items", "isSequential": True},
             activities=[inner_activity],
         )
-        result, ctx = translate(activity, _base_kwargs("Seq_Loop"), _context(), _EMPTY_DEFS)
+        result, context = translate(activity, _base_kwargs("Seq_Loop"), _context(), _EMPTY_DEFS)
         assert isinstance(result, ForEachActivity)
         assert result.concurrency == 1
 
@@ -484,8 +453,8 @@ class TestIfConditionTranslator:
         def _mock_translate(activities, context, definitions):
             """Mock translate callback that wraps ADF activities as WaitActivity IRs."""
             results = []
-            for a in activities:
-                results.append(WaitActivity(name=a.name, task_key=a.name, wait_time_seconds=1))
+            for child in activities:
+                results.append(WaitActivity(name=child.name, task_key=child.name, wait_time_seconds=1))
             return results, context
 
         activity = _make_activity(
@@ -495,7 +464,7 @@ class TestIfConditionTranslator:
             if_true_activities=[true_act],
             if_false_activities=[false_act],
         )
-        result, ctx = translate(
+        result, context = translate(
             activity,
             _base_kwargs("Branch"),
             _context(),
@@ -503,7 +472,7 @@ class TestIfConditionTranslator:
             translate_activities_fn=_mock_translate,
         )
         assert isinstance(result, IfConditionActivity)
-        assert result.op == "equals"
+        assert result.op == "EQUAL_TO"
         assert len(result.if_true_activities) == 1
         assert len(result.if_false_activities) == 1
 
@@ -515,10 +484,10 @@ class TestIfConditionTranslator:
             "IfCondition",
             {"expression": {"type": "Expression", "value": "@greater(activity('Copy').output.rowsCopied, 0)"}},
         )
-        result, ctx = translate(activity, _base_kwargs("Check_Count"), _context(), _EMPTY_DEFS)
+        result, context = translate(activity, _base_kwargs("Check_Count"), _context(), _EMPTY_DEFS)
         assert isinstance(result, IfConditionActivity)
-        assert result.op == "greater"
-        assert "rowsCopied" in result.left
+        assert result.op == "GREATER_THAN"
+        assert "tasks.Copy.values.rowsCopied" in result.left
         assert result.right == "0"
 
 
@@ -531,12 +500,43 @@ class TestSetVariableTranslator:
             "SetVariable",
             {"variableName": "status", "value": "completed"},
         )
-        result, ctx = translate(activity, _base_kwargs("Set_Status"), _context(), _EMPTY_DEFS)
+        result, context = translate(activity, _base_kwargs("Set_Status"), _context(), _EMPTY_DEFS)
         assert isinstance(result, SetVariableActivity)
         assert result.variable_name == "status"
-        assert result.variable_value == repr("completed")
+        assert result.variable_value == "completed"
+        assert result.value_kind == "literal"
+        assert result.notebook_code is None
         # Context should have the variable mapped
-        assert ctx.get_variable_task_key("status") == "Set_Status"
+        assert context.get_variable_task_key("status") == "Set_Status"
+
+    def test_translate_set_variable_utcnow(self):
+        from orchestra.translator.activity_translators.set_variable import translate
+
+        activity = _make_activity(
+            "SetRunDate",
+            "SetVariable",
+            {"variableName": "runDate", "value": {"type": "Expression", "value": "@utcNow('yyyy-MM-dd')"}},
+        )
+        result, context = translate(activity, _base_kwargs("SetRunDate"), _context(), _EMPTY_DEFS)
+        assert isinstance(result, SetVariableActivity)
+        assert result.value_kind == "notebook_code"
+        assert result.notebook_code is not None
+        assert "strftime" in result.notebook_code
+        assert "datetime" in result.notebook_imports[0]
+
+    def test_translate_set_variable_pipeline_param(self):
+        from orchestra.translator.activity_translators.set_variable import translate
+
+        activity = _make_activity(
+            "Set Env",
+            "SetVariable",
+            {"variableName": "env", "value": "@pipeline().parameters.environment"},
+        )
+        result, context = translate(activity, _base_kwargs("Set_Env"), _context(), _EMPTY_DEFS)
+        assert isinstance(result, SetVariableActivity)
+        assert result.value_kind == "dab_ref"
+        assert result.variable_value == "{{job.parameters.environment}}"
+        assert result.notebook_code is None
 
 
 class TestAppendVariableTranslator:
@@ -548,10 +548,12 @@ class TestAppendVariableTranslator:
             "AppendVariable",
             {"variableName": "logEntries", "value": "step1 done"},
         )
-        result, ctx = translate(activity, _base_kwargs("Append_Log"), _context(), _EMPTY_DEFS)
+        result, context = translate(activity, _base_kwargs("Append_Log"), _context(), _EMPTY_DEFS)
         assert isinstance(result, AppendVariableActivity)
         assert result.variable_name == "logEntries"
-        assert ctx.get_variable_task_key("logEntries") == "Append_Log"
+        assert result.value_kind == "literal"
+        assert result.append_value == "step1 done"
+        assert context.get_variable_task_key("logEntries") == "Append_Log"
 
 
 class TestSwitchTranslator:
@@ -563,8 +565,8 @@ class TestSwitchTranslator:
 
         def _mock_translate(activities, context, definitions):
             results = []
-            for a in activities:
-                results.append(WaitActivity(name=a.name, task_key=a.name, wait_time_seconds=1))
+            for child in activities:
+                results.append(WaitActivity(name=child.name, task_key=child.name, wait_time_seconds=1))
             return results, context
 
         activity = _make_activity(
@@ -579,7 +581,7 @@ class TestSwitchTranslator:
                 "defaultActivities": [default_act],
             },
         )
-        result, ctx = translate(
+        result, context = translate(
             activity,
             _base_kwargs("Route"),
             _context(),
@@ -587,16 +589,11 @@ class TestSwitchTranslator:
             translate_activities_fn=_mock_translate,
         )
         assert isinstance(result, SwitchActivity)
-        assert result.on_expression == "@item().load_type"
+        assert result.on_expression == "{{input.load_type}}"
         assert len(result.cases) == 2
         assert result.cases[0].value == "full"
         assert result.cases[1].value == "incremental"
         assert len(result.default_activities) == 1
-
-
-# ---------------------------------------------------------------------------
-# Translation engine (full pipeline translation)
-# ---------------------------------------------------------------------------
 
 
 class TestTranslateEngine:
@@ -613,14 +610,14 @@ class TestTranslateEngine:
     def test_translate_pipeline_gaps_tracked(self, adf_definitions):
         """Agentic and unsupported types produce gap entries."""
         # pipeline_mixed_agentic has ExecuteDataFlow, SqlServerStoredProcedure, etc.
-        mixed = next(p for p in adf_definitions.pipelines if p.name == "pipeline_mixed_agentic")
+        mixed = next(pl for pl in adf_definitions.pipelines if pl.name == "pipeline_mixed_agentic")
         report = translate_pipeline(mixed, adf_definitions)
         assert report.agentic_count > 0 or report.unsupported_count > 0
         assert len(report.gaps) > 0
 
     def test_translate_pipeline_deterministic_only(self, adf_definitions):
         """Pipeline with only deterministic types has zero gaps."""
-        basic = next(p for p in adf_definitions.pipelines if p.name == "pipeline_notebook_basic")
+        basic = next(pl for pl in adf_definitions.pipelines if pl.name == "pipeline_notebook_basic")
         report = translate_pipeline(basic, adf_definitions)
         assert report.deterministic_count > 0
         assert report.agentic_count == 0
@@ -629,17 +626,17 @@ class TestTranslateEngine:
 
     def test_translate_pipeline_preserves_parameters(self, adf_definitions):
         """Pipeline parameters are forwarded to the IR."""
-        csv = next(p for p in adf_definitions.pipelines if p.name == "pipeline_copy_csv_to_delta")
+        csv = next(pl for pl in adf_definitions.pipelines if pl.name == "pipeline_copy_csv_to_delta")
         report = translate_pipeline(csv, adf_definitions)
-        param_names = {p["name"] for p in report.pipeline.parameters} if report.pipeline.parameters else set()
+        param_names = {param["name"] for param in report.pipeline.parameters} if report.pipeline.parameters else set()
         assert "sourceFolderPath" in param_names
         assert "triggerDate" in param_names
 
     def test_translate_pipeline_placeholder_for_agentic(self, adf_definitions):
         """Agentic activities produce PlaceholderActivity in the IR."""
-        mixed = next(p for p in adf_definitions.pipelines if p.name == "pipeline_mixed_agentic")
+        mixed = next(pl for pl in adf_definitions.pipelines if pl.name == "pipeline_mixed_agentic")
         report = translate_pipeline(mixed, adf_definitions)
-        placeholders = [t for t in report.pipeline.tasks if isinstance(t, PlaceholderActivity)]
+        placeholders = [task for task in report.pipeline.tasks if isinstance(task, PlaceholderActivity)]
         assert len(placeholders) > 0
-        for ph in placeholders:
-            assert ph.original_type is not None
+        for placeholder in placeholders:
+            assert placeholder.original_type is not None

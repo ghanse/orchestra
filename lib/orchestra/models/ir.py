@@ -1,11 +1,4 @@
-"""Translation IR -- intermediate representation after translation.
-
-This module defines the typed intermediate representation produced by translating
-ADF AST nodes into Databricks-oriented structures.  The IR is consumed by the
-preparer and bundler stages to emit DAB bundles.
-
-Ported from wkmigrate with modifications for the orchestra plugin.
-"""
+"""Translation IR -- intermediate representation after translation."""
 
 from __future__ import annotations
 
@@ -13,9 +6,15 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any, TypeAlias
 
-# ---------------------------------------------------------------------------
-# Dependency
-# ---------------------------------------------------------------------------
+
+@dataclass(slots=True, kw_only=True)
+class ExpressionResult:
+    """Result of resolving an ADF expression."""
+
+    kind: str  # "literal", "dab_ref", "notebook_code"
+    value: str
+    imports: list[str] = field(default_factory=list)
+    required_parameters: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(slots=True, kw_only=True)
@@ -29,11 +28,6 @@ class Dependency:
 
     task_key: str
     outcome: str | None = None
-
-
-# ---------------------------------------------------------------------------
-# Activity hierarchy
-# ---------------------------------------------------------------------------
 
 
 @dataclass(slots=True, kw_only=True)
@@ -59,6 +53,11 @@ class Activity:
     min_retry_interval_millis: int | None = None
     depends_on: list[Dependency] | None = None
     cluster: dict[str, Any] | None = None
+    # Widget-name → DAB-ref mapping for every `dbutils.widgets.get()` call
+    # that shows up in any notebook_code the translator produced for this
+    # activity.  Preparers thread these into ``base_parameters`` so DAB
+    # resolves the refs at job runtime.
+    required_parameters: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(slots=True, kw_only=True)
@@ -85,6 +84,15 @@ class CopyActivity(Activity):
         sink_type: Sink dataset type string.
         source_properties: Parsed source format/connection options.
         sink_properties: Parsed sink format/connection options.
+        sink_dataset_type: ADF dataset ``type`` of the sink (e.g. ``DelimitedText``,
+            ``Parquet``, ``Json``, ``AzureSqlTable``).  Captured from the activity's
+            output dataset so the code generator can write to the actual target
+            format instead of always defaulting to Delta.
+        sink_format: Spark format string derived from ``sink_dataset_type``
+            (``csv``, ``parquet``, ``json``, ``delta``, ...).  ``None`` if the
+            target is a table, not a file.
+        sink_resolved_path: Resolved abfss:// or table location for the sink,
+            mirroring ``source_properties.resolved_path`` for consistency.
         column_mapping: Column-level source-to-sink mappings.
     """
 
@@ -92,6 +100,9 @@ class CopyActivity(Activity):
     sink_type: str | None = None
     source_properties: dict[str, Any] | None = None
     sink_properties: dict[str, Any] | None = None
+    sink_dataset_type: str | None = None
+    sink_format: str | None = None
+    sink_resolved_path: str | None = None
     column_mapping: list[dict[str, str]] | None = None
 
 
@@ -101,12 +112,13 @@ class ForEachActivity(Activity):
 
     Attributes:
         items_expression: ADF expression driving the iteration.
-        child_activity: Activity to execute per item.
-        concurrency: Maximum parallel iterations.
+        inner_activities: Translated activities executed for each item.
+        concurrency: Maximum parallel iterations (maps to Databricks
+            ``for_each_task.concurrency``).
     """
 
     items_expression: str
-    child_activity: Activity
+    inner_activities: list[Activity] = field(default_factory=list)
     concurrency: int | None = None
 
 
@@ -131,15 +143,21 @@ class IfConditionActivity(Activity):
 
 @dataclass(slots=True, kw_only=True)
 class SetVariableActivity(Activity):
-    """Set variable activity.
+    """Sets variable activity.
 
     Attributes:
         variable_name: Name of the variable being set.
         variable_value: Expression string that evaluates to the value.
+        value_kind: Kind of the resolved expression ("literal", "dab_ref", "notebook_code").
+        notebook_code: Python code for notebook_code kind values.
+        notebook_imports: Import statements needed for notebook_code.
     """
 
     variable_name: str
     variable_value: str
+    value_kind: str = "literal"  # "literal", "dab_ref", "notebook_code"
+    notebook_code: str | None = None
+    notebook_imports: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True, kw_only=True)
@@ -184,7 +202,7 @@ class WebActivity(Activity):
 
 @dataclass(slots=True, kw_only=True)
 class DeleteActivity(Activity):
-    """Delete files / folders activity.
+    """Deletes files / folders activity.
 
     Attributes:
         dataset_name: Reference name of the target dataset.
@@ -214,7 +232,7 @@ class ExecutePipelineActivity(Activity):
 
 @dataclass(slots=True, kw_only=True)
 class RunJobActivity(Activity):
-    """Run an existing Databricks job.
+    """Runs an existing Databricks job.
 
     Attributes:
         job_name: Name of the job to run.
@@ -272,9 +290,6 @@ class SwitchCase:
 class SwitchActivity(Activity):
     """Switch (multi-branch) activity.
 
-    Evaluates an expression and routes to the matching case branch,
-    falling back to default activities if no case matches.
-
     Attributes:
         on_expression: The ADF expression to evaluate.
         cases: Ordered list of case branches.
@@ -290,8 +305,6 @@ class SwitchActivity(Activity):
 class WaitActivity(Activity):
     """Wait / sleep activity.
 
-    Pauses pipeline execution for a specified number of seconds.
-
     Attributes:
         wait_time_seconds: Duration to wait in seconds.
     """
@@ -301,32 +314,43 @@ class WaitActivity(Activity):
 
 @dataclass(slots=True, kw_only=True)
 class FilterActivity(Activity):
-    """Filter activity.
-
-    Applies a condition to an input array, returning only matching items.
+    """Filters activity.
 
     Attributes:
         items_expression: ADF expression for the input array.
-        condition_expression: ADF expression for the filter condition.
+        condition_expression: Original ADF condition expression (preserved
+            for documentation; never executed at runtime).
+        condition_code: Python expression that evaluates to a bool against
+            a per-iteration ``item`` dict.  ``None`` when the translator
+            could not safely pre-resolve the condition; the code generator
+            emits a TODO placeholder notebook in that case.
+        condition_imports: Imports the ``condition_code`` expression
+            requires (e.g. ``datetime``).
     """
 
     items_expression: str
     condition_expression: str
+    condition_code: str | None = None
+    condition_imports: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True, kw_only=True)
 class AppendVariableActivity(Activity):
-    """Append variable activity.
-
-    Adds a value to an existing array variable.
+    """Appends variable activity.
 
     Attributes:
         variable_name: Name of the array variable.
         append_value: Expression string that evaluates to the value to append.
+        value_kind: Kind of the resolved expression ("literal", "dab_ref", "notebook_code").
+        notebook_code: Python code for notebook_code kind values.
+        notebook_imports: Import statements needed for notebook_code.
     """
 
     variable_name: str
     append_value: str
+    value_kind: str = "literal"  # "literal", "dab_ref", "notebook_code"
+    notebook_code: str | None = None
+    notebook_imports: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True, kw_only=True)
@@ -357,9 +381,38 @@ class PlaceholderActivity(Activity):
     comment: str | None = None
 
 
-# ---------------------------------------------------------------------------
-# Pipeline
-# ---------------------------------------------------------------------------
+@dataclass(slots=True, kw_only=True)
+class MotifActivity(Activity):
+    """Activity produced by collapsing a detected motif pattern.
+
+    Attributes:
+        motif_id: Identifier of the matched motif definition.
+        display_name: Human-readable motif name.
+        databricks_replacement: Target Databricks construct
+            (e.g. ``"auto_loader"``, ``"dlt_apply_changes"``).
+        matched_activity_names: Original ADF activity names that were collapsed.
+        source_type_hint: Inferred source type (``"files"``, ``"database"``,
+            ``"rest_api"``) or ``None``.
+        confidence_notes: Detector notes explaining the match rationale.
+        original_activities: The original translated Activity IR nodes that
+            were replaced, preserved for reference and fallback.
+        notebook_template: Name of the code generator template, if any.
+    """
+
+    motif_id: str
+    display_name: str
+    databricks_replacement: str
+    matched_activity_names: list[str]
+    source_type_hint: str | None = None
+    confidence_notes: list[str] = field(default_factory=list)
+    original_activities: list[Activity] = field(default_factory=list)
+    notebook_template: str | None = None
+    # Small dict of motif-specific settings extracted from the collapsed
+    # activities — e.g. ``{"lookup_query": ..., "lookup_scope": ...}`` for
+    # ``for_each_ingestion``.  Used by the notebook generator so the motif
+    # can fetch its input list itself instead of requiring an ``items``
+    # widget that has no upstream writer.
+    motif_config: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True, kw_only=True)
@@ -383,17 +436,9 @@ class Pipeline:
     not_translatable: list[dict[str, Any]] = field(default_factory=list)
 
 
-# ---------------------------------------------------------------------------
-# Translation context (immutable, threaded through visitors)
-# ---------------------------------------------------------------------------
-
-
 @dataclass(frozen=True, slots=True)
 class TranslationContext:
     """Immutable snapshot of translation state threaded through each visitor call.
-
-    Every function that needs to read or extend the caches receives a
-    ``TranslationContext`` and returns a new one -- the original is never mutated.
 
     Attributes:
         activity_cache: Read-only mapping of activity names to translated activities.
@@ -405,6 +450,7 @@ class TranslationContext:
     activity_cache: MappingProxyType[str, Activity] = field(default_factory=lambda: MappingProxyType({}))
     registry: MappingProxyType[str, Any] = field(default_factory=lambda: MappingProxyType({}))
     variable_cache: MappingProxyType[str, str] = field(default_factory=lambda: MappingProxyType({}))
+    variable_value_cache: MappingProxyType[str, str] = field(default_factory=lambda: MappingProxyType({}))
 
     def with_activity(self, name: str, activity: Activity) -> TranslationContext:
         """Return a new context with *activity* added to the cache.
@@ -420,6 +466,7 @@ class TranslationContext:
             activity_cache=MappingProxyType({**self.activity_cache, name: activity}),
             registry=self.registry,
             variable_cache=self.variable_cache,
+            variable_value_cache=self.variable_value_cache,
         )
 
     def get_activity(self, activity_name: str) -> Activity | None:
@@ -433,45 +480,46 @@ class TranslationContext:
         """
         return self.activity_cache.get(activity_name)
 
-    def with_variable(self, variable_name: str, task_key: str) -> TranslationContext:
+    def with_variable(
+        self,
+        variable_name: str,
+        task_key: str,
+        *,
+        dab_ref_value: str | None = None,
+    ) -> TranslationContext:
         """Return a new context with a variable mapping added.
 
         Args:
             variable_name: Variable name.
             task_key: Task key of the task that sets this variable.
+            dab_ref_value: When the variable's value resolves to a DAB
+                dynamic value reference (e.g. ``{{job.start_time.iso_datetime}}``),
+                store it so downstream ``@variables()`` calls can inline the
+                ref instead of routing through the task value.
 
         Returns:
-            New ``TranslationContext`` containing the updated variable cache.
+            New ``TranslationContext`` containing the updated caches.
         """
+        new_variable_value_cache = self.variable_value_cache
+        if dab_ref_value is not None:
+            new_variable_value_cache = MappingProxyType({**self.variable_value_cache, variable_name: dab_ref_value})
         return TranslationContext(
             activity_cache=self.activity_cache,
             registry=self.registry,
             variable_cache=MappingProxyType({**self.variable_cache, variable_name: task_key}),
+            variable_value_cache=new_variable_value_cache,
         )
 
     def get_variable_task_key(self, variable_name: str) -> str | None:
-        """Look up the task key that sets a variable.
-
-        Args:
-            variable_name: Variable name.
-
-        Returns:
-            Cached task key or ``None`` if not found.
-        """
+        """Look up the task key that sets a variable."""
         return self.variable_cache.get(variable_name)
 
-
-# ---------------------------------------------------------------------------
-# Translation result types
-# ---------------------------------------------------------------------------
+    def get_variable_dab_ref(self, variable_name: str) -> str | None:
+        """Look up the inlined DAB ref value for a variable, if available."""
+        return self.variable_value_cache.get(variable_name)
 
 
 TranslationResult: TypeAlias = Activity | UnsupportedActivity
-
-
-# ---------------------------------------------------------------------------
-# Agentic gap tracking
-# ---------------------------------------------------------------------------
 
 
 @dataclass(slots=True, kw_only=True)
@@ -489,11 +537,6 @@ class AgenticGap:
     activity_type: str
     recommended_skill: str | None = None
     raw_definition: dict[str, Any] | None = None
-
-
-# ---------------------------------------------------------------------------
-# Translation report
-# ---------------------------------------------------------------------------
 
 
 @dataclass(slots=True, kw_only=True)

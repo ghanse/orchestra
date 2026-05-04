@@ -4,40 +4,21 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from orchestra.models.dab import DabNotebook
+from orchestra.preparer.activity_preparers.helpers import build_notebook_activity_task
+from orchestra.preparer.activity_preparers.naming import notebook_filename
 from orchestra.preparer.code_generator import generate_wait_notebook
-from orchestra.preparer.workflow_preparer import PreparedActivity, _build_common_task_fields
+from orchestra.preparer.workflow_preparer import PreparedActivity
 
 if TYPE_CHECKING:
     from orchestra.models.ir import WaitActivity
 
 
-def prepare(activity: WaitActivity) -> PreparedActivity:
-    """Convert a WaitActivity into a notebook_task that sleeps for N seconds.
-
-    Args:
-        activity: The translated wait activity from the IR.
-
-    Returns:
-        A PreparedActivity with the notebook_task and generated notebook.
-    """
-    notebook_name = f"{activity.task_key}.py"
-    notebook_path = f"notebooks/{notebook_name}"
-    content = generate_wait_notebook(activity)
-
-    task = _build_common_task_fields(activity)
-    task["notebook_task"] = {
-        "notebook_path": f"../src/{notebook_path}",
-        "base_parameters": {
-            "wait_seconds": str(activity.wait_time_seconds),
-        },
-    }
-
-    notebooks = [
-        DabNotebook(
-            relative_path=notebook_path,
-            content=content,
-        )
-    ]
-
+def prepare(activity: WaitActivity, *, scope: str = "") -> PreparedActivity:
+    """Converts a WaitActivity into a notebook_task that sleeps for N seconds."""
+    task, notebooks = build_notebook_activity_task(
+        activity,
+        notebook_relative_path=f"notebooks/{notebook_filename(activity.task_key, activity.name)}",
+        notebook_content=generate_wait_notebook(activity),
+        base_parameters={"wait_seconds": str(activity.wait_time_seconds)},
+    )
     return PreparedActivity(task=task, notebooks=notebooks)

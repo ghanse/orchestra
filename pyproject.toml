@@ -51,7 +51,8 @@ addopts = "--no-header"
 cache_dir = ".venv/pytest-cache"
 filterwarnings = ["ignore::DeprecationWarning"]
 markers = [
-    "integration: marks tests that require ADF fixture files",
+    "integration: marks tests that require live Azure Data Factory access",
+    "slow: marks tests that are slow to run",
 ]
 
 [tool.ruff]

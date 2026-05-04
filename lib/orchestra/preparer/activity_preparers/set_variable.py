@@ -4,44 +4,27 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from orchestra.models.dab import DabNotebook
+from orchestra.preparer.activity_preparers.helpers import build_notebook_activity_task
+from orchestra.preparer.activity_preparers.naming import notebook_filename
 from orchestra.preparer.code_generator import generate_set_variable_notebook
-from orchestra.preparer.workflow_preparer import PreparedActivity, _build_common_task_fields
+from orchestra.preparer.workflow_preparer import PreparedActivity
 
 if TYPE_CHECKING:
     from orchestra.models.ir import SetVariableActivity
 
 
-def prepare(activity: SetVariableActivity) -> PreparedActivity:
-    """Convert a SetVariableActivity into a notebook_task that sets a task value.
+def prepare(activity: SetVariableActivity, *, scope: str = "") -> PreparedActivity:
+    """Converts a SetVariableActivity into a notebook_task that sets a task value."""
+    base_parameters: dict[str, str] = {"variable_name": activity.variable_name}
+    if activity.value_kind in ("literal", "dab_ref"):
+        base_parameters["value"] = activity.variable_value
+    for widget_name, dab_ref in activity.required_parameters.items():
+        base_parameters.setdefault(widget_name, dab_ref)
 
-    Databricks jobs use ``dbutils.jobs.taskValues.set()`` as the equivalent
-    of ADF pipeline variables.
-
-    Args:
-        activity: The translated set-variable activity from the IR.
-
-    Returns:
-        A PreparedActivity with the notebook_task and generated notebook.
-    """
-    notebook_name = f"{activity.task_key}.py"
-    notebook_path = f"notebooks/{notebook_name}"
-    content = generate_set_variable_notebook(activity)
-
-    task = _build_common_task_fields(activity)
-    task["notebook_task"] = {
-        "notebook_path": f"../src/{notebook_path}",
-        "base_parameters": {
-            "variable_name": activity.variable_name,
-            "value": activity.variable_value,
-        },
-    }
-
-    notebooks = [
-        DabNotebook(
-            relative_path=notebook_path,
-            content=content,
-        )
-    ]
-
+    task, notebooks = build_notebook_activity_task(
+        activity,
+        notebook_relative_path=f"notebooks/{notebook_filename(activity.task_key, activity.name)}",
+        notebook_content=generate_set_variable_notebook(activity),
+        base_parameters=base_parameters,
+    )
     return PreparedActivity(task=task, notebooks=notebooks)

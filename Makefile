@@ -1,4 +1,4 @@
-.PHONY: clean dev ci test integration fmt help
+f.PHONY: clean dev ci test integration fmt help
 
 clean:
 	rm -rf .venv .pytest_cache .ruff_cache .mypy_cache __pycache__
@@ -15,7 +15,7 @@ test:
 	PYTHONPATH=lib uv run pytest tests/unit -v
 
 integration:
-	PYTHONPATH=lib uv run pytest tests/integration -v
+	PYTHONPATH=lib uv run pytest tests/integration -v -m "not slow"
 
 fmt:
 	uv run ruff format lib/ tests/
