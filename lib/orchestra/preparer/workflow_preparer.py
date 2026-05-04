@@ -287,31 +287,46 @@ def _prepare_placeholder(activity: Activity) -> PreparedActivity:
     return PreparedActivity(task=task, notebooks=[notebook])
 
 
-def merge_prepared_aggregates(
-    prepared: PreparedActivity,
-    *,
-    notebooks: list[DabNotebook],
-    secrets: list[SecretInstruction],
-    setup_tasks: list[SetupTask],
-    inner_workflows: list[PreparedWorkflow],
-) -> None:
-    """Append a :class:`PreparedActivity`'s aggregate fields into shared lists.
+@dataclass(frozen=True, slots=True)
+class PreparedAggregates:
+    """Immutable accumulator for the four artifact lists a workflow collects.
 
-    Every preparer that fans an activity out into child sub-prepares
-    (``prepare_workflow`` itself, ``IfCondition`` branches, ``Switch``
-    cases) needs to merge the same four collections back up into the
-    outer scope.  Centralising the merge here keeps the call sites short
-    and makes adding a new aggregate field a single-edit change.
-
-    Mutates the four lists in place; ``prepared.task`` and
-    ``prepared.extra_tasks`` are intentionally left to the caller because
-    different scopes wire them up differently (top-level tasks, branch
-    bodies, ForEach inner tasks, ...).
+    ``prepare_workflow`` and the control-flow preparers (``IfCondition``,
+    ``Switch``) walk a sequence of child :class:`PreparedActivity`
+    results and need to fold the same four collections (notebooks,
+    secrets, setup tasks, inner workflows) up into the outer scope.
+    Storing them in a frozen dataclass with tuple fields keeps the
+    accumulation purely functional: each merge returns a new
+    :class:`PreparedAggregates` rather than mutating shared lists.
     """
-    notebooks.extend(prepared.notebooks)
-    secrets.extend(prepared.secrets)
-    setup_tasks.extend(prepared.setup_tasks)
-    inner_workflows.extend(prepared.inner_workflows)
+
+    notebooks: tuple[DabNotebook, ...] = ()
+    secrets: tuple[SecretInstruction, ...] = ()
+    setup_tasks: tuple[SetupTask, ...] = ()
+    inner_workflows: tuple[PreparedWorkflow, ...] = ()
+
+
+def merge_prepared_aggregates(
+    aggregates: PreparedAggregates,
+    prepared: PreparedActivity,
+) -> PreparedAggregates:
+    """Return a new :class:`PreparedAggregates` extended with *prepared*'s artifacts.
+
+    Treats *aggregates* as immutable -- the input is never mutated; the
+    returned value is a fresh instance with each of the four tuple
+    fields concatenated with the corresponding list from *prepared*.
+
+    ``prepared.task`` and ``prepared.extra_tasks`` are intentionally
+    excluded because different scopes wire them up differently (top-level
+    tasks, branch bodies, ForEach inner tasks); only the cross-cutting
+    "fold up" collections live here.
+    """
+    return PreparedAggregates(
+        notebooks=aggregates.notebooks + tuple(prepared.notebooks),
+        secrets=aggregates.secrets + tuple(prepared.secrets),
+        setup_tasks=aggregates.setup_tasks + tuple(prepared.setup_tasks),
+        inner_workflows=aggregates.inner_workflows + tuple(prepared.inner_workflows),
+    )
 
 
 def prepare_workflow(pipeline: Pipeline) -> PreparedWorkflow:
@@ -329,16 +344,13 @@ def prepare_workflow(pipeline: Pipeline) -> PreparedWorkflow:
         A PreparedWorkflow ready for the DAB bundle writer.
     """
     all_tasks: list[dict[str, Any]] = []
-    all_notebooks: list[DabNotebook] = []
-    all_secrets: list[SecretInstruction] = []
-    all_setup_tasks: list[SetupTask] = []
-    all_inner_workflows: list[PreparedWorkflow] = []
+    aggregates = PreparedAggregates()
     cluster_hints: list[dict[str, Any]] = []
     task_key_remap: dict[str, str] = {}
 
     scope = pipeline.name
 
-    # Build variable-name → task-key mapping so downstream preparers can
+    # Build variable-name -> task-key mapping so downstream preparers can
     # resolve @variables('name') / find the most-recent writer to append to.
     # The map is updated in pipeline-declaration order so AppendVariable
     # sees the last SetVariable/AppendVariable that preceded it.
@@ -348,13 +360,7 @@ def prepare_workflow(pipeline: Pipeline) -> PreparedWorkflow:
         prepared = prepare_activity(activity, scope=scope, variable_task_keys=variable_task_keys_map)
         all_tasks.append(prepared.task)
         all_tasks.extend(prepared.extra_tasks)
-        merge_prepared_aggregates(
-            prepared,
-            notebooks=all_notebooks,
-            secrets=all_secrets,
-            setup_tasks=all_setup_tasks,
-            inner_workflows=all_inner_workflows,
-        )
+        aggregates = merge_prepared_aggregates(aggregates, prepared)
         task_key_remap.update(prepared.task_key_remap)
         if activity.cluster:
             cluster_hints.append(dict(activity.cluster))
@@ -365,7 +371,7 @@ def prepare_workflow(pipeline: Pipeline) -> PreparedWorkflow:
     # Apply any task-key renames (today only Switch uses this, to push the
     # first case from <activity> to <activity>__case_<value>).  Walk every
     # task and rewrite ``depends_on[].task_key`` references that match a
-    # remap entry — preserves edges from activities that referenced the
+    # remap entry -- preserves edges from activities that referenced the
     # logical pre-rename name.
     if task_key_remap:
         for task in all_tasks:
@@ -374,10 +380,9 @@ def prepare_workflow(pipeline: Pipeline) -> PreparedWorkflow:
                 if old in task_key_remap:
                     dep["task_key"] = task_key_remap[old]
 
-    # Deduplicate secrets by (scope, key)
     seen_secrets: set[tuple[str, str]] = set()
     unique_secrets: list[SecretInstruction] = []
-    for secret in all_secrets:
+    for secret in aggregates.secrets:
         secret_id = (secret.scope, secret.key)
         if secret_id not in seen_secrets:
             seen_secrets.add(secret_id)
@@ -386,9 +391,9 @@ def prepare_workflow(pipeline: Pipeline) -> PreparedWorkflow:
     return PreparedWorkflow(
         name=pipeline.name,
         tasks=all_tasks,
-        notebooks=all_notebooks,
+        notebooks=list(aggregates.notebooks),
         secrets=unique_secrets,
-        setup_tasks=all_setup_tasks,
-        inner_workflows=all_inner_workflows,
+        setup_tasks=list(aggregates.setup_tasks),
+        inner_workflows=list(aggregates.inner_workflows),
         cluster_hints=cluster_hints,
     )

@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any
 
 from orchestra.preparer.workflow_preparer import (
     PreparedActivity,
+    PreparedAggregates,
     _build_common_task_fields,
     merge_prepared_aggregates,
     prepare_activity,
@@ -69,23 +70,14 @@ def prepare(activity: IfConditionActivity, *, scope: str = "") -> PreparedActivi
         "right": activity.right,
     }
 
-    all_notebooks = []
-    all_secrets = []
-    all_setup_tasks = []
-    all_inner_workflows = []
+    aggregates = PreparedAggregates()
 
     if_true_tasks: list[dict[str, Any]] = []
     for child in activity.if_true_activities:
         prepared = prepare_activity(child, scope=scope)
         if_true_tasks.append(prepared.task)
         if_true_tasks.extend(prepared.extra_tasks)
-        merge_prepared_aggregates(
-            prepared,
-            notebooks=all_notebooks,
-            secrets=all_secrets,
-            setup_tasks=all_setup_tasks,
-            inner_workflows=all_inner_workflows,
-        )
+        aggregates = merge_prepared_aggregates(aggregates, prepared)
     _inject_outcome_dependency(if_true_tasks, activity.task_key, "true")
 
     if_false_tasks: list[dict[str, Any]] = []
@@ -93,20 +85,14 @@ def prepare(activity: IfConditionActivity, *, scope: str = "") -> PreparedActivi
         prepared = prepare_activity(child, scope=scope)
         if_false_tasks.append(prepared.task)
         if_false_tasks.extend(prepared.extra_tasks)
-        merge_prepared_aggregates(
-            prepared,
-            notebooks=all_notebooks,
-            secrets=all_secrets,
-            setup_tasks=all_setup_tasks,
-            inner_workflows=all_inner_workflows,
-        )
+        aggregates = merge_prepared_aggregates(aggregates, prepared)
     _inject_outcome_dependency(if_false_tasks, activity.task_key, "false")
 
     return PreparedActivity(
         task=task,
         extra_tasks=if_true_tasks + if_false_tasks,
-        notebooks=all_notebooks,
-        secrets=all_secrets,
-        setup_tasks=all_setup_tasks,
-        inner_workflows=all_inner_workflows,
+        notebooks=list(aggregates.notebooks),
+        secrets=list(aggregates.secrets),
+        setup_tasks=list(aggregates.setup_tasks),
+        inner_workflows=list(aggregates.inner_workflows),
     )
