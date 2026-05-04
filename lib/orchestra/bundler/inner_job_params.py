@@ -96,15 +96,15 @@ def normalize_inner_task_params(tasks: list[dict[str, Any]]) -> None:
         notebook_task = task.get("notebook_task")
         if notebook_task and "base_parameters" in notebook_task:
             notebook_task["base_parameters"] = {
-                key: _normalize_value(value) for key, value in notebook_task["base_parameters"].items()
+                key: normalize_value(value) for key, value in notebook_task["base_parameters"].items()
             }
 
         condition_task = task.get("condition_task")
         if condition_task:
             if "left" in condition_task:
-                condition_task["left"] = _normalize_value(condition_task["left"])
+                condition_task["left"] = normalize_value(condition_task["left"])
             if "right" in condition_task:
-                condition_task["right"] = _normalize_value(condition_task["right"])
+                condition_task["right"] = normalize_value(condition_task["right"])
             normalize_inner_task_params(condition_task.get("if_true", []))
             normalize_inner_task_params(condition_task.get("if_false", []))
 
@@ -233,7 +233,7 @@ def _extract_refs(
         param_names.add(match.group(1))
 
 
-def _normalize_value(value: Any) -> str:
+def normalize_value(value: Any) -> str:
     """Normalize a single parameter value from ADF expression to DAB reference.
 
     Args:

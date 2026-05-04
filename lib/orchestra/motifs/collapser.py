@@ -34,6 +34,11 @@ def collapse_motifs(
 
     tasks_by_name: dict[str, Activity] = {task.name: task for task in pipeline.tasks}
     new_tasks: list[Activity] = []
+    # Maps a *sanitised* task_key of a collapsed activity to the
+    # MotifActivity's task_key so ``_rewire_dependencies`` can match
+    # against ``Dependency.task_key`` (which is also sanitised).  Keying
+    # by raw activity name here would silently fail to rewire any edge
+    # whose source had spaces or other characters in its name.
     motif_task_keys: dict[str, str] = {}
 
     inserted_motifs: set[str] = set()
@@ -53,7 +58,9 @@ def collapse_motifs(
             new_tasks.append(motif_activity)
 
             for matched_name in detected.matched_activities:
-                motif_task_keys[matched_name] = motif_activity.task_key
+                matched_task = tasks_by_name.get(matched_name)
+                if matched_task is not None:
+                    motif_task_keys[matched_task.task_key] = motif_activity.task_key
         else:
             new_tasks.append(task)
 
@@ -92,10 +99,12 @@ def _build_motif_activity(
 
     original_activities = [tasks_by_name[name] for name in motif.matched_activities if name in tasks_by_name]
 
-    external_deps = _collect_external_dependencies(
-        original_activities,
-        set(motif.matched_activities),
-    )
+    # Use the sanitised task_keys (not raw activity names) for the
+    # internal-dependency check; ``Dependency.task_key`` is sanitised by
+    # the translator, so comparing against raw names would mis-classify
+    # any internal dep whose source name contained spaces / hyphens.
+    matched_task_keys = {activity.task_key for activity in original_activities}
+    external_deps = _collect_external_dependencies(original_activities, matched_task_keys)
 
     return MotifActivity(
         name=display_name,
@@ -150,9 +159,16 @@ def _build_motif_config(
 
 def _collect_external_dependencies(
     activities: list[Activity],
-    matched_names: set[str],
+    matched_task_keys: set[str],
 ) -> list[Dependency]:
-    """Collects dependencies that point outside the matched activity group."""
+    """Collects dependencies that point outside the matched activity group.
+
+    *matched_task_keys* must be the sanitised task_keys of the matched
+    activities -- ``Dependency.task_key`` is sanitised by the translator,
+    so comparing against raw activity names produces silent false
+    positives whenever a name contains spaces or other characters that
+    are stripped during sanitisation.
+    """
     seen: set[str] = set()
     external_deps: list[Dependency] = []
 
@@ -160,7 +176,7 @@ def _collect_external_dependencies(
         if not activity.depends_on:
             continue
         for dep in activity.depends_on:
-            if dep.task_key not in matched_names and dep.task_key not in seen:
+            if dep.task_key not in matched_task_keys and dep.task_key not in seen:
                 seen.add(dep.task_key)
                 external_deps.append(Dependency(task_key=dep.task_key, outcome=dep.outcome))
 

@@ -198,3 +198,56 @@ class TestCollapser:
         assert "Unclaimed2" in names
         motif_tasks = [t for t in result.tasks if isinstance(t, MotifActivity)]
         assert len(motif_tasks) == 1
+
+    def test_collapse_handles_activity_name_distinct_from_task_key(self):
+        """Regression: motif collapser must compare against sanitised task_keys.
+
+        Activity names with spaces (or other characters that get sanitised
+        in task_keys) used to confuse ``_collect_external_dependencies`` and
+        ``_rewire_dependencies``: both compared raw activity names against
+        ``Dependency.task_key`` (which is sanitised by the translator), so
+        internal motif edges leaked through as "external" deps and
+        downstream rewires never matched.
+        """
+        from orchestra.models.motifs import DetectedMotif
+
+        pipeline = Pipeline(
+            name="test",
+            tasks=[
+                Activity(name="Setup Probe", task_key="Setup_Probe"),
+                Activity(
+                    name="Get Table List",
+                    task_key="Get_Table_List",
+                    depends_on=[Dependency(task_key="Setup_Probe")],
+                ),
+                Activity(
+                    name="For Each Table",
+                    task_key="For_Each_Table",
+                    depends_on=[Dependency(task_key="Get_Table_List")],
+                ),
+                Activity(
+                    name="Notify Done",
+                    task_key="Notify_Done",
+                    depends_on=[Dependency(task_key="For_Each_Table")],
+                ),
+            ],
+        )
+        detected = DetectedMotif(
+            definition=MOTIF_METADATA_DRIVEN_BULK_COPY,
+            matched_activities=["Get Table List", "For Each Table"],
+            source_type_hint="database",
+        )
+        result = collapse_motifs(pipeline, [detected])
+
+        motif = next(t for t in result.tasks if isinstance(t, MotifActivity))
+        external_keys = {dep.task_key for dep in motif.depends_on or []}
+        assert external_keys == {"Setup_Probe"}, (
+            "Internal edge GetTableList -> ForEachTable should NOT appear as an external dep"
+        )
+
+        notify = next(t for t in result.tasks if t.name == "Notify Done")
+        downstream_keys = {dep.task_key for dep in notify.depends_on or []}
+        assert downstream_keys == {motif.task_key}, (
+            "Downstream task should be rewired to point at the motif, "
+            f"got {downstream_keys}"
+        )

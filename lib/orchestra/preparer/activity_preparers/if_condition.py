@@ -22,7 +22,13 @@ if TYPE_CHECKING:
 
 
 def inject_outcome_dependency(tasks: list[dict[str, Any]], condition_key: str, outcome: str) -> None:
-    """Gate root tasks in a branch on the condition's outcome.
+    """Gates branch-root tasks on the condition's outcome.
+
+    A "branch root" is any task in the branch that does not depend on a
+    sibling within the same branch.  External dependencies (on a task
+    outside the branch) are preserved so a branch task can still wait
+    on a global setup task or another upstream activity; the outcome
+    edge is appended to ``depends_on`` rather than replacing it.
 
     Args:
         tasks: Tasks in one branch (mutated in place).
@@ -30,11 +36,15 @@ def inject_outcome_dependency(tasks: list[dict[str, Any]], condition_key: str, o
         outcome: ``"true"`` or ``"false"``.
     """
     branch_keys = {task.get("task_key") for task in tasks}
+    outcome_dep = {"task_key": condition_key, "outcome": outcome}
     for task in tasks:
-        deps = task.get("depends_on") or []
+        deps = list(task.get("depends_on") or [])
         refers_to_branch_sibling = any(dep.get("task_key") in branch_keys for dep in deps)
-        if not deps or not refers_to_branch_sibling:
-            task["depends_on"] = [{"task_key": condition_key, "outcome": outcome}]
+        if refers_to_branch_sibling:
+            continue
+        if any(dep.get("task_key") == condition_key and dep.get("outcome") == outcome for dep in deps):
+            continue
+        task["depends_on"] = [outcome_dep, *deps]
 
 
 def prepare(activity: IfConditionActivity, *, scope: str = "") -> PreparedActivity:

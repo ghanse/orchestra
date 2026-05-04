@@ -582,6 +582,40 @@ class TestSwitchPreparer:
         assert switch_task["task_key"].endswith("_case_dev")
 
 
+class TestInjectOutcomeDependency:
+    def test_preserves_external_dependencies(self):
+        """Regression: branch tasks with external deps keep them after gating.
+
+        Previously ``inject_outcome_dependency`` clobbered ``depends_on`` with
+        a single outcome edge whenever the task didn't depend on a sibling,
+        silently dropping any dependency on a task outside the branch (e.g.
+        a global setup task).
+        """
+        from orchestra.preparer.activity_preparers.if_condition import inject_outcome_dependency
+
+        external_dep = {"task_key": "global_setup"}
+        branch_tasks = [
+            {"task_key": "branch_root", "depends_on": [external_dep]},
+            {"task_key": "branch_child", "depends_on": [{"task_key": "branch_root"}]},
+        ]
+        inject_outcome_dependency(branch_tasks, "if_check", "true")
+
+        root_deps = branch_tasks[0]["depends_on"]
+        assert {"task_key": "if_check", "outcome": "true"} in root_deps
+        assert external_dep in root_deps, "external dep lost when gating branch root"
+        # Internal child task still depends only on its sibling.
+        assert branch_tasks[1]["depends_on"] == [{"task_key": "branch_root"}]
+
+    def test_idempotent(self):
+        """Calling twice with the same outcome doesn't duplicate the edge."""
+        from orchestra.preparer.activity_preparers.if_condition import inject_outcome_dependency
+
+        branch_tasks = [{"task_key": "branch_root"}]
+        inject_outcome_dependency(branch_tasks, "if_check", "true")
+        inject_outcome_dependency(branch_tasks, "if_check", "true")
+        assert branch_tasks[0]["depends_on"] == [{"task_key": "if_check", "outcome": "true"}]
+
+
 class TestPlaceholderPreparer:
     def test_prepare_placeholder_generates_stub(self):
         activity = PlaceholderActivity(

@@ -43,6 +43,8 @@ FILE_SOURCE_TYPES: frozenset[str] = frozenset(
 )
 
 
-# REST/HTTP sources -- handled by a generic ``requests``-based loop in
-# the generated copy notebook.
-REST_SOURCE_TYPES: frozenset[str] = frozenset({"RestSource", "HttpSource"})
+# Paginated REST API sources -- handled by a generic ``requests``-based
+# pagination loop in the generated copy notebook.  ADF ``HttpSource``
+# is *not* in this set: it downloads a single file (CSV / JSON /
+# Parquet) over HTTP and is handled as a FILE source via Auto Loader.
+REST_SOURCE_TYPES: frozenset[str] = frozenset({"RestSource"})

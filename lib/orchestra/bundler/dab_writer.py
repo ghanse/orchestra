@@ -13,7 +13,7 @@ from typing import Any
 import yaml
 
 from orchestra.bundler.inner_job_params import (
-    _normalize_value,
+    normalize_value,
     collect_inner_job_params,
     normalize_inner_task_params,
 )
@@ -743,7 +743,7 @@ def _normalize_base_parameters(
     """
     resolved: dict[str, str] = {}
     for key, value in params.items():
-        normalized = _normalize_value(value)
+        normalized = normalize_value(value)
         if "dbutils.widgets.get" in normalized or "dbutils.jobs.taskValues" in normalized:
             _warn(
                 task_key,
@@ -873,7 +873,7 @@ def _pipeline_dict_to_workflow(pipeline_dict: dict[str, Any]) -> PreparedWorkflo
     for param in pipeline_dict.get("parameters") or []:
         param_entry: dict[str, Any] = {"name": param["name"]}
         if "default" in param and param["default"] is not None:
-            param_entry["default"] = _normalize_value(str(param["default"]))
+            param_entry["default"] = normalize_value(str(param["default"]))
         parameters.append(param_entry)
 
     # The CLI reload path doesn't carry the IR-level SecretInstructions, so
@@ -1130,7 +1130,7 @@ def _web_activity_notebook(task_key: str, activity_name: str, task_ir: dict[str,
     body_raw = task_ir.get("body")
     headers_raw = task_ir.get("headers")
 
-    normalised_url = _normalize_value(url)
+    normalised_url = normalize_value(url)
 
     body_code = ""
     if body_raw:
@@ -1310,7 +1310,7 @@ def _task_ir_to_dab(
         if task_ir.get("parameters"):
             resolved_params = []
             for param in task_ir["parameters"]:
-                resolved_params.append(_normalize_value(param))
+                resolved_params.append(normalize_value(param))
             task["spark_jar_task"]["parameters"] = resolved_params
         if task_ir.get("libraries"):
             task["libraries"] = task_ir["libraries"]
@@ -1345,7 +1345,7 @@ def _task_ir_to_dab(
         if raw_params:
             job_params: dict[str, str] = {}
             for key, value in raw_params.items():
-                normalized = _normalize_value(value)
+                normalized = normalize_value(value)
                 if "dbutils.widgets.get" in normalized or "dbutils.jobs.taskValues" in normalized:
                     _warn(
                         task_key,
@@ -1412,20 +1412,20 @@ def _task_ir_to_dab(
                 task["notebook_task"]["base_parameters"] = base_parameters
         elif task_type_name == "WebActivity":
             task["notebook_task"]["base_parameters"] = {
-                "url": _normalize_value(task_ir.get("url", "")),
+                "url": normalize_value(task_ir.get("url", "")),
                 "method": task_ir.get("method", "GET"),
             }
         elif task_type_name == "SetVariableActivity":
             set_variable_params: dict[str, str] = {"variable_name": task_ir.get("variable_name", "")}
             if task_ir.get("value_kind") in ("literal", "dab_ref"):
-                set_variable_params["value"] = _normalize_value(task_ir.get("variable_value", ""))
+                set_variable_params["value"] = normalize_value(task_ir.get("variable_value", ""))
             for widget_name, dab_ref in (task_ir.get("required_parameters") or {}).items():
                 set_variable_params.setdefault(widget_name, dab_ref)
             task["notebook_task"]["base_parameters"] = set_variable_params
         elif task_type_name == "AppendVariableActivity":
             append_variable_params: dict[str, str] = {"variable_name": task_ir.get("variable_name", "")}
             if task_ir.get("value_kind") in ("literal", "dab_ref"):
-                append_variable_params["value"] = _normalize_value(task_ir.get("append_value", ""))
+                append_variable_params["value"] = normalize_value(task_ir.get("append_value", ""))
             for widget_name, dab_ref in (task_ir.get("required_parameters") or {}).items():
                 append_variable_params.setdefault(widget_name, dab_ref)
             task["notebook_task"]["base_parameters"] = append_variable_params
