@@ -287,6 +287,33 @@ def _prepare_placeholder(activity: Activity) -> PreparedActivity:
     return PreparedActivity(task=task, notebooks=[notebook])
 
 
+def merge_prepared_aggregates(
+    prepared: PreparedActivity,
+    *,
+    notebooks: list[DabNotebook],
+    secrets: list[SecretInstruction],
+    setup_tasks: list[SetupTask],
+    inner_workflows: list[PreparedWorkflow],
+) -> None:
+    """Append a :class:`PreparedActivity`'s aggregate fields into shared lists.
+
+    Every preparer that fans an activity out into child sub-prepares
+    (``prepare_workflow`` itself, ``IfCondition`` branches, ``Switch``
+    cases) needs to merge the same four collections back up into the
+    outer scope.  Centralising the merge here keeps the call sites short
+    and makes adding a new aggregate field a single-edit change.
+
+    Mutates the four lists in place; ``prepared.task`` and
+    ``prepared.extra_tasks`` are intentionally left to the caller because
+    different scopes wire them up differently (top-level tasks, branch
+    bodies, ForEach inner tasks, ...).
+    """
+    notebooks.extend(prepared.notebooks)
+    secrets.extend(prepared.secrets)
+    setup_tasks.extend(prepared.setup_tasks)
+    inner_workflows.extend(prepared.inner_workflows)
+
+
 def prepare_workflow(pipeline: Pipeline) -> PreparedWorkflow:
     """Convert a Pipeline IR into a PreparedWorkflow.
 
@@ -321,10 +348,13 @@ def prepare_workflow(pipeline: Pipeline) -> PreparedWorkflow:
         prepared = prepare_activity(activity, scope=scope, variable_task_keys=variable_task_keys_map)
         all_tasks.append(prepared.task)
         all_tasks.extend(prepared.extra_tasks)
-        all_notebooks.extend(prepared.notebooks)
-        all_secrets.extend(prepared.secrets)
-        all_setup_tasks.extend(prepared.setup_tasks)
-        all_inner_workflows.extend(prepared.inner_workflows)
+        merge_prepared_aggregates(
+            prepared,
+            notebooks=all_notebooks,
+            secrets=all_secrets,
+            setup_tasks=all_setup_tasks,
+            inner_workflows=all_inner_workflows,
+        )
         task_key_remap.update(prepared.task_key_remap)
         if activity.cluster:
             cluster_hints.append(dict(activity.cluster))

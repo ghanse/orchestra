@@ -15,7 +15,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from orchestra.preparer.workflow_preparer import PreparedActivity, _build_common_task_fields, prepare_activity
+from orchestra.preparer.workflow_preparer import (
+    PreparedActivity,
+    _build_common_task_fields,
+    merge_prepared_aggregates,
+    prepare_activity,
+)
 
 if TYPE_CHECKING:
     from orchestra.models.ir import IfConditionActivity
@@ -74,10 +79,13 @@ def prepare(activity: IfConditionActivity, *, scope: str = "") -> PreparedActivi
         prepared = prepare_activity(child, scope=scope)
         if_true_tasks.append(prepared.task)
         if_true_tasks.extend(prepared.extra_tasks)
-        all_notebooks.extend(prepared.notebooks)
-        all_secrets.extend(prepared.secrets)
-        all_setup_tasks.extend(prepared.setup_tasks)
-        all_inner_workflows.extend(prepared.inner_workflows)
+        merge_prepared_aggregates(
+            prepared,
+            notebooks=all_notebooks,
+            secrets=all_secrets,
+            setup_tasks=all_setup_tasks,
+            inner_workflows=all_inner_workflows,
+        )
     _inject_outcome_dependency(if_true_tasks, activity.task_key, "true")
 
     if_false_tasks: list[dict[str, Any]] = []
@@ -85,10 +93,13 @@ def prepare(activity: IfConditionActivity, *, scope: str = "") -> PreparedActivi
         prepared = prepare_activity(child, scope=scope)
         if_false_tasks.append(prepared.task)
         if_false_tasks.extend(prepared.extra_tasks)
-        all_notebooks.extend(prepared.notebooks)
-        all_secrets.extend(prepared.secrets)
-        all_setup_tasks.extend(prepared.setup_tasks)
-        all_inner_workflows.extend(prepared.inner_workflows)
+        merge_prepared_aggregates(
+            prepared,
+            notebooks=all_notebooks,
+            secrets=all_secrets,
+            setup_tasks=all_setup_tasks,
+            inner_workflows=all_inner_workflows,
+        )
     _inject_outcome_dependency(if_false_tasks, activity.task_key, "false")
 
     return PreparedActivity(

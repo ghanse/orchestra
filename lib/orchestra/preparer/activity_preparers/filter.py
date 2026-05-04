@@ -6,10 +6,10 @@ from typing import TYPE_CHECKING
 
 from orchestra.models.ir import TranslationContext
 from orchestra.parser.expression_parser import resolve_expression
-from orchestra.preparer.activity_preparers._helpers import build_notebook_task_artifacts
+from orchestra.preparer.activity_preparers._helpers import build_notebook_activity_task
 from orchestra.preparer.activity_preparers._naming import notebook_filename
 from orchestra.preparer.code_generator import generate_filter_notebook
-from orchestra.preparer.workflow_preparer import PreparedActivity, _build_common_task_fields
+from orchestra.preparer.workflow_preparer import PreparedActivity
 
 if TYPE_CHECKING:
     from orchestra.models.ir import FilterActivity
@@ -32,23 +32,16 @@ def prepare(activity: FilterActivity, *, scope: str = "") -> PreparedActivity:
     Returns:
         A PreparedActivity with the notebook_task and generated notebook.
     """
-    notebook_relative_path = f"notebooks/{notebook_filename(activity.task_key, activity.name)}"
-    content = generate_filter_notebook(activity)
-
-    # items_expression: typically a DAB ref like ``{{tasks.X.values.result}}``.
-    # condition_expression is intentionally NOT included -- it usually
-    # involves ``item().field`` which requires runtime JSON parsing.
     items_result = resolve_expression(activity.items_expression, TranslationContext())
-    if items_result and items_result.kind in ("dab_ref", "literal"):
+    if items_result is not None and items_result.kind in ("dab_ref", "literal"):
         items_value = items_result.value
     else:
         items_value = activity.items_expression
 
-    task = _build_common_task_fields(activity)
-    task["notebook_task"], notebooks = build_notebook_task_artifacts(
-        notebook_relative_path=notebook_relative_path,
-        notebook_content=content,
+    task, notebooks = build_notebook_activity_task(
+        activity,
+        notebook_relative_path=f"notebooks/{notebook_filename(activity.task_key, activity.name)}",
+        notebook_content=generate_filter_notebook(activity),
         base_parameters={"items_expression": items_value},
     )
-
     return PreparedActivity(task=task, notebooks=notebooks)

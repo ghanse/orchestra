@@ -20,7 +20,12 @@ from typing import TYPE_CHECKING, Any
 from orchestra.models.ir import TranslationContext
 from orchestra.parser.expression_parser import resolve_expression, resolve_interpolated_string
 from orchestra.preparer.activity_preparers.if_condition import _inject_outcome_dependency
-from orchestra.preparer.workflow_preparer import PreparedActivity, _build_common_task_fields, prepare_activity
+from orchestra.preparer.workflow_preparer import (
+    PreparedActivity,
+    _build_common_task_fields,
+    merge_prepared_aggregates,
+    prepare_activity,
+)
 
 if TYPE_CHECKING:
     from orchestra.models.ir import SwitchActivity
@@ -94,10 +99,13 @@ def prepare(activity: SwitchActivity, *, scope: str = "") -> PreparedActivity:
             prepared = prepare_activity(child, scope=scope)
             default_tasks.append(prepared.task)
             default_tasks.extend(prepared.extra_tasks)
-            all_notebooks.extend(prepared.notebooks)
-            all_secrets.extend(prepared.secrets)
-            all_setup_tasks.extend(prepared.setup_tasks)
-            all_inner_workflows.extend(prepared.inner_workflows)
+            merge_prepared_aggregates(
+                prepared,
+                notebooks=all_notebooks,
+                secrets=all_secrets,
+                setup_tasks=all_setup_tasks,
+                inner_workflows=all_inner_workflows,
+            )
         _inject_outcome_dependency(default_tasks, activity.task_key, "true")
 
         return PreparedActivity(
@@ -140,10 +148,13 @@ def prepare(activity: SwitchActivity, *, scope: str = "") -> PreparedActivity:
             prepared = prepare_activity(child, scope=scope)
             case_branch_tasks.append(prepared.task)
             case_branch_tasks.extend(prepared.extra_tasks)
-            all_notebooks.extend(prepared.notebooks)
-            all_secrets.extend(prepared.secrets)
-            all_setup_tasks.extend(prepared.setup_tasks)
-            all_inner_workflows.extend(prepared.inner_workflows)
+            merge_prepared_aggregates(
+                prepared,
+                notebooks=all_notebooks,
+                secrets=all_secrets,
+                setup_tasks=all_setup_tasks,
+                inner_workflows=all_inner_workflows,
+            )
         _inject_outcome_dependency(case_branch_tasks, case_key, "true")
 
         if is_first:
@@ -158,10 +169,13 @@ def prepare(activity: SwitchActivity, *, scope: str = "") -> PreparedActivity:
         prepared = prepare_activity(child, scope=scope)
         branch_default_tasks.append(prepared.task)
         branch_default_tasks.extend(prepared.extra_tasks)
-        all_notebooks.extend(prepared.notebooks)
-        all_secrets.extend(prepared.secrets)
-        all_setup_tasks.extend(prepared.setup_tasks)
-        all_inner_workflows.extend(prepared.inner_workflows)
+        merge_prepared_aggregates(
+            prepared,
+            notebooks=all_notebooks,
+            secrets=all_secrets,
+            setup_tasks=all_setup_tasks,
+            inner_workflows=all_inner_workflows,
+        )
     if branch_default_tasks:
         _inject_outcome_dependency(branch_default_tasks, case_keys[-1], "false")
         extra_tasks.extend(branch_default_tasks)

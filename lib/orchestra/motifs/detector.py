@@ -222,6 +222,30 @@ def _activities_of_type(
     return [activity for activity in activities if activity.type == adf_type and activity.name not in claimed]
 
 
+def _record_motif(
+    results: list[DetectedMotif],
+    *,
+    definition: MotifDefinition,
+    matched_activities: list[str],
+    source_type_hint: str | None,
+    confidence_notes: list[str],
+) -> None:
+    """Append a fully-populated :class:`DetectedMotif` to *results*.
+
+    Centralising the construction keeps every detector emitting the same
+    field shape and lets callers focus on the matching logic instead of
+    repeating the four keyword-argument boilerplate at every match site.
+    """
+    results.append(
+        DetectedMotif(
+            definition=definition,
+            matched_activities=matched_activities,
+            source_type_hint=source_type_hint,
+            confidence_notes=confidence_notes,
+        )
+    )
+
+
 def _has_keyword(text: str, *keywords: str) -> bool:
     """Case-insensitive keyword check in *text*."""
     lower = text.lower()
@@ -291,13 +315,12 @@ def _detect_incremental_watermark(
         source_hint = _infer_source_type(copy_act, definitions)
         notes.append(f"StoredProcedure '{downstream_sp.name}' updates watermark after Copy")
 
-        results.append(
-            DetectedMotif(
-                definition=MOTIF_INCREMENTAL_LOAD_WATERMARK,
-                matched_activities=matched,
-                source_type_hint=source_hint,
-                confidence_notes=notes,
-            )
+        _record_motif(
+            results,
+            definition=MOTIF_INCREMENTAL_LOAD_WATERMARK,
+            matched_activities=matched,
+            source_type_hint=source_hint,
+            confidence_notes=notes,
         )
 
     return results
@@ -354,13 +377,12 @@ def _detect_cdc_change_tracking(
         source_hint = _infer_source_type(copy_act, definitions)
         notes.append(f"StoredProcedure '{downstream_sp.name}' updates change-tracking version")
 
-        results.append(
-            DetectedMotif(
-                definition=MOTIF_CDC_CHANGE_TRACKING,
-                matched_activities=matched,
-                source_type_hint=source_hint or "database",
-                confidence_notes=notes,
-            )
+        _record_motif(
+            results,
+            definition=MOTIF_CDC_CHANGE_TRACKING,
+            matched_activities=matched,
+            source_type_hint=source_hint or "database",
+            confidence_notes=notes,
         )
 
     return results
@@ -423,13 +445,12 @@ def _detect_metadata_driven_bulk_copy(
                     source_hint = _infer_source_type(child, definitions)
                     break
 
-        results.append(
-            DetectedMotif(
-                definition=MOTIF_METADATA_DRIVEN_BULK_COPY,
-                matched_activities=matched,
-                source_type_hint=source_hint,
-                confidence_notes=notes,
-            )
+        _record_motif(
+            results,
+            definition=MOTIF_METADATA_DRIVEN_BULK_COPY,
+            matched_activities=matched,
+            source_type_hint=source_hint,
+            confidence_notes=notes,
         )
 
     return results
@@ -507,13 +528,12 @@ def _detect_file_landing_zone(
             matched.append(downstream_delete.name)
             notes.append(f"Delete '{downstream_delete.name}' cleans up processed files")
 
-        results.append(
-            DetectedMotif(
-                definition=MOTIF_FILE_LANDING_ZONE_PROCESSING,
-                matched_activities=matched,
-                source_type_hint="files",
-                confidence_notes=notes,
-            )
+        _record_motif(
+            results,
+            definition=MOTIF_FILE_LANDING_ZONE_PROCESSING,
+            matched_activities=matched,
+            source_type_hint="files",
+            confidence_notes=notes,
         )
 
     return results
@@ -576,13 +596,12 @@ def _detect_copy_and_notify(
         matched = [copy_act.name] + [web.name for web in downstream_webs]
         source_hint = _infer_source_type(copy_act, definitions)
 
-        results.append(
-            DetectedMotif(
-                definition=MOTIF_COPY_AND_NOTIFY,
-                matched_activities=matched,
-                source_type_hint=source_hint,
-                confidence_notes=notes,
-            )
+        _record_motif(
+            results,
+            definition=MOTIF_COPY_AND_NOTIFY,
+            matched_activities=matched,
+            source_type_hint=source_hint,
+            confidence_notes=notes,
         )
 
     return results
@@ -653,13 +672,12 @@ def _detect_staged_load_synapse(
         matched = [copy_act.name, downstream_sp.name]
         source_hint = _infer_source_type(copy_act, definitions)
 
-        results.append(
-            DetectedMotif(
-                definition=MOTIF_STAGED_LOAD_SYNAPSE,
-                matched_activities=matched,
-                source_type_hint=source_hint,
-                confidence_notes=notes,
-            )
+        _record_motif(
+            results,
+            definition=MOTIF_STAGED_LOAD_SYNAPSE,
+            matched_activities=matched,
+            source_type_hint=source_hint,
+            confidence_notes=notes,
         )
 
     return results
@@ -745,13 +763,12 @@ def _detect_rest_api_pagination(
         matched.extend(set_variable_activity.name for set_variable_activity in upstream_setvars)
         matched.append(until_act.name)
 
-        results.append(
-            DetectedMotif(
-                definition=MOTIF_REST_API_PAGINATION,
-                matched_activities=matched,
-                source_type_hint="rest_api",
-                confidence_notes=notes,
-            )
+        _record_motif(
+            results,
+            definition=MOTIF_REST_API_PAGINATION,
+            matched_activities=matched,
+            source_type_hint="rest_api",
+            confidence_notes=notes,
         )
 
     return results
@@ -800,13 +817,12 @@ def _detect_parent_child_orchestration(
 
         matched = [lookup_activity.name for lookup_activity in upstream_lookups] + [for_each_activity.name]
 
-        results.append(
-            DetectedMotif(
-                definition=MOTIF_PARENT_CHILD_ORCHESTRATION,
-                matched_activities=matched,
-                source_type_hint=None,
-                confidence_notes=notes,
-            )
+        _record_motif(
+            results,
+            definition=MOTIF_PARENT_CHILD_ORCHESTRATION,
+            matched_activities=matched,
+            source_type_hint=None,
+            confidence_notes=notes,
         )
 
     return results
@@ -852,13 +868,12 @@ def _detect_file_existence_validation(
 
         matched = [get_metadata_activity.name, downstream_if.name]
 
-        results.append(
-            DetectedMotif(
-                definition=MOTIF_FILE_EXISTENCE_VALIDATION,
-                matched_activities=matched,
-                source_type_hint="files",
-                confidence_notes=notes,
-            )
+        _record_motif(
+            results,
+            definition=MOTIF_FILE_EXISTENCE_VALIDATION,
+            matched_activities=matched,
+            source_type_hint="files",
+            confidence_notes=notes,
         )
 
     return results
@@ -919,13 +934,12 @@ def _detect_scd_type_2(
 
         matched = [copy.name for copy in upstream_copies] + [dataflow_activity.name]
 
-        results.append(
-            DetectedMotif(
-                definition=MOTIF_SCD_TYPE_2,
-                matched_activities=matched,
-                source_type_hint=_infer_source_type(upstream_copies[0], definitions),
-                confidence_notes=notes,
-            )
+        _record_motif(
+            results,
+            definition=MOTIF_SCD_TYPE_2,
+            matched_activities=matched,
+            source_type_hint=_infer_source_type(upstream_copies[0], definitions),
+            confidence_notes=notes,
         )
 
     return results

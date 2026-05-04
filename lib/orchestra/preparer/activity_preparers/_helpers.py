@@ -21,9 +21,10 @@ from typing import TYPE_CHECKING, Any
 from orchestra.models.dab import DabNotebook, SecretInstruction
 from orchestra.models.ir import TranslationContext
 from orchestra.parser.expression_parser import resolve_expression, resolve_interpolated_string
+from orchestra.preparer.workflow_preparer import _build_common_task_fields
 
 if TYPE_CHECKING:
-    pass
+    from orchestra.models.ir import Activity
 
 
 def resolve_param_value(value: str) -> str:
@@ -86,6 +87,39 @@ def build_notebook_task_artifacts(
         )
     ]
     return notebook_task, notebooks
+
+
+def build_notebook_activity_task(
+    activity: Activity,
+    *,
+    notebook_relative_path: str,
+    notebook_content: str,
+    base_parameters: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], list[DabNotebook]]:
+    """Combine ``_build_common_task_fields`` and :func:`build_notebook_task_artifacts`.
+
+    Almost every activity preparer follows the same scaffolding:
+
+    1. Call ``_build_common_task_fields(activity)`` to populate task_key,
+       depends_on, retries, and timeout.
+    2. Attach a ``notebook_task`` dict pointing at a bundle-relative path.
+    3. Emit a single :class:`DabNotebook` artifact for the generated body.
+
+    This helper packages all three steps so a preparer reduces to a single
+    call -- callers receive the ``task`` dict (with ``notebook_task`` already
+    attached) plus the list of one notebook.
+
+    Returns:
+        A tuple of (task dict, [single DabNotebook]).
+    """
+    task = _build_common_task_fields(activity)
+    notebook_task, notebooks = build_notebook_task_artifacts(
+        notebook_relative_path=notebook_relative_path,
+        notebook_content=notebook_content,
+        base_parameters=base_parameters,
+    )
+    task["notebook_task"] = notebook_task
+    return task, notebooks
 
 
 def make_jdbc_secrets(

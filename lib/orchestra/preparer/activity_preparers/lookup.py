@@ -7,12 +7,12 @@ from typing import TYPE_CHECKING
 from orchestra.models.dab import SecretInstruction
 from orchestra.models.source_types import JDBC_SOURCE_TYPES
 from orchestra.preparer.activity_preparers._helpers import (
-    build_notebook_task_artifacts,
+    build_notebook_activity_task,
     make_jdbc_secrets,
 )
 from orchestra.preparer.activity_preparers._naming import notebook_filename
 from orchestra.preparer.code_generator import generate_lookup_notebook
-from orchestra.preparer.workflow_preparer import PreparedActivity, _build_common_task_fields
+from orchestra.preparer.workflow_preparer import PreparedActivity
 
 if TYPE_CHECKING:
     from orchestra.models.ir import LookupActivity
@@ -27,13 +27,10 @@ def prepare(activity: LookupActivity, *, scope: str = "") -> PreparedActivity:
     Returns:
         A PreparedActivity with the notebook_task, generated notebook, and secret instructions.
     """
-    notebook_relative_path = f"notebooks/{notebook_filename(activity.task_key, activity.name)}"
-    content = generate_lookup_notebook(activity, scope=scope)
-
-    task = _build_common_task_fields(activity)
-    task["notebook_task"], notebooks = build_notebook_task_artifacts(
-        notebook_relative_path=notebook_relative_path,
-        notebook_content=content,
+    task, notebooks = build_notebook_activity_task(
+        activity,
+        notebook_relative_path=f"notebooks/{notebook_filename(activity.task_key, activity.name)}",
+        notebook_content=generate_lookup_notebook(activity, scope=scope),
         base_parameters={"first_row_only": str(activity.first_row_only).lower()},
     )
 

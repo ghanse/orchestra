@@ -10,12 +10,12 @@ from orchestra.models.dab import SecretInstruction, SetupTask
 from orchestra.models.ir import CopyActivity
 from orchestra.models.source_types import FILE_SOURCE_TYPES, JDBC_SOURCE_TYPES
 from orchestra.preparer.activity_preparers._helpers import (
-    build_notebook_task_artifacts,
+    build_notebook_activity_task,
     make_jdbc_secrets,
 )
 from orchestra.preparer.activity_preparers._naming import notebook_filename
 from orchestra.preparer.code_generator import generate_copy_notebook
-from orchestra.preparer.workflow_preparer import PreparedActivity, _build_common_task_fields
+from orchestra.preparer.workflow_preparer import PreparedActivity
 
 
 _ABFSS_URL_RE = re.compile(r"abfss://([^@]+)@([^/]+)/?(.*)")
@@ -96,9 +96,6 @@ def prepare(activity: CopyActivity, *, scope: str = "") -> PreparedActivity:
         if volume_binding is not None:
             activity = _augment_with_volume_paths(activity, volume_binding)
 
-    notebook_relative_path = f"notebooks/{notebook_filename(activity.task_key, activity.name)}"
-    notebook_content = generate_copy_notebook(activity, scope=scope)
-
     base_parameters: dict[str, str] = {}
     if activity.source_type:
         base_parameters["source_type"] = activity.source_type
@@ -113,10 +110,10 @@ def prepare(activity: CopyActivity, *, scope: str = "") -> PreparedActivity:
     if source_path:
         base_parameters["source_path"] = source_path
 
-    task = _build_common_task_fields(activity)
-    task["notebook_task"], notebooks = build_notebook_task_artifacts(
-        notebook_relative_path=notebook_relative_path,
-        notebook_content=notebook_content,
+    task, notebooks = build_notebook_activity_task(
+        activity,
+        notebook_relative_path=f"notebooks/{notebook_filename(activity.task_key, activity.name)}",
+        notebook_content=generate_copy_notebook(activity, scope=scope),
         base_parameters=base_parameters,
     )
 

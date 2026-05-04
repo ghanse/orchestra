@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from orchestra.preparer.activity_preparers._helpers import build_notebook_task_artifacts
+from orchestra.preparer.activity_preparers._helpers import build_notebook_activity_task
 from orchestra.preparer.activity_preparers._naming import notebook_filename
 from orchestra.preparer.code_generator import generate_append_variable_notebook
-from orchestra.preparer.workflow_preparer import PreparedActivity, _build_common_task_fields
+from orchestra.preparer.workflow_preparer import PreparedActivity
 
 if TYPE_CHECKING:
     from orchestra.models.ir import AppendVariableActivity
@@ -31,32 +31,29 @@ def prepare(
     Args:
         activity: The translated append-variable activity from the IR.
         scope: Secret scope name (unused here but accepted for dispatch).
-        variable_task_keys: Map of pipeline variable name → task_key of the
+        variable_task_keys: Map of pipeline variable name -> task_key of the
             most recent writer, used to populate the ``source_task_key``
             widget so the generated notebook can read the current value.
 
     Returns:
         A PreparedActivity with the notebook_task and generated notebook.
     """
-    notebook_relative_path = f"notebooks/{notebook_filename(activity.task_key, activity.name)}"
-    content = generate_append_variable_notebook(activity)
-
     base_parameters: dict[str, str] = {
         "variable_name": activity.variable_name,
         "source_task_key": (variable_task_keys or {}).get(activity.variable_name, ""),
     }
     if activity.value_kind in ("literal", "dab_ref"):
         base_parameters["value"] = activity.append_value
-    # For notebook_code embeds, thread widget refs through base_parameters
-    # so every ``dbutils.widgets.get()`` in the generated notebook resolves.
+    # ``notebook_code`` values are embedded directly in the body, but any
+    # ``dbutils.widgets.get()`` calls still need their refs threaded through
+    # base_parameters so DAB can supply the matching widget values.
     for widget_name, dab_ref in activity.required_parameters.items():
         base_parameters.setdefault(widget_name, dab_ref)
 
-    task = _build_common_task_fields(activity)
-    task["notebook_task"], notebooks = build_notebook_task_artifacts(
-        notebook_relative_path=notebook_relative_path,
-        notebook_content=content,
+    task, notebooks = build_notebook_activity_task(
+        activity,
+        notebook_relative_path=f"notebooks/{notebook_filename(activity.task_key, activity.name)}",
+        notebook_content=generate_append_variable_notebook(activity),
         base_parameters=base_parameters,
     )
-
     return PreparedActivity(task=task, notebooks=notebooks)

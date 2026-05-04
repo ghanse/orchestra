@@ -712,18 +712,33 @@ def _collect_required_parameters(*args: ExpressionResult) -> dict[str, str]:
     return merged
 
 
-def _result_from_args(value: str, args: list[ExpressionResult]) -> ExpressionResult:
-    """Build a notebook_code result that carries through imports and widget refs.
+def _result_from_args(
+    value: str,
+    args: list[ExpressionResult],
+    *,
+    extra_imports: list[str] | None = None,
+) -> ExpressionResult:
+    """Build a ``notebook_code`` result that propagates imports and widget refs.
 
     Used by every ``_handle_*`` that synthesises Python code from argument
     expressions.  Centralising this ensures ``required_parameters`` (the
-    widget-name → DAB-ref map) is consistently propagated up the call tree
-    so preparers can thread the refs into ``base_parameters``.
+    widget-name -> DAB-ref map) and the union of per-arg ``imports`` are
+    consistently propagated up the call tree so preparers can thread the
+    refs into ``base_parameters`` and the notebook generator can hoist
+    every required ``import`` into the cell preamble.
+
+    Args:
+        value: The Python expression string for the result.
+        args: Resolved arguments of the surrounding ADF function call.
+        extra_imports: Imports the handler itself introduces (e.g.
+            ``_DATETIME_IMPORTS`` or ``_ZONEINFO_IMPORTS``) in addition to
+            those already declared by *args*.
     """
+    imports = list(extra_imports or ()) + _collect_imports(*args)
     return ExpressionResult(
         kind="notebook_code",
         value=value,
-        imports=_collect_imports(*args),
+        imports=imports,
         required_parameters=_collect_required_parameters(*args),
     )
 
@@ -733,22 +748,14 @@ def _handle_concat(args: list[ExpressionResult]) -> ExpressionResult | None:
     if not args:
         return None
     parts = [f"str({_arg_to_code(a)})" for a in args]
-    return ExpressionResult(
-        kind="notebook_code",
-        value=" + ".join(parts),
-        imports=_collect_imports(*args),
-    )
+    return _result_from_args(" + ".join(parts), args)
 
 
 def _handle_ends_with(args: list[ExpressionResult]) -> ExpressionResult | None:
     """endsWith(text, search) -> str(text).endswith(str(search))"""
     if len(args) != 2:
         return None
-    return ExpressionResult(
-        kind="notebook_code",
-        value=f"str({_arg_to_code(args[0])}).endswith(str({_arg_to_code(args[1])}))",
-        imports=_collect_imports(*args),
-    )
+    return _result_from_args(f"str({_arg_to_code(args[0])}).endswith(str({_arg_to_code(args[1])}))", args)
 
 
 def _handle_guid(args: list[ExpressionResult]) -> ExpressionResult | None:
@@ -773,55 +780,35 @@ def _handle_index_of(args: list[ExpressionResult]) -> ExpressionResult | None:
     """indexOf(text, search) -> str(text).lower().find(str(search).lower())"""
     if len(args) != 2:
         return None
-    return ExpressionResult(
-        kind="notebook_code",
-        value=f"str({_arg_to_code(args[0])}).lower().find(str({_arg_to_code(args[1])}).lower())",
-        imports=_collect_imports(*args),
-    )
+    return _result_from_args(f"str({_arg_to_code(args[0])}).lower().find(str({_arg_to_code(args[1])}).lower())", args)
 
 
 def _handle_last_index_of(args: list[ExpressionResult]) -> ExpressionResult | None:
     """lastIndexOf(text, search) -> str(text).lower().rfind(str(search).lower())"""
     if len(args) != 2:
         return None
-    return ExpressionResult(
-        kind="notebook_code",
-        value=f"str({_arg_to_code(args[0])}).lower().rfind(str({_arg_to_code(args[1])}).lower())",
-        imports=_collect_imports(*args),
-    )
+    return _result_from_args(f"str({_arg_to_code(args[0])}).lower().rfind(str({_arg_to_code(args[1])}).lower())", args)
 
 
 def _handle_replace(args: list[ExpressionResult]) -> ExpressionResult | None:
     """replace(text, old, new) -> str(text).replace(str(old), str(new))"""
     if len(args) != 3:
         return None
-    return ExpressionResult(
-        kind="notebook_code",
-        value=f"str({_arg_to_code(args[0])}).replace(str({_arg_to_code(args[1])}), str({_arg_to_code(args[2])}))",
-        imports=_collect_imports(*args),
-    )
+    return _result_from_args(f"str({_arg_to_code(args[0])}).replace(str({_arg_to_code(args[1])}), str({_arg_to_code(args[2])}))", args)
 
 
 def _handle_split(args: list[ExpressionResult]) -> ExpressionResult | None:
     """split(text, delim) -> str(text).split(str(delim))"""
     if len(args) != 2:
         return None
-    return ExpressionResult(
-        kind="notebook_code",
-        value=f"str({_arg_to_code(args[0])}).split(str({_arg_to_code(args[1])}))",
-        imports=_collect_imports(*args),
-    )
+    return _result_from_args(f"str({_arg_to_code(args[0])}).split(str({_arg_to_code(args[1])}))", args)
 
 
 def _handle_starts_with(args: list[ExpressionResult]) -> ExpressionResult | None:
     """startsWith(text, search) -> str(text).lower().startswith(str(search).lower())"""
     if len(args) != 2:
         return None
-    return ExpressionResult(
-        kind="notebook_code",
-        value=f"str({_arg_to_code(args[0])}).lower().startswith(str({_arg_to_code(args[1])}).lower())",
-        imports=_collect_imports(*args),
-    )
+    return _result_from_args(f"str({_arg_to_code(args[0])}).lower().startswith(str({_arg_to_code(args[1])}).lower())", args)
 
 
 def _handle_substring(args: list[ExpressionResult]) -> ExpressionResult | None:
@@ -831,77 +818,49 @@ def _handle_substring(args: list[ExpressionResult]) -> ExpressionResult | None:
     text = _arg_to_code(args[0])
     start = _arg_to_code(args[1])
     length = _arg_to_code(args[2])
-    return ExpressionResult(
-        kind="notebook_code",
-        value=f"str({text})[int({start}):int({start})+int({length})]",
-        imports=_collect_imports(*args),
-    )
+    return _result_from_args(f"str({text})[int({start}):int({start})+int({length})]", args)
 
 
 def _handle_to_lower(args: list[ExpressionResult]) -> ExpressionResult | None:
     """toLower(text) -> str(text).lower()"""
     if len(args) != 1:
         return None
-    return ExpressionResult(
-        kind="notebook_code",
-        value=f"str({_arg_to_code(args[0])}).lower()",
-        imports=_collect_imports(*args),
-    )
+    return _result_from_args(f"str({_arg_to_code(args[0])}).lower()", args)
 
 
 def _handle_to_upper(args: list[ExpressionResult]) -> ExpressionResult | None:
     """toUpper(text) -> str(text).upper()"""
     if len(args) != 1:
         return None
-    return ExpressionResult(
-        kind="notebook_code",
-        value=f"str({_arg_to_code(args[0])}).upper()",
-        imports=_collect_imports(*args),
-    )
+    return _result_from_args(f"str({_arg_to_code(args[0])}).upper()", args)
 
 
 def _handle_trim(args: list[ExpressionResult]) -> ExpressionResult | None:
     """trim(text) -> str(text).strip()"""
     if len(args) != 1:
         return None
-    return ExpressionResult(
-        kind="notebook_code",
-        value=f"str({_arg_to_code(args[0])}).strip()",
-        imports=_collect_imports(*args),
-    )
+    return _result_from_args(f"str({_arg_to_code(args[0])}).strip()", args)
 
 
 def _handle_contains(args: list[ExpressionResult]) -> ExpressionResult | None:
     """contains(collection, value) -> (value in collection)"""
     if len(args) != 2:
         return None
-    return ExpressionResult(
-        kind="notebook_code",
-        value=f"({_arg_to_code(args[1])} in {_arg_to_code(args[0])})",
-        imports=_collect_imports(*args),
-    )
+    return _result_from_args(f"({_arg_to_code(args[1])} in {_arg_to_code(args[0])})", args)
 
 
 def _handle_empty(args: list[ExpressionResult]) -> ExpressionResult | None:
     """empty(collection) -> (len(collection) == 0)"""
     if len(args) != 1:
         return None
-    return ExpressionResult(
-        kind="notebook_code",
-        value=f"(len({_arg_to_code(args[0])}) == 0)",
-        imports=_collect_imports(*args),
-    )
+    return _result_from_args(f"(len({_arg_to_code(args[0])}) == 0)", args)
 
 
 def _handle_first(args: list[ExpressionResult]) -> ExpressionResult | None:
     """first(collection) -> collection[0]"""
     if len(args) != 1:
         return None
-    return ExpressionResult(
-        kind="notebook_code",
-        value=f"{_arg_to_code(args[0])}[0]",
-        imports=_collect_imports(*args),
-    )
+    return _result_from_args(f"{_arg_to_code(args[0])}[0]", args)
 
 
 def _handle_intersection(args: list[ExpressionResult]) -> ExpressionResult | None:
@@ -909,66 +868,42 @@ def _handle_intersection(args: list[ExpressionResult]) -> ExpressionResult | Non
     if len(args) < 2:
         return None
     parts = " & ".join(f"set({_arg_to_code(a)})" for a in args)
-    return ExpressionResult(
-        kind="notebook_code",
-        value=f"list({parts})",
-        imports=_collect_imports(*args),
-    )
+    return _result_from_args(f"list({parts})", args)
 
 
 def _handle_join(args: list[ExpressionResult]) -> ExpressionResult | None:
     """join(array, delim) -> str(delim).join(str(x) for x in array)"""
     if len(args) != 2:
         return None
-    return ExpressionResult(
-        kind="notebook_code",
-        value=f"str({_arg_to_code(args[1])}).join(str(x) for x in {_arg_to_code(args[0])})",
-        imports=_collect_imports(*args),
-    )
+    return _result_from_args(f"str({_arg_to_code(args[1])}).join(str(x) for x in {_arg_to_code(args[0])})", args)
 
 
 def _handle_last(args: list[ExpressionResult]) -> ExpressionResult | None:
     """last(collection) -> collection[-1]"""
     if len(args) != 1:
         return None
-    return ExpressionResult(
-        kind="notebook_code",
-        value=f"{_arg_to_code(args[0])}[-1]",
-        imports=_collect_imports(*args),
-    )
+    return _result_from_args(f"{_arg_to_code(args[0])}[-1]", args)
 
 
 def _handle_length(args: list[ExpressionResult]) -> ExpressionResult | None:
     """length(collection) -> len(collection)"""
     if len(args) != 1:
         return None
-    return ExpressionResult(
-        kind="notebook_code",
-        value=f"len({_arg_to_code(args[0])})",
-        imports=_collect_imports(*args),
-    )
+    return _result_from_args(f"len({_arg_to_code(args[0])})", args)
 
 
 def _handle_skip(args: list[ExpressionResult]) -> ExpressionResult | None:
     """skip(collection, count) -> collection[int(count):]"""
     if len(args) != 2:
         return None
-    return ExpressionResult(
-        kind="notebook_code",
-        value=f"{_arg_to_code(args[0])}[int({_arg_to_code(args[1])}):]",
-        imports=_collect_imports(*args),
-    )
+    return _result_from_args(f"{_arg_to_code(args[0])}[int({_arg_to_code(args[1])}):]", args)
 
 
 def _handle_take(args: list[ExpressionResult]) -> ExpressionResult | None:
     """take(collection, count) -> collection[:int(count)]"""
     if len(args) != 2:
         return None
-    return ExpressionResult(
-        kind="notebook_code",
-        value=f"{_arg_to_code(args[0])}[:int({_arg_to_code(args[1])})]",
-        imports=_collect_imports(*args),
-    )
+    return _result_from_args(f"{_arg_to_code(args[0])}[:int({_arg_to_code(args[1])})]", args)
 
 
 def _handle_union(args: list[ExpressionResult]) -> ExpressionResult | None:
@@ -976,176 +911,112 @@ def _handle_union(args: list[ExpressionResult]) -> ExpressionResult | None:
     if len(args) < 2:
         return None
     parts = " | ".join(f"set({_arg_to_code(a)})" for a in args)
-    return ExpressionResult(
-        kind="notebook_code",
-        value=f"list({parts})",
-        imports=_collect_imports(*args),
-    )
+    return _result_from_args(f"list({parts})", args)
 
 
 def _handle_and(args: list[ExpressionResult]) -> ExpressionResult | None:
     """and(a, b) -> (a and b)"""
     if len(args) != 2:
         return None
-    return ExpressionResult(
-        kind="notebook_code",
-        value=f"({_arg_to_code(args[0])} and {_arg_to_code(args[1])})",
-        imports=_collect_imports(*args),
-    )
+    return _result_from_args(f"({_arg_to_code(args[0])} and {_arg_to_code(args[1])})", args)
 
 
 def _handle_equals(args: list[ExpressionResult]) -> ExpressionResult | None:
     """equals(a, b) -> (a == b)"""
     if len(args) != 2:
         return None
-    return ExpressionResult(
-        kind="notebook_code",
-        value=f"({_arg_to_code(args[0])} == {_arg_to_code(args[1])})",
-        imports=_collect_imports(*args),
-    )
+    return _result_from_args(f"({_arg_to_code(args[0])} == {_arg_to_code(args[1])})", args)
 
 
 def _handle_greater(args: list[ExpressionResult]) -> ExpressionResult | None:
     """greater(a, b) -> (a > b)"""
     if len(args) != 2:
         return None
-    return ExpressionResult(
-        kind="notebook_code",
-        value=f"({_arg_to_code(args[0])} > {_arg_to_code(args[1])})",
-        imports=_collect_imports(*args),
-    )
+    return _result_from_args(f"({_arg_to_code(args[0])} > {_arg_to_code(args[1])})", args)
 
 
 def _handle_greater_or_equals(args: list[ExpressionResult]) -> ExpressionResult | None:
     """greaterOrEquals(a, b) -> (a >= b)"""
     if len(args) != 2:
         return None
-    return ExpressionResult(
-        kind="notebook_code",
-        value=f"({_arg_to_code(args[0])} >= {_arg_to_code(args[1])})",
-        imports=_collect_imports(*args),
-    )
+    return _result_from_args(f"({_arg_to_code(args[0])} >= {_arg_to_code(args[1])})", args)
 
 
 def _handle_if(args: list[ExpressionResult]) -> ExpressionResult | None:
     """if(expr, trueVal, falseVal) -> (trueVal if expr else falseVal)"""
     if len(args) != 3:
         return None
-    return ExpressionResult(
-        kind="notebook_code",
-        value=f"({_arg_to_code(args[1])} if {_arg_to_code(args[0])} else {_arg_to_code(args[2])})",
-        imports=_collect_imports(*args),
-    )
+    return _result_from_args(f"({_arg_to_code(args[1])} if {_arg_to_code(args[0])} else {_arg_to_code(args[2])})", args)
 
 
 def _handle_less(args: list[ExpressionResult]) -> ExpressionResult | None:
     """less(a, b) -> (a < b)"""
     if len(args) != 2:
         return None
-    return ExpressionResult(
-        kind="notebook_code",
-        value=f"({_arg_to_code(args[0])} < {_arg_to_code(args[1])})",
-        imports=_collect_imports(*args),
-    )
+    return _result_from_args(f"({_arg_to_code(args[0])} < {_arg_to_code(args[1])})", args)
 
 
 def _handle_less_or_equals(args: list[ExpressionResult]) -> ExpressionResult | None:
     """lessOrEquals(a, b) -> (a <= b)"""
     if len(args) != 2:
         return None
-    return ExpressionResult(
-        kind="notebook_code",
-        value=f"({_arg_to_code(args[0])} <= {_arg_to_code(args[1])})",
-        imports=_collect_imports(*args),
-    )
+    return _result_from_args(f"({_arg_to_code(args[0])} <= {_arg_to_code(args[1])})", args)
 
 
 def _handle_not(args: list[ExpressionResult]) -> ExpressionResult | None:
     """not(expr) -> (not expr)"""
     if len(args) != 1:
         return None
-    return ExpressionResult(
-        kind="notebook_code",
-        value=f"(not {_arg_to_code(args[0])})",
-        imports=_collect_imports(*args),
-    )
+    return _result_from_args(f"(not {_arg_to_code(args[0])})", args)
 
 
 def _handle_or(args: list[ExpressionResult]) -> ExpressionResult | None:
     """or(a, b) -> (a or b)"""
     if len(args) != 2:
         return None
-    return ExpressionResult(
-        kind="notebook_code",
-        value=f"({_arg_to_code(args[0])} or {_arg_to_code(args[1])})",
-        imports=_collect_imports(*args),
-    )
+    return _result_from_args(f"({_arg_to_code(args[0])} or {_arg_to_code(args[1])})", args)
 
 
 def _handle_array(args: list[ExpressionResult]) -> ExpressionResult | None:
     """array(value) -> [value]"""
     if len(args) != 1:
         return None
-    return ExpressionResult(
-        kind="notebook_code",
-        value=f"[{_arg_to_code(args[0])}]",
-        imports=_collect_imports(*args),
-    )
+    return _result_from_args(f"[{_arg_to_code(args[0])}]", args)
 
 
 def _handle_base64(args: list[ExpressionResult]) -> ExpressionResult | None:
     """base64(value) -> base64.b64encode(str(value).encode()).decode()"""
     if len(args) != 1:
         return None
-    return ExpressionResult(
-        kind="notebook_code",
-        value=f"__import__('base64').b64encode(str({_arg_to_code(args[0])}).encode()).decode()",
-        imports=_collect_imports(*args),
-    )
+    return _result_from_args(f"__import__('base64').b64encode(str({_arg_to_code(args[0])}).encode()).decode()", args)
 
 
 def _handle_base64_to_binary(args: list[ExpressionResult]) -> ExpressionResult | None:
     """base64ToBinary(value) -> base64.b64decode(value)"""
     if len(args) != 1:
         return None
-    return ExpressionResult(
-        kind="notebook_code",
-        value=f"__import__('base64').b64decode({_arg_to_code(args[0])})",
-        imports=_collect_imports(*args),
-    )
+    return _result_from_args(f"__import__('base64').b64decode({_arg_to_code(args[0])})", args)
 
 
 def _handle_base64_to_string(args: list[ExpressionResult]) -> ExpressionResult | None:
     """base64ToString(value) -> base64.b64decode(value).decode()"""
     if len(args) != 1:
         return None
-    return ExpressionResult(
-        kind="notebook_code",
-        value=f"__import__('base64').b64decode({_arg_to_code(args[0])}).decode()",
-        imports=_collect_imports(*args),
-    )
+    return _result_from_args(f"__import__('base64').b64decode({_arg_to_code(args[0])}).decode()", args)
 
 
 def _handle_binary(args: list[ExpressionResult]) -> ExpressionResult | None:
     """binary(value) -> str(value).encode()"""
     if len(args) != 1:
         return None
-    return ExpressionResult(
-        kind="notebook_code",
-        value=f"str({_arg_to_code(args[0])}).encode()",
-        imports=_collect_imports(*args),
-    )
+    return _result_from_args(f"str({_arg_to_code(args[0])}).encode()", args)
 
 
 def _handle_bool(args: list[ExpressionResult]) -> ExpressionResult | None:
     """bool(value) -> bool(value)"""
     if len(args) != 1:
         return None
-    return ExpressionResult(
-        kind="notebook_code",
-        value=f"bool({_arg_to_code(args[0])})",
-        imports=_collect_imports(*args),
-    )
+    return _result_from_args(f"bool({_arg_to_code(args[0])})", args)
 
 
 def _handle_coalesce(args: list[ExpressionResult]) -> ExpressionResult | None:
@@ -1153,21 +1024,13 @@ def _handle_coalesce(args: list[ExpressionResult]) -> ExpressionResult | None:
     if not args:
         return None
     items = ", ".join(_arg_to_code(a) for a in args)
-    return ExpressionResult(
-        kind="notebook_code",
-        value=f"next((x for x in [{items}] if x is not None), None)",
-        imports=_collect_imports(*args),
-    )
+    return _result_from_args(f"next((x for x in [{items}] if x is not None), None)", args)
 
 
 def _handle_create_array(args: list[ExpressionResult]) -> ExpressionResult | None:
     """createArray(a, b, ...) -> [a, b, ...]"""
     items = ", ".join(_arg_to_code(a) for a in args)
-    return ExpressionResult(
-        kind="notebook_code",
-        value=f"[{items}]",
-        imports=_collect_imports(*args),
-    )
+    return _result_from_args(f"[{items}]", args)
 
 
 def _handle_agentic(_args: list[ExpressionResult]) -> ExpressionResult | None:
@@ -1179,55 +1042,35 @@ def _handle_decode_uri_component(args: list[ExpressionResult]) -> ExpressionResu
     """decodeUriComponent(value) -> urllib.parse.unquote(value)"""
     if len(args) != 1:
         return None
-    return ExpressionResult(
-        kind="notebook_code",
-        value=f"__import__('urllib.parse', fromlist=['unquote']).unquote({_arg_to_code(args[0])})",
-        imports=_collect_imports(*args),
-    )
+    return _result_from_args(f"__import__('urllib.parse', fromlist=['unquote']).unquote({_arg_to_code(args[0])})", args)
 
 
 def _handle_encode_uri_component(args: list[ExpressionResult]) -> ExpressionResult | None:
     """encodeUriComponent(value) -> urllib.parse.quote(str(value), safe='')"""
     if len(args) != 1:
         return None
-    return ExpressionResult(
-        kind="notebook_code",
-        value=f"__import__('urllib.parse', fromlist=['quote']).quote(str({_arg_to_code(args[0])}), safe='')",
-        imports=_collect_imports(*args),
-    )
+    return _result_from_args(f"__import__('urllib.parse', fromlist=['quote']).quote(str({_arg_to_code(args[0])}), safe='')", args)
 
 
 def _handle_float(args: list[ExpressionResult]) -> ExpressionResult | None:
     """float(value) -> float(value)"""
     if len(args) != 1:
         return None
-    return ExpressionResult(
-        kind="notebook_code",
-        value=f"float({_arg_to_code(args[0])})",
-        imports=_collect_imports(*args),
-    )
+    return _result_from_args(f"float({_arg_to_code(args[0])})", args)
 
 
 def _handle_int(args: list[ExpressionResult]) -> ExpressionResult | None:
     """int(value) -> int(value)"""
     if len(args) != 1:
         return None
-    return ExpressionResult(
-        kind="notebook_code",
-        value=f"int({_arg_to_code(args[0])})",
-        imports=_collect_imports(*args),
-    )
+    return _result_from_args(f"int({_arg_to_code(args[0])})", args)
 
 
 def _handle_json(args: list[ExpressionResult]) -> ExpressionResult | None:
     """json(value) -> json.loads(value)"""
     if len(args) != 1:
         return None
-    return ExpressionResult(
-        kind="notebook_code",
-        value=f"__import__('json').loads({_arg_to_code(args[0])})",
-        imports=_collect_imports(*args),
-    )
+    return _result_from_args(f"__import__('json').loads({_arg_to_code(args[0])})", args)
 
 
 def _handle_string(args: list[ExpressionResult]) -> ExpressionResult | None:
@@ -1246,33 +1089,21 @@ def _handle_string(args: list[ExpressionResult]) -> ExpressionResult | None:
     sole_arg = args[0]
     if sole_arg.kind == "dab_ref":
         return sole_arg
-    return ExpressionResult(
-        kind="notebook_code",
-        value=f"str({_arg_to_code(sole_arg)})",
-        imports=_collect_imports(*args),
-    )
+    return _result_from_args(f"str({_arg_to_code(sole_arg)})", args)
 
 
 def _handle_add(args: list[ExpressionResult]) -> ExpressionResult | None:
     """add(a, b) -> (a + b)"""
     if len(args) != 2:
         return None
-    return ExpressionResult(
-        kind="notebook_code",
-        value=f"({_arg_to_code(args[0])} + {_arg_to_code(args[1])})",
-        imports=_collect_imports(*args),
-    )
+    return _result_from_args(f"({_arg_to_code(args[0])} + {_arg_to_code(args[1])})", args)
 
 
 def _handle_div(args: list[ExpressionResult]) -> ExpressionResult | None:
     """div(a, b) -> (a // b)"""
     if len(args) != 2:
         return None
-    return ExpressionResult(
-        kind="notebook_code",
-        value=f"({_arg_to_code(args[0])} // {_arg_to_code(args[1])})",
-        imports=_collect_imports(*args),
-    )
+    return _result_from_args(f"({_arg_to_code(args[0])} // {_arg_to_code(args[1])})", args)
 
 
 def _handle_max(args: list[ExpressionResult]) -> ExpressionResult | None:
@@ -1280,11 +1111,7 @@ def _handle_max(args: list[ExpressionResult]) -> ExpressionResult | None:
     if not args:
         return None
     items = ", ".join(_arg_to_code(a) for a in args)
-    return ExpressionResult(
-        kind="notebook_code",
-        value=f"max({items})",
-        imports=_collect_imports(*args),
-    )
+    return _result_from_args(f"max({items})", args)
 
 
 def _handle_min(args: list[ExpressionResult]) -> ExpressionResult | None:
@@ -1292,44 +1119,28 @@ def _handle_min(args: list[ExpressionResult]) -> ExpressionResult | None:
     if not args:
         return None
     items = ", ".join(_arg_to_code(a) for a in args)
-    return ExpressionResult(
-        kind="notebook_code",
-        value=f"min({items})",
-        imports=_collect_imports(*args),
-    )
+    return _result_from_args(f"min({items})", args)
 
 
 def _handle_mod(args: list[ExpressionResult]) -> ExpressionResult | None:
     """mod(a, b) -> (a % b)"""
     if len(args) != 2:
         return None
-    return ExpressionResult(
-        kind="notebook_code",
-        value=f"({_arg_to_code(args[0])} % {_arg_to_code(args[1])})",
-        imports=_collect_imports(*args),
-    )
+    return _result_from_args(f"({_arg_to_code(args[0])} % {_arg_to_code(args[1])})", args)
 
 
 def _handle_mul(args: list[ExpressionResult]) -> ExpressionResult | None:
     """mul(a, b) -> (a * b)"""
     if len(args) != 2:
         return None
-    return ExpressionResult(
-        kind="notebook_code",
-        value=f"({_arg_to_code(args[0])} * {_arg_to_code(args[1])})",
-        imports=_collect_imports(*args),
-    )
+    return _result_from_args(f"({_arg_to_code(args[0])} * {_arg_to_code(args[1])})", args)
 
 
 def _handle_rand(args: list[ExpressionResult]) -> ExpressionResult | None:
     """rand(min, max) -> random.randint(min, max-1)"""
     if len(args) != 2:
         return None
-    return ExpressionResult(
-        kind="notebook_code",
-        value=f"__import__('random').randint({_arg_to_code(args[0])}, {_arg_to_code(args[1])} - 1)",
-        imports=_collect_imports(*args),
-    )
+    return _result_from_args(f"__import__('random').randint({_arg_to_code(args[0])}, {_arg_to_code(args[1])} - 1)", args)
 
 
 def _handle_range(args: list[ExpressionResult]) -> ExpressionResult | None:
@@ -1338,22 +1149,14 @@ def _handle_range(args: list[ExpressionResult]) -> ExpressionResult | None:
         return None
     start = _arg_to_code(args[0])
     count = _arg_to_code(args[1])
-    return ExpressionResult(
-        kind="notebook_code",
-        value=f"list(range({start}, {start} + {count}))",
-        imports=_collect_imports(*args),
-    )
+    return _result_from_args(f"list(range({start}, {start} + {count}))", args)
 
 
 def _handle_sub(args: list[ExpressionResult]) -> ExpressionResult | None:
     """sub(a, b) -> (a - b)"""
     if len(args) != 2:
         return None
-    return ExpressionResult(
-        kind="notebook_code",
-        value=f"({_arg_to_code(args[0])} - {_arg_to_code(args[1])})",
-        imports=_collect_imports(*args),
-    )
+    return _result_from_args(f"({_arg_to_code(args[0])} - {_arg_to_code(args[1])})", args)
 
 
 def _make_add_unit_handler(
@@ -1372,11 +1175,7 @@ def _make_add_unit_handler(
         timestamp_dt = _datetime_arg_code(args[0])
         amount = _arg_to_code(args[1])
         format_string = _get_format_arg(args, 2)
-        return ExpressionResult(
-            kind="notebook_code",
-            value=f"({timestamp_dt} + timedelta({timedelta_keyword}={amount})).strftime({format_string})",
-            imports=_DATETIME_IMPORTS + _collect_imports(*args),
-        )
+        return _result_from_args(f"({timestamp_dt} + timedelta({timedelta_keyword}={amount})).strftime({format_string})", args, extra_imports=_DATETIME_IMPORTS)
 
     return handler
 
@@ -1400,44 +1199,28 @@ def _handle_add_to_time(args: list[ExpressionResult]) -> ExpressionResult | None
     if timedelta_keyword is None:
         return None
     format_string = _get_format_arg(args, 3)
-    return ExpressionResult(
-        kind="notebook_code",
-        value=(f"({timestamp_dt} + timedelta({timedelta_keyword}={interval})).strftime({format_string})"),
-        imports=_DATETIME_IMPORTS + _collect_imports(*args),
-    )
+    return _result_from_args((f"({timestamp_dt} + timedelta({timedelta_keyword}={interval})).strftime({format_string})"), args, extra_imports=_DATETIME_IMPORTS)
 
 
 def _handle_day_of_month(args: list[ExpressionResult]) -> ExpressionResult | None:
     """dayOfMonth(ts) -> <datetime>.day"""
     if len(args) != 1:
         return None
-    return ExpressionResult(
-        kind="notebook_code",
-        value=f"{_datetime_arg_code(args[0])}.day",
-        imports=_DATETIME_IMPORTS + _collect_imports(*args),
-    )
+    return _result_from_args(f"{_datetime_arg_code(args[0])}.day", args, extra_imports=_DATETIME_IMPORTS)
 
 
 def _handle_day_of_week(args: list[ExpressionResult]) -> ExpressionResult | None:
     """dayOfWeek(ts) -> <datetime>.isoweekday() % 7 (ADF: 0=Sunday)"""
     if len(args) != 1:
         return None
-    return ExpressionResult(
-        kind="notebook_code",
-        value=f"{_datetime_arg_code(args[0])}.isoweekday() % 7",
-        imports=_DATETIME_IMPORTS + _collect_imports(*args),
-    )
+    return _result_from_args(f"{_datetime_arg_code(args[0])}.isoweekday() % 7", args, extra_imports=_DATETIME_IMPORTS)
 
 
 def _handle_day_of_year(args: list[ExpressionResult]) -> ExpressionResult | None:
     """dayOfYear(ts) -> <datetime>.timetuple().tm_yday"""
     if len(args) != 1:
         return None
-    return ExpressionResult(
-        kind="notebook_code",
-        value=f"{_datetime_arg_code(args[0])}.timetuple().tm_yday",
-        imports=_DATETIME_IMPORTS + _collect_imports(*args),
-    )
+    return _result_from_args(f"{_datetime_arg_code(args[0])}.timetuple().tm_yday", args, extra_imports=_DATETIME_IMPORTS)
 
 
 def _handle_format_date_time(args: list[ExpressionResult]) -> ExpressionResult | None:
@@ -1447,16 +1230,8 @@ def _handle_format_date_time(args: list[ExpressionResult]) -> ExpressionResult |
     timestamp_dt = _datetime_arg_code(args[0])
     if len(args) == 2 and args[1].kind == "literal":
         python_format = _convert_date_format(args[1].value)
-        return ExpressionResult(
-            kind="notebook_code",
-            value=f"{timestamp_dt}.strftime('{python_format}')",
-            imports=_DATETIME_IMPORTS + _collect_imports(*args),
-        )
-    return ExpressionResult(
-        kind="notebook_code",
-        value=f"{timestamp_dt}.isoformat()",
-        imports=_DATETIME_IMPORTS + _collect_imports(*args),
-    )
+        return _result_from_args(f"{timestamp_dt}.strftime('{python_format}')", args, extra_imports=_DATETIME_IMPORTS)
+    return _result_from_args(f"{timestamp_dt}.isoformat()", args, extra_imports=_DATETIME_IMPORTS)
 
 
 def _make_now_offset_handler(
@@ -1502,11 +1277,7 @@ def _handle_start_of_day(args: list[ExpressionResult]) -> ExpressionResult | Non
         return None
     timestamp_dt = _datetime_arg_code(args[0])
     format_string = _get_format_arg(args, 1)
-    return ExpressionResult(
-        kind="notebook_code",
-        value=(f"{timestamp_dt}.replace(hour=0, minute=0, second=0, microsecond=0).strftime({format_string})"),
-        imports=_DATETIME_IMPORTS + _collect_imports(*args),
-    )
+    return _result_from_args((f"{timestamp_dt}.replace(hour=0, minute=0, second=0, microsecond=0).strftime({format_string})"), args, extra_imports=_DATETIME_IMPORTS)
 
 
 def _handle_start_of_hour(args: list[ExpressionResult]) -> ExpressionResult | None:
@@ -1515,11 +1286,7 @@ def _handle_start_of_hour(args: list[ExpressionResult]) -> ExpressionResult | No
         return None
     timestamp_dt = _datetime_arg_code(args[0])
     format_string = _get_format_arg(args, 1)
-    return ExpressionResult(
-        kind="notebook_code",
-        value=(f"{timestamp_dt}.replace(minute=0, second=0, microsecond=0).strftime({format_string})"),
-        imports=_DATETIME_IMPORTS + _collect_imports(*args),
-    )
+    return _result_from_args((f"{timestamp_dt}.replace(minute=0, second=0, microsecond=0).strftime({format_string})"), args, extra_imports=_DATETIME_IMPORTS)
 
 
 def _handle_start_of_month(args: list[ExpressionResult]) -> ExpressionResult | None:
@@ -1528,11 +1295,7 @@ def _handle_start_of_month(args: list[ExpressionResult]) -> ExpressionResult | N
         return None
     timestamp_dt = _datetime_arg_code(args[0])
     format_string = _get_format_arg(args, 1)
-    return ExpressionResult(
-        kind="notebook_code",
-        value=(f"{timestamp_dt}.replace(day=1, hour=0, minute=0, second=0, microsecond=0).strftime({format_string})"),
-        imports=_DATETIME_IMPORTS + _collect_imports(*args),
-    )
+    return _result_from_args((f"{timestamp_dt}.replace(day=1, hour=0, minute=0, second=0, microsecond=0).strftime({format_string})"), args, extra_imports=_DATETIME_IMPORTS)
 
 
 def _handle_subtract_from_time(args: list[ExpressionResult]) -> ExpressionResult | None:
@@ -1548,11 +1311,7 @@ def _handle_subtract_from_time(args: list[ExpressionResult]) -> ExpressionResult
     if timedelta_keyword is None:
         return None
     format_string = _get_format_arg(args, 3)
-    return ExpressionResult(
-        kind="notebook_code",
-        value=(f"({timestamp_dt} - timedelta({timedelta_keyword}={interval})).strftime({format_string})"),
-        imports=_DATETIME_IMPORTS + _collect_imports(*args),
-    )
+    return _result_from_args((f"({timestamp_dt} - timedelta({timedelta_keyword}={interval})).strftime({format_string})"), args, extra_imports=_DATETIME_IMPORTS)
 
 
 def _get_format_arg(args: list[ExpressionResult], idx: int) -> str:
@@ -1585,11 +1344,7 @@ def _handle_convert_from_utc(args: list[ExpressionResult]) -> ExpressionResult |
     src = _datetime_arg_code(args[0])
     dest_tz = _arg_to_code(args[1])
     fmt = _get_format_arg(args, 2)
-    return ExpressionResult(
-        kind="notebook_code",
-        value=f"{src}.replace(tzinfo=timezone.utc).astimezone(ZoneInfo({dest_tz})).strftime({fmt})",
-        imports=_ZONEINFO_IMPORTS + _collect_imports(*args),
-    )
+    return _result_from_args(f"{src}.replace(tzinfo=timezone.utc).astimezone(ZoneInfo({dest_tz})).strftime({fmt})", args, extra_imports=_ZONEINFO_IMPORTS)
 
 
 def _handle_convert_to_utc(args: list[ExpressionResult]) -> ExpressionResult | None:
@@ -1599,11 +1354,7 @@ def _handle_convert_to_utc(args: list[ExpressionResult]) -> ExpressionResult | N
     src = _datetime_arg_code(args[0])
     src_tz = _arg_to_code(args[1])
     fmt = _get_format_arg(args, 2)
-    return ExpressionResult(
-        kind="notebook_code",
-        value=f"{src}.replace(tzinfo=ZoneInfo({src_tz})).astimezone(timezone.utc).strftime({fmt})",
-        imports=_ZONEINFO_IMPORTS + _collect_imports(*args),
-    )
+    return _result_from_args(f"{src}.replace(tzinfo=ZoneInfo({src_tz})).astimezone(timezone.utc).strftime({fmt})", args, extra_imports=_ZONEINFO_IMPORTS)
 
 
 def _handle_convert_time_zone(args: list[ExpressionResult]) -> ExpressionResult | None:
@@ -1614,11 +1365,7 @@ def _handle_convert_time_zone(args: list[ExpressionResult]) -> ExpressionResult 
     src_tz = _arg_to_code(args[1])
     dst_tz = _arg_to_code(args[2])
     fmt = _get_format_arg(args, 3)
-    return ExpressionResult(
-        kind="notebook_code",
-        value=(f"{src}.replace(tzinfo=ZoneInfo({src_tz})).astimezone(ZoneInfo({dst_tz})).strftime({fmt})"),
-        imports=_ZONEINFO_IMPORTS + _collect_imports(*args),
-    )
+    return _result_from_args((f"{src}.replace(tzinfo=ZoneInfo({src_tz})).astimezone(ZoneInfo({dst_tz})).strftime({fmt})"), args, extra_imports=_ZONEINFO_IMPORTS)
 
 
 def _handle_ticks(args: list[ExpressionResult]) -> ExpressionResult | None:
@@ -1626,11 +1373,7 @@ def _handle_ticks(args: list[ExpressionResult]) -> ExpressionResult | None:
     if len(args) != 1:
         return None
     src = _datetime_arg_code(args[0])
-    return ExpressionResult(
-        kind="notebook_code",
-        value=(f"int(({src} - datetime(1, 1, 1, tzinfo=timezone.utc)).total_seconds() * 10_000_000)"),
-        imports=_DATETIME_IMPORTS + _collect_imports(*args),
-    )
+    return _result_from_args((f"int(({src} - datetime(1, 1, 1, tzinfo=timezone.utc)).total_seconds() * 10_000_000)"), args, extra_imports=_DATETIME_IMPORTS)
 
 
 _FUNCTION_HANDLERS: dict[str, Callable[[list[ExpressionResult]], ExpressionResult | None]] = {
