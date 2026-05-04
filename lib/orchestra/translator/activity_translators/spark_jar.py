@@ -46,8 +46,6 @@ def translate(
 def _resolve_parameter(param: Any, context: TranslationContext) -> str:
     """Resolves a single ADF parameter to a DAB value string.
 
-    Handles expression dicts, ``@expr`` style, and ``@{expr}`` interpolation.
-
     Args:
         param: A parameter string or ``{"type": "Expression", "value": "..."}`` dict.
         context: Translation context for variable resolution.

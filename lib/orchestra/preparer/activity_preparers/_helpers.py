@@ -14,13 +14,7 @@ if TYPE_CHECKING:
 
 
 def resolve_param_value(value: str) -> str:
-    """Resolves an ADF expression in a parameter value to its DAB form.
-
-    Only ``literal`` and ``dab_ref`` results are folded back into the value.
-    ``notebook_code`` results would emit Python source into a base_parameter
-    (which DAB cannot evaluate), so the raw expression is returned and the
-    caller is expected to surface it via the manual-parameter handling path.
-    """
+    """Resolves an ADF expression in a parameter value to its DAB form."""
     if "@{" in value:
         return resolve_interpolated_string(value, TranslationContext())
     if value.startswith("@"):
@@ -36,12 +30,7 @@ def build_notebook_task_artifacts(
     notebook_content: str,
     base_parameters: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], list[DabNotebook]]:
-    """Builds the ``notebook_task`` dict and the matching DabNotebook artifact.
-
-    The bundle layout places generated notebooks under
-    ``src/<notebook_relative_path>`` and the job YAML refers to them via
-    ``../src/<notebook_relative_path>``.
-    """
+    """Builds the ``notebook_task`` dict and the matching DabNotebook artifact."""
     notebook_task: dict[str, Any] = {
         "notebook_path": f"../src/{notebook_relative_path}",
     }
@@ -64,12 +53,7 @@ def build_notebook_activity_task(
     notebook_content: str,
     base_parameters: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], list[DabNotebook]]:
-    """Builds the common task fields and notebook_task scaffolding for *activity*.
-
-    Returns ``(task, notebooks)`` where ``task`` already has ``notebook_task``
-    attached and ``notebooks`` contains the single :class:`DabNotebook`
-    artifact for the generated body.
-    """
+    """Builds the common task fields and notebook_task scaffolding for *activity*."""
     task = build_common_task_fields(activity)
     notebook_task, notebooks = build_notebook_task_artifacts(
         notebook_relative_path=notebook_relative_path,
@@ -87,11 +71,7 @@ def make_jdbc_secrets(
     activity_name: str,
     role: str = "source",
 ) -> list[SecretInstruction]:
-    """Returns the ``jdbc-url`` / ``jdbc-password`` secret pair for a JDBC connector.
-
-    ``role`` differentiates the value-source description in SETUP.md
-    (``"source"``, ``"sink"``, ``"lookup"``).
-    """
+    """Returns the ``jdbc-url`` / ``jdbc-password`` secret pair for a JDBC connector."""
     return [
         SecretInstruction(
             scope=scope_name,

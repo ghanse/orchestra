@@ -17,8 +17,6 @@ def translate(
 ) -> Activity:
     """Translates a Lookup activity.
 
-    Extracts the source dataset reference, query, and firstRowOnly flag.
-
     Args:
         activity: The ADF activity AST node.
         base_kwargs: Common fields (name, task_key, timeout, retries, depends_on, cluster).
@@ -34,7 +32,6 @@ def translate(
     source_type = source_raw.get("type")
     source_properties = {k: v for k, v in source_raw.items() if k != "type"} if source_raw else {}
 
-    # The query can be in source.query, source.sqlReaderQuery, or source.sqlReaderStoredProcedureName
     source_query_raw = (
         source_raw.get("query") or source_raw.get("sqlReaderQuery") or source_raw.get("sqlReaderStoredProcedureName")
     )

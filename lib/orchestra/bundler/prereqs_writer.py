@@ -1,14 +1,4 @@
-"""Generates a SETUP.md file listing steps required before a bundle can run.
-
-A translated bundle may depend on external setup that neither ``databricks
-bundle deploy`` nor any of the deployed jobs can perform on the user's
-behalf — secret scopes, workspace notebooks that couldn't be auto-downloaded
-at translation time, cross-bundle job references, and compute configuration.
-
-This module extracts those dependencies from the generated artifacts and
-writes a single ``SETUP.md`` that lists every concrete step needed to make
-the bundle runnable.  Deployment itself is intentionally out of scope.
-"""
+"""Generates a SETUP.md file listing steps required before a bundle can run."""
 
 from __future__ import annotations
 
@@ -78,14 +68,6 @@ class EmptyParameter:
 class ManualParameter:
     """A base_parameter that the user must compute inside an existing notebook.
 
-    DAB substitutes ``${var.X}`` and ``{{job.parameters.X}}``-style tokens
-    in YAML before tasks run, but it does not evaluate Python code or ADF
-    function calls.  When a base_parameter resolves to runtime Python (e.g.
-    ``datetime.now(timezone.utc).strftime('%Y-%m-%d')``) and the task points
-    at an existing workspace notebook (one orchestra cannot modify), the
-    parameter cannot be passed cleanly.  We surface these here so the user
-    knows to compute the value inside their existing notebook.
-
     Attributes:
         task_key: DAB task key.
         widget_name: The base_parameter name.
@@ -143,11 +125,7 @@ class Prereqs:
 
 
 def _walk_tasks(tasks: list[dict[str, Any]]):
-    """Yields every task dict including nested ``for_each_task.task`` bodies.
-
-    The bundler flattens condition branches into top-level siblings (per DAB
-    schema) so the only still-nested tasks are ``for_each_task`` bodies.
-    """
+    """Yields every task dict including nested ``for_each_task.task`` bodies."""
     for task in tasks:
         yield task
         for_each = task.get("for_each_task")
@@ -176,13 +154,6 @@ def collect_missing_notebooks(
     tasks: list[dict[str, Any]],
 ) -> list[MissingNotebook]:
     """Identify notebook stubs the user must replace before running the bundle.
-
-    A stub is any generated notebook that contains ``raise NotImplementedError``
-    — this marker is placed by ``_placeholder_notebook`` and the motif
-    generator whenever deterministic translation could not produce runnable
-    logic.  The notebook's ``Source workspace path`` header (when present)
-    and the task's ``base_parameters`` keys are surfaced so the author has
-    enough context to fill in the body.
 
     Args:
         notebooks: Generated notebooks in the bundle.
@@ -230,10 +201,6 @@ def collect_missing_notebooks(
 def collect_cross_bundle_refs(tasks: list[dict[str, Any]], known_bundle_jobs: set[str]) -> list[CrossBundleReference]:
     """Finds ``run_job_task`` entries pointing outside this bundle.
 
-    A ``run_job_task.job_id`` of ``${resources.jobs.X.id}`` where ``X`` is not
-    defined in this bundle cannot be resolved at ``bundle validate`` time and
-    must be wired up manually (by the deployer, not by orchestra).
-
     Args:
         tasks: Top-level task dicts.
         known_bundle_jobs: Resource keys of jobs defined in this bundle.
@@ -261,12 +228,6 @@ def collect_cross_bundle_refs(tasks: list[dict[str, Any]], known_bundle_jobs: se
 def collect_empty_parameters(tasks: list[dict[str, Any]]) -> list[EmptyParameter]:
     """Finds base_parameters whose values are empty strings.
 
-    The bundler's widget auto-augment pass fills in any widget the notebook
-    reads but the translator didn't populate, using ``""`` as the default.
-    These are the tasks where ADF carried a value but the translator could
-    not resolve it — flagging them in SETUP.md gives the user a concrete
-    list to review.
-
     Args:
         tasks: All top-level task dicts in the bundle.
 
@@ -285,19 +246,6 @@ def collect_empty_parameters(tasks: list[dict[str, Any]]) -> list[EmptyParameter
 
 def collect_network_endpoints(notebooks: list[DabNotebook]) -> list[NetworkEndpoint]:
     """Scans generated notebook content for network-dependent endpoints.
-
-    Looks for three signals that show up in deterministically-generated
-    notebook bodies:
-
-    - ``dbutils.secrets.get(scope=..., key="jdbc-url")`` — a JDBC database
-      that the user must reach from Databricks compute.  Surfaces under the
-      scope name so the user can correlate with the secrets section.
-    - ``requests.get(...)`` / ``requests.post(...)`` — REST/Web Activity that
-      needs HTTPS egress.  We capture any literal ``https://...`` URL on the
-      same notebook for hostname-level guidance.
-    - ``abfss://`` / ``wasbs://`` paths — Azure storage targets, normally
-      covered by UC volumes but worth flagging if the workspace's network
-      profile cannot reach them.
 
     Args:
         notebooks: All generated notebooks in the bundle.

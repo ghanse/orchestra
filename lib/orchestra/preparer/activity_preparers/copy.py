@@ -33,13 +33,7 @@ class _VolumeBinding:
 
 
 def _resolve_volume_binding(source_properties: dict) -> _VolumeBinding | None:
-    """Derives UC volume info from a file source's resolved ABFSS URL.
-
-    The volume is created at the *container* level so multiple Copy
-    activities sharing the same container reuse one external volume; the
-    folder portion of the URL becomes a subdirectory under the volume.
-    Returns ``None`` when the source has no resolved abfss:// path.
-    """
+    """Derives UC volume info from a file source's resolved ABFSS URL."""
     resolved_path = source_properties.get("resolved_path", "")
     if not resolved_path:
         return None
@@ -70,13 +64,7 @@ def _augment_with_volume_paths(activity: CopyActivity, binding: _VolumeBinding) 
 
 
 def prepare(activity: CopyActivity, *, scope: str = "") -> PreparedActivity:
-    """Converts a CopyActivity into a notebook_task with a generated copy notebook.
-
-    File-based sources use Auto Loader (``cloudFiles``); database sources
-    use JDBC reads; everything else uses a generic Spark read/write.  File
-    sources with a resolved ABFSS path also emit a UC external volume
-    setup task.
-    """
+    """Converts a CopyActivity into a notebook_task with a generated copy notebook."""
     source_type = activity.source_type or ""
     volume_binding: _VolumeBinding | None = None
     if source_type in FILE_SOURCE_TYPES:

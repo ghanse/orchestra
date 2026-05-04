@@ -39,19 +39,12 @@ _LOCATION_URL_TEMPLATE: dict[str, str] = {
 # Regex to pull AccountName=... from an Azure storage connection string when
 # the secret value is plaintext (rare in az exports, but supported).
 _ACCOUNT_NAME_RE = re.compile(r"AccountName=([A-Za-z0-9]+)", re.IGNORECASE)
-# ``@dataset().X`` reference to a dataset parameter.
 _DATASET_PARAM_RE = re.compile(r"^@dataset\(\)\.([A-Za-z_][A-Za-z0-9_]*)$")
 
 
 @dataclass(slots=True)
 class SinkPathInfo:
     """Resolved sink dataset location for an external UC volume.
-
-    The translator builds this for any Copy activity whose output dataset is
-    a file dataset on cloud object storage (Azure Blob/ADLS, S3, GCS).  The
-    bundler converts it to a SetupTask that creates a Storage Credential +
-    External Location + External Volume, and the notebook generator points
-    the write call at the resulting ``/Volumes/...`` path.
 
     Attributes:
         location_type: ADF location type (``AzureBlobStorageLocation``, ...).
@@ -102,19 +95,7 @@ def _resolve_param_value(
     *,
     for_notebook: bool = False,
 ) -> str:
-    """Resolves a single ADF location field to a string.
-
-    Handles the four shapes the loader leaves these in:
-    - A literal string with no expression.
-    - ``"@dataset().<name>"`` referencing a dataset parameter.
-    - ``"@{...}"`` interpolated expression.
-    - ``{type: "Expression", value: "..."}`` dicts.
-
-    When ``for_notebook=True``, ``@{...}`` is rewritten to Python f-string
-    fragments (e.g. ``{datetime.utcnow().strftime('%Y-%m-%d')}``) so the path
-    can be embedded directly in a generated notebook.  Otherwise the literal
-    expression survives.
-    """
+    """Resolves a single ADF location field to a string."""
     if raw is None:
         return ""
     if isinstance(raw, dict) and raw.get("type") == "Expression":
@@ -150,7 +131,6 @@ def _resolve_storage_account(linked_service: Any) -> str | None:
         return None
     type_props = linked_service.properties.get("typeProperties") or linked_service.properties
 
-    # ADLS Gen2 exposes the URL directly.
     url = type_props.get("url") or ""
     if isinstance(url, str) and url:
         host = url.replace("https://", "").split("/", 1)[0]
@@ -158,7 +138,6 @@ def _resolve_storage_account(linked_service: Any) -> str | None:
         if "." in host_no_port:
             return host_no_port.split(".", 1)[0]
 
-    # Blob Storage Gen1 SAS URL form.
     sas_uri = type_props.get("sasUri") or ""
     if isinstance(sas_uri, str) and sas_uri:
         host = sas_uri.split("?", 1)[0].replace("https://", "").split("/", 1)[0]
@@ -183,13 +162,7 @@ def _resolve_storage_account(linked_service: Any) -> str | None:
 
 
 def _resolve_dataset_path(dataset_props: dict[str, Any], definitions: AdfDefinitions) -> str | None:
-    """Resolves a dataset's storage path using its location + linked service.
-
-    Handles both ADLS Gen2 (``fileSystem`` / ``folderPath``) and Blob Storage
-    (``container`` / ``folderPath``) location shapes, plus the synthesised
-    type-properties layout the loader produces from flat az-CLI exports.
-    Returns ``None`` when the storage account cannot be inferred.
-    """
+    """Resolves a dataset's storage path using its location + linked service."""
     type_props = dataset_props.get("typeProperties") or dataset_props
     location = type_props.get("location") or {}
 
@@ -217,21 +190,13 @@ def _resolve_path_info(
     definitions: AdfDefinitions,
     context: TranslationContext,
 ) -> SinkPathInfo | None:
-    """Resolves a (possibly parameterised) file-on-cloud-storage dataset.
-
-    Walks the dataset's ``location`` block, resolves ``@dataset().X``
-    references using ``dataset_ref.parameters`` (with the dataset's own
-    declared defaults as a fallback), and assembles a :class:`SinkPathInfo`.
-    Returns ``None`` for non-file datasets (e.g. tables) or unknown
-    location types.
-    """
+    """Resolves a (possibly parameterised) file-on-cloud-storage dataset."""
     type_props = dataset_props.get("typeProperties") or dataset_props
     location = type_props.get("location") or {}
     location_type = location.get("type")
     if not location_type or location_type not in _LOCATION_URL_TEMPLATE:
         return None
 
-    # Build the effective parameter map: dataset defaults < activity-supplied.
     declared = dataset_props.get("parameters") or {}
     effective: dict[str, Any] = {}
     for name, spec in declared.items():
@@ -263,7 +228,6 @@ def _resolve_path_info(
     storage_account = _resolve_storage_account(linked_service) if linked_service else None
 
     if location_type in ("AmazonS3Location", "GoogleCloudStorageLocation"):
-        # S3/GCS: container is the bucket name; account is N/A.
         external_url = _LOCATION_URL_TEMPLATE[location_type].format(bucket=container)
     else:
         account_token = storage_account or "${var.storage_account}"
@@ -307,10 +271,6 @@ def translate(
 ) -> Activity:
     """Translates a Copy activity.
 
-    Extracts source/sink dataset references, connection properties, and
-    column mappings from the ADF type properties.  Also resolves the input
-    dataset reference to extract the actual storage path.
-
     Args:
         activity: The ADF activity AST node.
         base_kwargs: Common fields (name, task_key, timeout, retries, depends_on, cluster).
@@ -322,22 +282,18 @@ def translate(
     """
     type_properties = activity.type_properties or {}
 
-    # Source
     source_raw = type_properties.get("source", {})
     source_type = source_raw.get("type")
     source_properties = {k: v for k, v in source_raw.items() if k != "type"} if source_raw else {}
 
-    # Resolve source path from input dataset
     resolved_path = _resolve_source_path(activity, definitions)
     if resolved_path:
         source_properties["resolved_path"] = resolved_path
 
-    # Sink
     sink_raw = type_properties.get("sink", {})
     sink_type = sink_raw.get("type")
     sink_properties = {k: v for k, v in sink_raw.items() if k != "type"} if sink_raw else {}
 
-    # Column mapping
     column_mapping: list[dict[str, str]] = []
     translator_raw = type_properties.get("translator")
     if translator_raw and isinstance(translator_raw, dict):

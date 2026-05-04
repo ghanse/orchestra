@@ -19,8 +19,6 @@ def translate(
 ) -> Activity:
     """Translates a WebActivity.
 
-    Extracts URL, HTTP method, headers, body, and authentication config.
-
     Args:
         activity: The ADF activity AST node.
         base_kwargs: Common fields (name, task_key, timeout, retries, depends_on, cluster).
@@ -40,7 +38,6 @@ def translate(
     disable_cert_validation = type_properties.get("disableCertValidation", False)
     http_request_timeout = type_properties.get("httpRequestTimeout")
 
-    # Convert ADF timeout format to seconds if present
     timeout_seconds: int | None = None
     if http_request_timeout and isinstance(http_request_timeout, str):
         timeout_seconds = _parse_timeout_to_seconds(http_request_timeout)
@@ -59,15 +56,6 @@ def translate(
 
 def _resolve_body(body: Any, context: TranslationContext) -> Any:
     """Pre-resolve ADF expressions in the request body at translate time.
-
-    When the body is an ``{"type": "Expression", "value": "@..."}`` dict,
-    resolve the inner expression via the full translation context (which
-    carries variable_value_cache for inlining DAB refs like
-    ``{{job.start_time.iso_datetime}}``).
-
-    If the expression resolves to ``notebook_code``, store the code string
-    directly so the code generator can embed it.  Otherwise return the raw
-    body for downstream handling.
 
     Args:
         body: Raw body from the ADF typeProperties.

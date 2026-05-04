@@ -23,11 +23,9 @@ def _resolve_param_value(value: str) -> str:
     """
     context = TranslationContext()
 
-    # Try @{...} interpolation
     if "@{" in value:
         return resolve_interpolated_string(value, context)
 
-    # Try @expr style
     if value.startswith("@"):
         result = resolve_expression(value, context)
         if result is not None and result.kind in ("dab_ref", "literal"):
@@ -38,9 +36,6 @@ def _resolve_param_value(value: str) -> str:
 
 def prepare(activity: RunJobActivity, *, scope: str = "") -> PreparedActivity:
     """Converts a RunJobActivity into a DAB run_job_task definition.
-
-    If the activity specifies an ``existing_job_id``, it is used directly.
-    Otherwise the ``job_name`` is included as a resource reference.
 
     Args:
         activity: The translated run-job activity from the IR.

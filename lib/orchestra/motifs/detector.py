@@ -1,13 +1,4 @@
-"""Heuristic-based motif detection for ADF pipelines.
-
-Walks the ADF activity list and, for each motif definition, checks whether
-the activity sequence matches by activity type and dependency chain.  The
-matching is deliberately forgiving -- false negatives are acceptable but
-false positives are not.
-
-Detection also inspects linked services and datasets to infer a
-``source_type_hint`` (``"files"``, ``"database"``, or ``"rest_api"``).
-"""
+"""Heuristic-based motif detection for ADF pipelines."""
 
 from __future__ import annotations
 
@@ -88,12 +79,6 @@ def detect_motifs(
 ) -> list[DetectedMotif]:
     """Scans *pipeline* for known multi-activity motifs.
 
-    Each motif detector is a specialised heuristic.  Detection order follows
-    the ``MOTIF_REGISTRY`` priority so that more specific motifs (e.g.
-    CDC Change Tracking) are matched before generic ones (e.g. Copy and
-    Notify).  An activity can only belong to one motif -- once claimed it is
-    excluded from subsequent matches.
-
     Args:
         pipeline: Parsed ADF pipeline AST.
         definitions: Full ADF definitions for cross-referencing datasets and
@@ -106,12 +91,10 @@ def detect_motifs(
     if not activities:
         return []
 
-    # Build lookup structures
     by_name: dict[str, AdfActivity] = {activity.name: activity for activity in activities}
     claimed: set[str] = set()
     results: list[DetectedMotif] = []
 
-    # Per-motif detectors in priority order
     _detectors: list[tuple[MotifDefinition, _Detector]] = [
         (MOTIF_INCREMENTAL_LOAD_WATERMARK, _detect_incremental_watermark),
         (MOTIF_CDC_CHANGE_TRACKING, _detect_cdc_change_tracking),
@@ -167,7 +150,6 @@ def _infer_source_type(
     definitions: AdfDefinitions,
 ) -> str | None:
     """Infer whether the source of a Copy/Lookup activity is files, database, or REST."""
-    # Check inputs (dataset references)
     if activity.inputs:
         for input_ref in activity.inputs:
             dataset = definitions.datasets.get(input_ref.reference_name)
@@ -181,7 +163,6 @@ def _infer_source_type(
                     if linked_service.type in _REST_LS_TYPES:
                         return "rest_api"
 
-    # Check linked service directly on the activity
     if activity.linked_service_name:
         linked_service = definitions.linked_services.get(activity.linked_service_name.reference_name)
         if linked_service:
@@ -192,7 +173,6 @@ def _infer_source_type(
             if linked_service.type in _REST_LS_TYPES:
                 return "rest_api"
 
-    # Check type_properties source type hints
     type_properties = activity.type_properties or {}
     source = type_properties.get("source", {})
     if isinstance(source, dict):
@@ -230,12 +210,7 @@ def _record_motif(
     source_type_hint: str | None,
     confidence_notes: list[str],
 ) -> None:
-    """Appends a fully-populated :class:`DetectedMotif` to *results*.
-
-    Centralising the construction keeps every detector emitting the same
-    field shape and lets callers focus on the matching logic instead of
-    repeating the four keyword-argument boilerplate at every match site.
-    """
+    """Appends a fully-populated :class:`DetectedMotif` to *results*."""
     results.append(
         DetectedMotif(
             definition=definition,
@@ -258,19 +233,11 @@ def _detect_incremental_watermark(
     definitions: AdfDefinitions,
     claimed: set[str],
 ) -> list[DetectedMotif]:
-    """Detects incremental-load-watermark pattern.
-
-    Heuristic:
-    - 2+ Lookup activities upstream of a Copy activity
-    - A StoredProcedure downstream of the Copy
-    - Lookup type_properties mention "watermark", "MAX(", or similar
-    - Exclude if the type_properties mention "CHANGE_TRACKING" (that is CDC)
-    """
+    """Detects incremental-load-watermark pattern."""
     results: list[DetectedMotif] = []
     copies = _activities_of_type(activities, "Copy", claimed)
 
     for copy_act in copies:
-        # Find Lookup activities that are upstream of this Copy
         upstream_lookups: list[AdfActivity] = []
         for name in _get_upstream_names(copy_act):
             activity = by_name.get(name)
@@ -280,7 +247,6 @@ def _detect_incremental_watermark(
         if len(upstream_lookups) < 2:
             continue
 
-        # Check for watermark keywords in Lookup queries (but NOT change tracking)
         watermark_keywords_found = False
         has_change_tracking = False
         notes: list[str] = []
@@ -294,13 +260,11 @@ def _detect_incremental_watermark(
                 has_change_tracking = True
 
         if has_change_tracking:
-            # This is CDC, not watermark -- skip for this detector
             continue
 
         if not watermark_keywords_found:
             continue
 
-        # Find downstream StoredProcedure
         downstream_sp: AdfActivity | None = None
         for activity in activities:
             if activity.type == "SqlServerStoredProcedure" and activity.name not in claimed:
@@ -332,11 +296,7 @@ def _detect_cdc_change_tracking(
     definitions: AdfDefinitions,
     claimed: set[str],
 ) -> list[DetectedMotif]:
-    """Detects CDC change-tracking pattern.
-
-    Very similar to watermark but specifically looks for CHANGETABLE /
-    SYS_CHANGE_VERSION keywords.
-    """
+    """Detects CDC change-tracking pattern."""
     results: list[DetectedMotif] = []
     copies = _activities_of_type(activities, "Copy", claimed)
 
@@ -362,7 +322,6 @@ def _detect_cdc_change_tracking(
         if not cdc_found:
             continue
 
-        # Find downstream StoredProcedure
         downstream_sp: AdfActivity | None = None
         for activity in activities:
             if activity.type == "SqlServerStoredProcedure" and activity.name not in claimed:
@@ -394,13 +353,7 @@ def _detect_metadata_driven_bulk_copy(
     definitions: AdfDefinitions,
     claimed: set[str],
 ) -> list[DetectedMotif]:
-    """Detects metadata-driven bulk copy pattern.
-
-    Heuristic:
-    - A Lookup activity upstream of a ForEach
-    - The ForEach contains a Copy child activity
-    - Lookup query mentions table list, control table, or metadata
-    """
+    """Detects metadata-driven bulk copy pattern."""
     results: list[DetectedMotif] = []
     for_each_activities = _activities_of_type(activities, "ForEach", claimed)
 
@@ -416,7 +369,6 @@ def _detect_metadata_driven_bulk_copy(
         if len(inner_activities) != 1 or inner_activities[0].type != "Copy":
             continue
 
-        # Find upstream Lookup
         upstream_lookups: list[AdfActivity] = []
         for name in _get_upstream_names(for_each_activity):
             activity = by_name.get(name)
@@ -438,7 +390,6 @@ def _detect_metadata_driven_bulk_copy(
 
         matched = [lookup_activity.name for lookup_activity in upstream_lookups] + [for_each_activity.name]
         source_hint = None
-        # Try to infer from the child Copy
         if for_each_activity.activities:
             for child in for_each_activity.activities:
                 if child.type == "Copy":
@@ -462,30 +413,19 @@ def _detect_file_landing_zone(
     definitions: AdfDefinitions,
     claimed: set[str],
 ) -> list[DetectedMotif]:
-    """Detects file landing zone processing pattern.
-
-    Heuristic:
-    - GetMetadata (list files) upstream
-    - Optional Filter in between
-    - ForEach containing a Copy
-    - Optional Delete downstream
-    """
+    """Detects file landing zone processing pattern."""
     results: list[DetectedMotif] = []
     get_metadata_activities = _activities_of_type(activities, "GetMetadata", claimed)
 
     for get_metadata_activity in get_metadata_activities:
-        # Check if GetMetadata lists child items (files)
         type_properties_text = _type_props_text(get_metadata_activity)
         if not _has_keyword(type_properties_text, "childitems", "getchilditems", "childitem", "exists"):
-            # Also accept if it just mentions file-like things
             if not _has_keyword(type_properties_text, "file", "folder", "blob", "path"):
                 continue
 
-        # Walk downstream from GetMetadata
         matched: list[str] = [get_metadata_activity.name]
         notes: list[str] = [f"GetMetadata '{get_metadata_activity.name}' lists files"]
 
-        # Find a direct or indirect downstream ForEach with Copy child
         downstream_filter: AdfActivity | None = None
         downstream_foreach: AdfActivity | None = None
         downstream_delete: AdfActivity | None = None
@@ -496,10 +436,8 @@ def _detect_file_landing_zone(
             if activity.type == "Filter" and _depends_on(activity, get_metadata_activity.name):
                 downstream_filter = activity
             if activity.type == "ForEach":
-                # ForEach can depend on GetMetadata directly or via Filter
                 deps = _get_upstream_names(activity)
                 if get_metadata_activity.name in deps or (downstream_filter and downstream_filter.name in deps):
-                    # Check for Copy child
                     if activity.activities:
                         for child in activity.activities:
                             if child.type == "Copy":
@@ -516,7 +454,6 @@ def _detect_file_landing_zone(
         matched.append(downstream_foreach.name)
         notes.append(f"ForEach '{downstream_foreach.name}' processes files via Copy")
 
-        # Look for a Delete downstream of the ForEach
         for activity in activities:
             if activity.name in claimed:
                 continue
@@ -545,12 +482,7 @@ def _detect_copy_and_notify(
     definitions: AdfDefinitions,
     claimed: set[str],
 ) -> list[DetectedMotif]:
-    """Detects copy-and-notify pattern.
-
-    Heuristic:
-    - A Copy activity followed by one or more WebActivity calls
-    - The WebActivity URL or body hints at notification (Logic App, email, webhook)
-    """
+    """Detects copy-and-notify pattern."""
     results: list[DetectedMotif] = []
     copies = _activities_of_type(activities, "Copy", claimed)
 
@@ -565,7 +497,6 @@ def _detect_copy_and_notify(
         if not downstream_webs:
             continue
 
-        # Check for notification hints
         notes: list[str] = []
         notification_found = False
         for web in downstream_webs:
@@ -613,18 +544,11 @@ def _detect_staged_load_synapse(
     definitions: AdfDefinitions,
     claimed: set[str],
 ) -> list[DetectedMotif]:
-    """Detects staged-load (Synapse) pattern.
-
-    Heuristic:
-    - Copy activity followed by a StoredProcedure
-    - Copy sink targets Synapse / SQL DW or uses staging (PolyBase / COPY command)
-    - No upstream Lookups with watermark keywords (that would be incremental load)
-    """
+    """Detects staged-load (Synapse) pattern."""
     results: list[DetectedMotif] = []
     copies = _activities_of_type(activities, "Copy", claimed)
 
     for copy_act in copies:
-        # Skip if there are upstream lookups (likely incremental / CDC)
         upstream_lookups = [
             by_name[name]
             for name in _get_upstream_names(copy_act)
@@ -633,7 +557,6 @@ def _detect_staged_load_synapse(
         if len(upstream_lookups) >= 2:
             continue
 
-        # Find downstream StoredProcedure
         downstream_sp: AdfActivity | None = None
         for activity in activities:
             if activity.name in claimed:
@@ -648,7 +571,6 @@ def _detect_staged_load_synapse(
         notes: list[str] = []
         type_properties_text = _type_props_text(copy_act)
 
-        # Check for staging / Synapse hints
         staging_hint = _has_keyword(
             type_properties_text,
             "polybase",
@@ -662,7 +584,6 @@ def _detect_staged_load_synapse(
         if staging_hint:
             notes.append("Copy activity uses staging/PolyBase for Synapse loading")
         else:
-            # Also accept if the sink linked service is Synapse / SQL DW
             sink_hint = _has_keyword(type_properties_text, "sqldwsink", "azuresqldwsink", "synapsesink")
             if sink_hint:
                 notes.append("Copy sink targets Azure Synapse / SQL DW")
@@ -689,13 +610,7 @@ def _detect_rest_api_pagination(
     definitions: AdfDefinitions,
     claimed: set[str],
 ) -> list[DetectedMotif]:
-    """Detects REST API pagination pattern.
-
-    Heuristic:
-    - WebActivity (auth / token) early in the chain
-    - SetVariable to store the token or cursor
-    - Until loop containing Copy or WebActivity for fetching pages
-    """
+    """Detects REST API pagination pattern."""
     results: list[DetectedMotif] = []
     until_acts = _activities_of_type(activities, "Until", claimed)
 
@@ -710,7 +625,6 @@ def _detect_rest_api_pagination(
         if not has_fetch_child:
             continue
 
-        # Look for upstream WebActivity (auth) or SetVariable (cursor init)
         upstream_names = _get_upstream_names(until_act)
         upstream_webs: list[AdfActivity] = []
         upstream_setvars: list[AdfActivity] = []
@@ -724,7 +638,6 @@ def _detect_rest_api_pagination(
             elif activity.type == "SetVariable":
                 upstream_setvars.append(activity)
 
-        # Also look for WebActivity upstream of a SetVariable that is upstream of Until
         for set_variable_activity in list(upstream_setvars):
             for name in _get_upstream_names(set_variable_activity):
                 activity = by_name.get(name)
@@ -734,7 +647,6 @@ def _detect_rest_api_pagination(
 
         notes: list[str] = []
 
-        # Require at least some evidence of REST/pagination
         evidence = False
         for web in upstream_webs:
             type_properties_text = _type_props_text(web)
@@ -780,17 +692,11 @@ def _detect_parent_child_orchestration(
     definitions: AdfDefinitions,
     claimed: set[str],
 ) -> list[DetectedMotif]:
-    """Detects parent-child orchestration pattern.
-
-    Heuristic:
-    - Lookup upstream of ForEach
-    - ForEach contains ExecutePipeline child
-    """
+    """Detects parent-child orchestration pattern."""
     results: list[DetectedMotif] = []
     for_each_activities = _activities_of_type(activities, "ForEach", claimed)
 
     for for_each_activity in for_each_activities:
-        # Does ForEach contain ExecutePipeline child?
         has_exec_child = False
         if for_each_activity.activities:
             for child in for_each_activity.activities:
@@ -800,7 +706,6 @@ def _detect_parent_child_orchestration(
         if not has_exec_child:
             continue
 
-        # Find upstream Lookup
         upstream_lookups: list[AdfActivity] = []
         for name in _get_upstream_names(for_each_activity):
             activity = by_name.get(name)
@@ -834,12 +739,7 @@ def _detect_file_existence_validation(
     definitions: AdfDefinitions,
     claimed: set[str],
 ) -> list[DetectedMotif]:
-    """Detects file-existence validation pattern.
-
-    Heuristic:
-    - GetMetadata checking ``exists`` field
-    - IfCondition downstream
-    """
+    """Detects file-existence validation pattern."""
     results: list[DetectedMotif] = []
     get_metadata_activities = _activities_of_type(activities, "GetMetadata", claimed)
 
@@ -849,7 +749,6 @@ def _detect_file_existence_validation(
         if not _has_keyword(type_properties_text, "exists"):
             continue
 
-        # Find downstream IfCondition
         downstream_if: AdfActivity | None = None
         for activity in activities:
             if activity.name in claimed:
@@ -885,19 +784,11 @@ def _detect_scd_type_2(
     definitions: AdfDefinitions,
     claimed: set[str],
 ) -> list[DetectedMotif]:
-    """Detects SCD Type 2 pattern.
-
-    Heuristic:
-    - Copy activity to staging
-    - ExecuteDataFlow downstream
-    - DataFlow type_properties mention SCD-like operations (Lookup + AlterRow + Union)
-      or the name/description hints at SCD
-    """
+    """Detects SCD Type 2 pattern."""
     results: list[DetectedMotif] = []
     dataflow_activities = _activities_of_type(activities, "ExecuteDataFlow", claimed)
 
     for dataflow_activity in dataflow_activities:
-        # Find upstream Copy
         upstream_copies: list[AdfActivity] = []
         for name in _get_upstream_names(dataflow_activity):
             activity = by_name.get(name)
@@ -911,7 +802,6 @@ def _detect_scd_type_2(
         type_properties_text = _type_props_text(dataflow_activity)
         dataflow_name = dataflow_activity.name.lower()
 
-        # Check for SCD hints
         scd_evidence = _has_keyword(
             type_properties_text + " " + dataflow_name,
             "scd",

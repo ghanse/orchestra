@@ -1,9 +1,4 @@
-"""Translates ADF AppendVariable activities to Databricks AppendVariableActivity IR.
-
-AppendVariable threads context by registering the variable mapping in the
-translation context, so that downstream ``@variables('name')`` references
-resolve to the correct task key.
-"""
+"""Translates ADF AppendVariable activities to Databricks AppendVariableActivity IR."""
 
 from __future__ import annotations
 
@@ -37,7 +32,6 @@ def translate(
     variable_name = type_properties.get("variableName", "")
     value_raw = type_properties.get("value", "")
 
-    # Resolve via unified expression resolver
     expr_result = resolve_expression(value_raw, context)
 
     required_parameters: dict[str, str] = {}
@@ -64,7 +58,6 @@ def translate(
         required_parameters=required_parameters,
     )
 
-    # Register variable -> task_key mapping in context
     new_context = context.with_variable(variable_name, base_kwargs["task_key"])
 
     return append_var_activity, new_context

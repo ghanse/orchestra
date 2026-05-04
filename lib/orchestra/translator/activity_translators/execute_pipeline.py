@@ -17,8 +17,6 @@ def translate(
 ) -> Activity:
     """Translates an ExecutePipeline activity.
 
-    Extracts the child pipeline reference name, parameters, and wait-on-completion flag.
-
     Args:
         activity: The ADF activity AST node.
         base_kwargs: Common fields (name, task_key, timeout, retries, depends_on, cluster).
@@ -30,7 +28,6 @@ def translate(
     """
     type_properties = activity.type_properties or {}
 
-    # Pipeline reference
     pipeline_ref = type_properties.get("pipeline", {})
     pipeline_name = (
         resolve_field(pipeline_ref.get("referenceName", ""), context)

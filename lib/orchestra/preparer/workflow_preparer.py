@@ -1,8 +1,4 @@
-"""Converts a translated Pipeline IR into a PreparedWorkflow.
-
-The PreparedWorkflow contains task dicts, generated notebooks, secret
-instructions, and setup tasks ready for the DAB bundle writer.
-"""
+"""Converts a translated Pipeline IR into a PreparedWorkflow."""
 
 from __future__ import annotations
 
@@ -65,16 +61,7 @@ class PreparedWorkflow:
 
 
 def run_if_from_adf_outcomes(outcomes: list[str | None]) -> str | None:
-    """Maps a set of ADF dependency-edge outcomes to a single DAB ``run_if``.
-
-    DAB models per-task gating with one ``run_if`` value on the downstream
-    task, so per-edge ADF outcomes must be reduced.  Any ``Completed`` /
-    ``Skipped`` produces ``ALL_DONE``; any ``Failed`` produces
-    ``AT_LEAST_ONE_FAILED``; all ``Succeeded`` (or empty) keeps the
-    default ``ALL_SUCCESS`` (returned as ``None``).
-
-    See https://docs.databricks.com/aws/en/jobs/run-if.
-    """
+    """Maps a set of ADF dependency-edge outcomes to a single DAB ``run_if``."""
     normalised = [outcome for outcome in outcomes if outcome]
     if not normalised:
         return None
@@ -121,12 +108,7 @@ def prepare_activity(
     scope: str = "",
     variable_task_keys: dict[str, str] | None = None,
 ) -> PreparedActivity:
-    """Dispatches to the appropriate activity preparer based on activity type.
-
-    Raises ``ValueError`` if no preparer is registered for the activity type.
-    ``PlaceholderActivity`` and ``UnsupportedActivity`` get a stub notebook.
-    """
-    # Lazy import: every activity preparer imports from this module.
+    """Dispatches to the appropriate activity preparer based on activity type."""
     from orchestra.preparer.activity_preparers import (
         append_variable,
         copy,
@@ -225,16 +207,7 @@ def _prepare_placeholder(activity: Activity) -> PreparedActivity:
 
 @dataclass(frozen=True, slots=True)
 class PreparedArtifacts:
-    """Immutable accumulator for the four artifact lists a workflow collects.
-
-    ``prepare_workflow`` and the control-flow preparers (``IfCondition``,
-    ``Switch``) walk a sequence of child :class:`PreparedActivity`
-    results and need to fold the same four collections (notebooks,
-    secrets, setup tasks, inner workflows) up into the outer scope.
-    Storing them in a frozen dataclass with tuple fields keeps the
-    accumulation purely functional: each merge returns a new
-    :class:`PreparedArtifacts` rather than mutating shared lists.
-    """
+    """Immutable accumulator for the four artifact lists a workflow collects."""
 
     notebooks: tuple[DabNotebook, ...] = ()
     secrets: tuple[SecretInstruction, ...] = ()
@@ -246,17 +219,7 @@ def merge_prepared_artifacts(
     artifacts: PreparedArtifacts,
     prepared: PreparedActivity,
 ) -> PreparedArtifacts:
-    """Return a new :class:`PreparedArtifacts` extended with *prepared*'s artifacts.
-
-    Treats *artifacts* as immutable -- the input is never mutated; the
-    returned value is a fresh instance with each of the four tuple
-    fields concatenated with the corresponding list from *prepared*.
-
-    ``prepared.task`` and ``prepared.extra_tasks`` are intentionally
-    excluded because different scopes wire them up differently (top-level
-    tasks, branch bodies, ForEach inner tasks); only the cross-cutting
-    "fold up" collections live here.
-    """
+    """Return a new :class:`PreparedArtifacts` extended with *prepared*'s artifacts."""
     return PreparedArtifacts(
         notebooks=artifacts.notebooks + tuple(prepared.notebooks),
         secrets=artifacts.secrets + tuple(prepared.secrets),

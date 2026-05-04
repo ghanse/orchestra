@@ -14,12 +14,7 @@ if TYPE_CHECKING:
 
 
 def prepare(activity: SetVariableActivity, *, scope: str = "") -> PreparedActivity:
-    """Converts a SetVariableActivity into a notebook_task that sets a task value.
-
-    Literal/DAB-ref values flow through ``base_parameters``; notebook-code
-    values are embedded in the body but their widget references still need
-    threading through ``base_parameters`` so DAB can supply the values.
-    """
+    """Converts a SetVariableActivity into a notebook_task that sets a task value."""
     base_parameters: dict[str, str] = {"variable_name": activity.variable_name}
     if activity.value_kind in ("literal", "dab_ref"):
         base_parameters["value"] = activity.variable_value

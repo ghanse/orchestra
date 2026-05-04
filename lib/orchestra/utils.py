@@ -1,9 +1,4 @@
-"""Shared utilities for the orchestra translation pipeline.
-
-Ported from wkmigrate with modifications.  Covers common patterns such as
-case conversion, task-key normalisation, timeout parsing, and retry-policy
-extraction.
-"""
+"""Shared utilities for the orchestra translation pipeline."""
 
 from __future__ import annotations
 
@@ -28,9 +23,6 @@ _CAMEL_RE_2 = re.compile(r"([a-z0-9])([A-Z])")
 def camel_to_snake(name: str) -> str:
     """Converts a camelCase or PascalCase string to snake_case.
 
-    Used when loading ADF definitions that use camelCase (e.g. REST/portal
-    export) so downstream code, which expects snake_case keys, works unchanged.
-
     Args:
         name: Identifier in camelCase or PascalCase.
 
@@ -43,9 +35,6 @@ def camel_to_snake(name: str) -> str:
 
 def recursive_camel_to_snake(obj: Any) -> Any:
     """Recursively convert all dict keys from camelCase to snake_case.
-
-    Leaves list order and non-dict values unchanged.  Creates new dicts/lists
-    (no in-place mutation).
 
     Args:
         obj: Nested structure of dicts, lists, and primitives (e.g. ADF JSON).
@@ -70,9 +59,6 @@ _TASK_KEY_RE = re.compile(r"[^a-z0-9_]")
 def normalize_task_key(name: str) -> str:
     """Sanitises a display name for use as a Databricks task key.
 
-    Replaces spaces and special characters with underscores, lowercases the
-    result, and collapses runs of underscores.
-
     Args:
         name: Original activity or pipeline name.
 
@@ -81,7 +67,6 @@ def normalize_task_key(name: str) -> str:
     """
     lowered = name.strip().lower()
     replaced = _TASK_KEY_RE.sub("_", lowered)
-    # Collapse consecutive underscores and strip leading/trailing ones.
     collapsed = re.sub(r"_+", "_", replaced).strip("_")
     return collapsed
 
@@ -95,15 +80,6 @@ _TIMEOUT_PATTERN = re.compile(r"^(?:(\d+)\.)?((\d{1,2}):(\d{2}):(\d{2}))$")
 
 def parse_timeout(timeout_str: str | None) -> int | None:
     """Parses an ADF timeout string into total seconds.
-
-    Supports ADF timeout formats including:
-    - ``"0.12:00:00"`` (12 hours)
-    - ``"1.00:00:00"`` (1 day)
-    - ``"00:10:00"`` (10 minutes, no day prefix)
-
-    Returns ``None`` when *timeout_str* is ``None``.  Returns
-    ``DEFAULT_TIMEOUT_SECONDS`` when the string cannot be parsed or
-    represents a non-positive duration.
 
     Args:
         timeout_str: Timeout string from the ADF activity policy, or ``None``.

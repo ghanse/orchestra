@@ -1,12 +1,4 @@
-"""Generates Python notebook content for activities that need custom notebooks.
-
-Each generator produces a self-contained Databricks notebook with:
-- A ``# Databricks notebook source`` header
-- Imports for required modules
-- ``dbutils.widgets.get()`` for runtime parameters
-- ``dbutils.secrets.get()`` for credentials
-- ``dbutils.jobs.taskValues.set(...)`` to forward results to downstream tasks
-"""
+"""Generates Python notebook content for activities that need custom notebooks."""
 
 from __future__ import annotations
 
@@ -279,16 +271,6 @@ def generate_delete_notebook(activity: DeleteActivity) -> str:
 def generate_set_variable_notebook(activity: SetVariableActivity) -> str:
     """Generates a notebook that sets a task value.
 
-    Databricks jobs use ``dbutils.jobs.taskValues.set()`` as the equivalent
-    of ADF pipeline variables, allowing downstream tasks to read values via
-    ``dbutils.jobs.taskValues.get()`` or ``{{tasks.<key>.values.<name>}}``.
-
-    When ``value_kind`` is ``"literal"`` or ``"dab_ref"`` the value is read
-    from the ``value`` widget parameter (passed via ``base_parameters``).
-
-    When ``value_kind`` is ``"notebook_code"`` the Python code is embedded
-    directly in the notebook body -- no executable code in parameters.
-
     Args:
         activity: The SetVariableActivity IR node.
 
@@ -325,7 +307,6 @@ def generate_set_variable_notebook(activity: SetVariableActivity) -> str:
         lines.append("")
         body = "\n".join(lines) + "\n"
     else:
-        # literal or dab_ref: read from widget parameter
         body = textwrap.dedent(f"""\
             import json
 
@@ -347,10 +328,6 @@ def generate_set_variable_notebook(activity: SetVariableActivity) -> str:
 
 def generate_wait_notebook(activity: WaitActivity) -> str:
     """Generates a notebook that sleeps for a specified duration.
-
-    ADF Wait activities pause pipeline execution for N seconds.  The
-    Databricks equivalent is a simple ``time.sleep()`` call inside a
-    generated notebook.
 
     Args:
         activity: The WaitActivity IR node.
@@ -379,14 +356,6 @@ def generate_wait_notebook(activity: WaitActivity) -> str:
 
 def generate_copy_notebook(activity: CopyActivity, *, scope: str = "") -> str:
     """Generates a notebook for copy operations (Auto Loader, COPY INTO, or JDBC).
-
-    The ingestion strategy is chosen based on the source type string:
-    - **File-based sources** (BlobSource, AzureBlobFSSource, etc.): Auto Loader
-      for streaming ingestion into a Delta table.
-    - **Database sources** (AzureSqlSource, SqlServerSource, etc.): JDBC read
-      into a Delta table.
-    - **REST sources**: HTTP-based ingestion.
-    - **Other**: Fallback Spark read/write with configurable format.
 
     Args:
         activity: The CopyActivity IR node.
@@ -448,10 +417,6 @@ def _strip_inline_imports(body: str, hoisted: list[str]) -> str:
 def generate_filter_notebook(activity: FilterActivity) -> str:
     """Generates a notebook that filters an array and stores the result as a task value.
 
-    The notebook reads the input array from a task value or parameter, applies
-    the filter condition, and writes the filtered result via
-    ``dbutils.jobs.taskValues.set()``.
-
     Args:
         activity: The FilterActivity IR node.
 
@@ -503,13 +468,6 @@ def generate_filter_notebook(activity: FilterActivity) -> str:
 
 def generate_append_variable_notebook(activity: AppendVariableActivity) -> str:
     """Generates a notebook that appends a value to an array task value.
-
-    Reads the current array from a task value (or initialises an empty list),
-    appends the new value, and writes the updated array back via
-    ``dbutils.jobs.taskValues.set()``.
-
-    When ``value_kind`` is ``"notebook_code"`` the Python code is embedded
-    directly -- no executable code in parameters.
 
     Args:
         activity: The AppendVariableActivity IR node.
@@ -632,12 +590,7 @@ _DAB_REF_TASK_VALUE_RE = re.compile(r"\{\{tasks\.([^.]+)\.values\.(\w+)\}\}")
 
 
 def _dab_ref_to_fstring_expr(ref: str) -> str:
-    """Converts a DAB ref (``{{job.name}}``) to a Python f-string expression.
-
-    The returned snippet is meant to be inlined in an f-string, so it always
-    evaluates to a string at notebook runtime via ``dbutils`` or
-    ``spark.conf.get``.
-    """
+    """Converts a DAB ref (``{{job.name}}``) to a Python f-string expression."""
     parameter_match = _DAB_REF_PARAMETER_RE.match(ref)
     if parameter_match:
         return "{dbutils.widgets.get('" + parameter_match.group(1) + "')}"
@@ -656,22 +609,6 @@ def _dab_ref_to_fstring_expr(ref: str) -> str:
 
 def _resolve_body(body: Any) -> str:
     """Resolves ADF expressions in a request body and return a Python expression.
-
-    The returned string must be valid Python that evaluates (at notebook
-    execution time) to a ``dict`` / ``list`` / ``str`` — whatever
-    ``requests.request(json=..., data=...)`` can send.  Callers are
-    responsible for typing the result (``isinstance(body, (dict, list))``).
-
-    Two resolver outcomes to be careful about:
-
-    1. ``resolve_expression`` returns ``kind="notebook_code"`` — the value is
-       already Python code that produces the right runtime value; embed
-       directly.
-    2. ``resolve_expression`` returns ``kind="literal"`` — the value is a
-       plain Python scalar.  Use ``json.dumps`` so string / number / bool
-       are all turned into valid Python source literals.  Using ``repr``
-       here is a trap: ``repr`` of a string containing Python source
-       produces a *string literal* of that source, not the source itself.
 
     Args:
         body: The raw body from the WebActivity IR.
@@ -706,13 +643,7 @@ def _resolve_string_body(body: str) -> str:
 
 
 def _resolve_dict_body(body: dict[str, Any]) -> str:
-    """Renders a dict-shaped WebActivity body as Python source.
-
-    Unwraps the ``{"type": "Expression", "value": "@..."}`` shape (the body
-    itself is an ADF expression).  Otherwise resolves each value -- when at
-    least one value resolves to a DAB ref or interpolation, the result is a
-    Python f-string-bearing dict literal so runtime values flow through.
-    """
+    """Renders a dict-shaped WebActivity body as Python source."""
     if body.get("type") == "Expression" and "value" in body:
         return _resolve_body(body["value"])
 
@@ -751,12 +682,7 @@ def _resolve_dict_value(value: Any, context: TranslationContext) -> tuple[Any, b
 def _resolve_expression_value(
     raw: Any, context: TranslationContext, *, fallback: Any
 ) -> tuple[Any, bool]:
-    """Resolves a string/dict expression to either an f-string or a literal.
-
-    Returns ``(value, needs_fstring)``.  ``dab_ref`` results are turned into
-    f-string fragments; ``literal`` results pass through; anything else
-    falls back to the supplied raw form.
-    """
+    """Resolves a string/dict expression to either an f-string or a literal."""
     result = resolve_expression(raw, context)
     if result is None:
         return fallback, False
@@ -769,9 +695,6 @@ def _resolve_expression_value(
 
 def _resolve_headers(headers: dict[str, str] | None) -> tuple[str, str]:
     """Resolves ADF expressions in HTTP header values.
-
-    Header values may be plain strings or ADF expression dicts like
-    ``{"type": "Expression", "value": "@concat('Bearer ', ...)"}``.
 
     Returns:
         A tuple of ``(headers_literal, preamble_code)``:
@@ -821,15 +744,6 @@ def _render_sink_write(
     indent: str = "",
 ) -> str:
     """Return the Python ``df.write.*`` expression for the activity's sink.
-
-    Honours ``sink_format`` and ``sink_resolved_path`` from the IR so that a
-    Copy with a CSV / Parquet / JSON sink writes that format to the resolved
-    path instead of always defaulting to a Delta ``saveAsTable``.
-
-    The fallback when no file-format sink is identifiable is still Delta
-    ``saveAsTable(target_table)`` — that preserves the existing behaviour for
-    sinks the translator can't classify (e.g. unknown ``sink_dataset_type``)
-    and matches the Databricks default for managed targets.
 
     Args:
         activity: The CopyActivity.  Reads ``sink_format``,
@@ -911,9 +825,6 @@ def _render_sink_write(
 
 def _infer_file_format(source_type: str | None, source_properties: dict | None) -> str:
     """Infer the file format from the source type string and source properties.
-
-    Checks the source_type string first (most reliable), then falls back to
-    format settings in source_properties.
 
     Args:
         source_type: The ADF source type string (e.g. ``"DelimitedTextSource"``).
@@ -1012,12 +923,7 @@ def _generate_autoloader_body(activity: CopyActivity) -> str:
 
 
 def _adf_timeout_to_seconds(value: Any) -> int | None:
-    """Parses ADF duration strings (e.g. ``"02:00:00"`` / ``"0.01:30:00"``) to seconds.
-
-    ADF timeout strings use ``[d.]HH:MM:SS`` format.  Return ``None`` when the
-    value is empty or can't be parsed so the caller can decide whether to
-    omit the option entirely.
-    """
+    """Parses ADF duration strings (e.g. ``"02:00:00"`` / ``"0.01:30:00"``) to seconds."""
     if not value:
         return None
     text = str(value).strip()
@@ -1040,13 +946,7 @@ def _adf_timeout_to_seconds(value: Any) -> int | None:
 
 
 def _generate_jdbc_body(activity: CopyActivity, *, scope: str = "") -> str:
-    """Generates JDBC ingestion body for database sources.
-
-    When the SQL query contains an ADF expression like
-    ``@concat('SELECT * FROM ', item().schema_name, '.', item().table_name)``,
-    the notebook is parameterized to accept an ``item`` widget (passed from
-    a ForEach task via ``{{input}}``) and build the query dynamically.
-    """
+    """Generates JDBC ingestion body for database sources."""
     scope = scope or activity.task_key
     source_properties = activity.source_properties or {}
     sink_properties = activity.sink_properties or {}
@@ -1059,7 +959,6 @@ def _generate_jdbc_body(activity: CopyActivity, *, scope: str = "") -> str:
         f'\n            .option("queryTimeout", "{query_timeout_seconds}")' if query_timeout_seconds else ""
     )
 
-    # Detect ADF expression dicts that weren't resolved during translation
     query = ""
     is_expression = False
     if isinstance(query_raw, dict) and query_raw.get("type") == "Expression":

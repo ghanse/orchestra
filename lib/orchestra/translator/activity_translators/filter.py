@@ -17,9 +17,6 @@ def translate(
 ) -> Activity:
     """Translates a Filter activity.
 
-    Extracts the items expression and condition expression from ADF
-    typeProperties.
-
     Args:
         activity: The ADF activity AST node.
         base_kwargs: Common fields (name, task_key, timeout, retries, depends_on, cluster).
@@ -34,7 +31,6 @@ def translate(
     items_raw = type_properties.get("items", {})
     condition_raw = type_properties.get("condition", {})
 
-    # Resolve items expression via unified resolver
     items_result = resolve_expression(items_raw, context)
     if items_result is not None:
         items_expression = items_result.value
@@ -42,7 +38,6 @@ def translate(
         items_value = items_raw.get("value", "") if isinstance(items_raw, dict) else str(items_raw)
         items_expression = items_value
 
-    # Resolve condition expression via unified resolver
     condition_result = resolve_expression(condition_raw, context)
     if condition_result is not None:
         condition_expression = condition_result.value

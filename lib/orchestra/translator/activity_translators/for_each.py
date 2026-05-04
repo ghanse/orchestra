@@ -1,13 +1,4 @@
-"""Translates ADF ForEach activities to Databricks ForEachActivity IR.
-
-ForEach is a control-flow container that threads context through inner
-activity translation.  It returns a ``(Activity, TranslationContext)`` tuple
-so the engine can propagate any context changes from inner activities.
-
-When the ForEach body contains multiple activities, the bundler creates a
-separate inner job (``{task_key}_inner_tasks``) with the full task graph
-and uses ``for_each_task`` with ``run_job_task`` to call it.
-"""
+"""Translates ADF ForEach activities to Databricks ForEachActivity IR."""
 
 from __future__ import annotations
 
@@ -29,10 +20,6 @@ def translate(
 ) -> tuple[Activity, TranslationContext]:
     """Translates a ForEach activity with recursive inner translation.
 
-    All inner activities are preserved in ``inner_activities`` so the
-    bundler can emit them as a proper Databricks task graph (either inline
-    for a single activity or as an inner job for multiple).
-
     Args:
         activity: The ADF activity AST node.
         base_kwargs: Common fields (name, task_key, timeout, retries, depends_on, cluster).
@@ -47,7 +34,6 @@ def translate(
     type_properties = activity.type_properties or {}
 
     items_raw = type_properties.get("items")
-    # Resolve the items expression via the unified resolver
     expr_result = resolve_expression(items_raw, context) if items_raw is not None else None
     if expr_result is not None and expr_result.kind in ("dab_ref", "literal"):
         items_expression = expr_result.value
@@ -69,7 +55,6 @@ def translate(
         else default_batch
     )
 
-    # Translate inner activities — preserve all of them
     inner_activities: list[Activity] = []
     child_adf_activities = activity.activities or []
 

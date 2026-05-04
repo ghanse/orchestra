@@ -37,9 +37,6 @@ def _python_placeholder(original_path: str, activity_name: str) -> str:
 def prepare(activity: SparkPythonActivity, *, scope: str = "") -> PreparedActivity:
     """Converts a SparkPythonActivity into a DAB spark_python_task definition.
 
-    Rewrites the python_file to a bundle-relative path and creates a
-    placeholder script with download instructions.
-
     Args:
         activity: The translated Spark Python activity from the IR.
 

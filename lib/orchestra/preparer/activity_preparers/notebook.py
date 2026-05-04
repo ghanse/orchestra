@@ -16,11 +16,7 @@ if TYPE_CHECKING:
 
 
 def _notebook_placeholder(original_path: str, activity_name: str, filename: str) -> str:
-    """Return placeholder notebook content with manual-export instructions.
-
-    Used when the source notebook can't be downloaded automatically and the
-    user has to export it themselves with ``databricks workspace export``.
-    """
+    """Return placeholder notebook content with manual-export instructions."""
     return (
         "# Databricks notebook source\n"
         "# MAGIC %md\n"
@@ -48,13 +44,7 @@ def _resolve_base_parameters(
     *,
     variable_task_keys: dict[str, str] | None = None,
 ) -> dict[str, str]:
-    """Resolves ADF expressions in ``base_parameters`` to DAB-compatible values.
-
-    Only ``literal`` and ``dab_ref`` results are kept -- ``notebook_code``
-    results would emit Python source into a base_parameter (which DAB cannot
-    evaluate).  Unresolvable values fall back to their string form for
-    manual review.
-    """
+    """Resolves ADF expressions in ``base_parameters`` to DAB-compatible values."""
     context = TranslationContext()
     resolved: dict[str, str] = {}
     for key, value in params.items():
@@ -91,13 +81,7 @@ def prepare(
     scope: str = "",
     variable_task_keys: dict[str, str] | None = None,
 ) -> PreparedActivity:
-    """Converts a NotebookActivity into a DAB notebook_task definition.
-
-    An absolute workspace path (``/Shared/...``) points at an existing
-    notebook -- the task is bound to that path directly so the original
-    stays the source of truth.  A relative path triggers a synthesised
-    placeholder under ``src/notebooks/`` so the user can fill it in.
-    """
+    """Converts a NotebookActivity into a DAB notebook_task definition."""
     resolved_path = _resolve_notebook_path(activity.notebook_path)
     task = build_common_task_fields(activity)
 

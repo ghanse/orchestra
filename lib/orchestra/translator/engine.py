@@ -1,19 +1,4 @@
-"""Core translation engine for ADF-to-Databricks pipeline conversion.
-
-Translates an :class:`AdfPipeline` AST into a :class:`Pipeline` IR by visiting
-activities in topological (dependency-first) order and dispatching each to the
-appropriate deterministic translator or recording it as an agentic gap.
-
-The engine follows a registry-dispatch pattern:
-
-1. **Topological sort** — activities are visited in dependency-first order so
-   that upstream outputs are available when translating downstream activities.
-2. **Registry dispatch** — leaf activity types are looked up in
-   ``TRANSLATOR_REGISTRY``.  Control-flow types (ForEach, IfCondition,
-   SetVariable) are handled inline because they thread translation context.
-3. **Gap recording** — unknown or agentic types produce a
-   :class:`PlaceholderActivity` and an :class:`AgenticGap` entry.
-"""
+"""Core translation engine for ADF-to-Databricks pipeline conversion."""
 
 from __future__ import annotations
 
@@ -102,9 +87,6 @@ TRANSLATOR_REGISTRY: dict[str, Callable[..., Activity]] = {
 def translate_pipeline(pipeline: AdfPipeline, definitions: AdfDefinitions) -> TranslationReport:
     """Translates an ADF pipeline into a Databricks pipeline IR.
 
-    Visits all activities in topological order, dispatching each to its
-    deterministic translator or recording an agentic gap.
-
     Args:
         pipeline: Parsed ADF pipeline AST.
         definitions: Full ADF definitions for cross-referencing datasets,
@@ -123,7 +105,6 @@ def translate_pipeline(pipeline: AdfPipeline, definitions: AdfDefinitions) -> Tr
     gaps: list[AgenticGap] = []
     warnings: list[str] = []
 
-    # Topological visit
     sorted_activities = _topological_visit(pipeline.activities)
     translated_activities: list[Activity] = []
     deterministic_count = 0
@@ -134,7 +115,6 @@ def translate_pipeline(pipeline: AdfPipeline, definitions: AdfDefinitions) -> Tr
         activity_ir, context = _dispatch_activity(adf_activity, context, definitions)
         translated_activities.append(activity_ir)
 
-        # Track counts and gaps
         strategy, skill = classify_activity(adf_activity.type)
         if strategy is TranslationStrategy.DETERMINISTIC:
             deterministic_count += 1
@@ -160,7 +140,6 @@ def translate_pipeline(pipeline: AdfPipeline, definitions: AdfDefinitions) -> Tr
             )
             warnings.append(f"Activity '{adf_activity.name}' (type={adf_activity.type}) has no translation path.")
 
-    # Build parameters dict from pipeline definition
     parameters: dict[str, Any] = {}
     if pipeline.parameters:
         for param_name, param_def in pipeline.parameters.items():
@@ -204,11 +183,6 @@ def _dispatch_activity(
     definitions: AdfDefinitions,
 ) -> tuple[Activity, TranslationContext]:
     """Dispatch a single activity to its translator.
-
-    Control-flow types (ForEach, IfCondition, SetVariable) are handled inline
-    because they thread context.  Leaf types are looked up in
-    ``TRANSLATOR_REGISTRY``.  Unknown or agentic types produce a
-    :class:`PlaceholderActivity`.
 
     Args:
         activity: ADF activity AST node.
@@ -299,9 +273,6 @@ def _translate_activity_list(
 ) -> tuple[list[Activity], TranslationContext]:
     """Translates a list of ADF activities, threading context through each.
 
-    Used as a callback by control-flow translators (ForEach, IfCondition) to
-    recursively translate their inner activities.
-
     Args:
         activities: List of ADF activity AST nodes.
         context: Current translation context.
@@ -323,10 +294,6 @@ def _translate_activity_list(
 def _topological_visit(activities: list[AdfActivity]) -> list[AdfActivity]:
     """Return activities in dependency-first (topological) order.
 
-    Uses Kahn's algorithm.  Activities with no dependencies come first.
-    If a cycle is detected, the remaining activities are appended in their
-    original order with a warning.
-
     Args:
         activities: Flat list of ADF activities at one nesting level.
 
@@ -336,7 +303,6 @@ def _topological_visit(activities: list[AdfActivity]) -> list[AdfActivity]:
     if not activities:
         return []
 
-    # Build adjacency structures
     name_to_activity: dict[str, AdfActivity] = {act.name: act for act in activities}
     in_degree: dict[str, int] = {act.name: 0 for act in activities}
     dependents: dict[str, list[str]] = defaultdict(list)
@@ -349,12 +315,10 @@ def _topological_visit(activities: list[AdfActivity]) -> list[AdfActivity]:
                     in_degree[activity.name] += 1
                     dependents[dependency_name].append(activity.name)
 
-    # Kahn's algorithm
     queue: list[str] = [name for name, degree in in_degree.items() if degree == 0]
     result: list[AdfActivity] = []
 
     while queue:
-        # Sort for deterministic output
         queue.sort()
         current = queue.pop(0)
         result.append(name_to_activity[current])
@@ -363,7 +327,6 @@ def _topological_visit(activities: list[AdfActivity]) -> list[AdfActivity]:
             if in_degree[dependent] == 0:
                 queue.append(dependent)
 
-    # Handle cycles — append remaining in original order
     if len(result) < len(activities):
         visited = {act.name for act in result}
         for activity in activities:
@@ -390,22 +353,18 @@ def _build_base_kwargs(activity: AdfActivity, definitions: AdfDefinitions) -> di
     """
     task_key = _sanitize_task_key(activity.name)
 
-    # Timeout
     timeout_seconds: int | None = None
     if activity.policy and activity.policy.timeout:
         timeout_seconds = _parse_adf_timeout(activity.policy.timeout)
 
-    # Retries
     max_retries: int | None = None
     if activity.policy and activity.policy.retry is not None:
         max_retries = activity.policy.retry
 
-    # Retry interval
     min_retry_interval_millis: int | None = None
     if activity.policy and activity.policy.retry_interval_in_seconds is not None:
         min_retry_interval_millis = activity.policy.retry_interval_in_seconds * 1000
 
-    # Dependencies
     depends_on: list[Dependency] | None = None
     if activity.depends_on:
         depends_on = []
@@ -418,7 +377,6 @@ def _build_base_kwargs(activity: AdfActivity, definitions: AdfDefinitions) -> di
                 )
             )
 
-    # Cluster config from linked service
     cluster: dict[str, Any] | None = None
     if activity.linked_service_name:
         linked_service_name = activity.linked_service_name.reference_name
@@ -441,19 +399,14 @@ def _build_base_kwargs(activity: AdfActivity, definitions: AdfDefinitions) -> di
 def _sanitize_task_key(name: str) -> str:
     """Converts an ADF activity name to a valid Databricks task key.
 
-    Task keys must be alphanumeric plus underscores and hyphens.
-
     Args:
         name: ADF activity name.
 
     Returns:
         Sanitised task key string.
     """
-    # Replace spaces and special characters with underscores
     key = re.sub(r"[^a-zA-Z0-9_-]", "_", name)
-    # Collapse multiple underscores
     key = re.sub(r"_+", "_", key)
-    # Strip leading/trailing underscores
     key = key.strip("_")
     return key or "unnamed"
 
@@ -480,13 +433,6 @@ def _parse_adf_timeout(timeout_str: str) -> int | None:
 def _extract_cluster_config(ls_properties: dict[str, Any]) -> dict[str, Any] | None:
     """Extracts Databricks cluster configuration from a linked-service properties dict.
 
-    Reads the AzureDatabricks linked service's ``newCluster*`` fields.  Two
-    JSON shapes show up in practice: classic ARM exports nest the cluster
-    config under ``typeProperties``, while ``az datafactory linked-service
-    show`` returns the same fields flat at the top level of ``properties``.
-    We try the nested form first and fall back to the flat one so the
-    translator catches the cluster spec from both.
-
     Args:
         ls_properties: Full properties bag from the linked service JSON.
 
@@ -508,7 +454,6 @@ def _extract_cluster_config(ls_properties: dict[str, Any]) -> dict[str, Any] | N
     new_cluster = fields.get("newClusterVersion") or fields.get("newClusterSparkVersion")
     if new_cluster:
         config["spark_version"] = new_cluster
-        # newClusterNumOfWorker is sometimes a string from az exports.
         num_workers_raw = fields.get("newClusterNumOfWorker", 1)
         try:
             config["num_workers"] = int(num_workers_raw)
@@ -543,9 +488,6 @@ def _pipeline_to_dict(pipeline: Pipeline) -> dict[str, Any]:
 def _activity_to_dict(task: Activity) -> dict[str, Any]:
     """Serialise a single Activity IR node to a JSON-friendly dictionary.
 
-    Handles common fields and delegates type-specific fields to
-    ``_activity_extra_fields``.
-
     Args:
         task: Any Activity IR node.
 
@@ -572,7 +514,6 @@ def _activity_to_dict(task: Activity) -> dict[str, Any]:
     if task.cluster:
         task_dict["cluster"] = task.cluster
 
-    # Type-specific fields
     extra = _activity_extra_fields(task)
     task_dict.update(extra)
     return task_dict
@@ -717,11 +658,6 @@ def _activity_extra_fields(activity: Activity) -> dict[str, Any]:
 def _activity_to_debug_dict(activity: Activity) -> dict[str, Any]:
     """Serialise an Activity to a full debug dict showing all dataclass fields.
 
-    Unlike ``_activity_to_dict`` which selectively emits fields, this dumps
-    every field from every IR subclass so the complete translation state is
-    visible.  Recursive structures (inner_activities, if_true/false, cases)
-    are fully expanded.
-
     Args:
         activity: Any Activity IR node.
 
@@ -747,8 +683,6 @@ def _activity_to_debug_dict(activity: Activity) -> dict[str, Any]:
 
 def _dataclass_to_debug_dict(obj: Any) -> dict[str, Any]:
     """Serialise a generic dataclass (SwitchCase, Dependency, etc.) to a debug dict.
-
-    Recursively expands any Activity fields.
 
     Args:
         obj: A dataclass instance.
@@ -834,7 +768,6 @@ if __name__ == "__main__":
         total_agentic += report.agentic_count
         total_unsupported += report.unsupported_count
 
-        # Write pipeline IR
         pipeline_file = output_dir / f"{_sanitize_task_key(pipeline.name)}.json"
         pipeline_dict = _pipeline_to_dict(report.pipeline)
         pipeline_file.write_text(json.dumps(pipeline_dict, indent=2, default=str), encoding="utf-8")
@@ -847,7 +780,6 @@ if __name__ == "__main__":
             debug_file.write_text(json.dumps(debug_dict, indent=2, default=str), encoding="utf-8")
             logger.info("Wrote debug IR to %s", debug_file)
 
-        # Collect gaps
         for gap in report.gaps:
             all_gaps.append(asdict(gap))
 
@@ -855,13 +787,11 @@ if __name__ == "__main__":
             for warning in report.warnings:
                 logger.warning(warning)
 
-    # Write gaps
     if all_gaps:
         gaps_file = output_dir / "gaps.json"
         gaps_file.write_text(json.dumps(all_gaps, indent=2, default=str), encoding="utf-8")
         logger.info("Wrote %d gap(s) to %s", len(all_gaps), gaps_file)
 
-    # Summary
     total = total_deterministic + total_agentic + total_unsupported
     print("\nTranslation Summary")
     print("===================")

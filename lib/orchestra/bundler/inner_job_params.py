@@ -1,17 +1,4 @@
-"""Collects and normalize parameters for ForEach inner jobs.
-
-Scans task dicts and their ``base_parameters`` for ADF expression references
-(``@item()``, ``@pipeline().parameters.X``, ``@variables('Y')``) and:
-
-1. Collects them into a set of parameter declarations the inner job must
-   receive (e.g. ``item``, ``environment``, ``quality_threshold``).
-2. Normalises raw ADF expression dicts in ``base_parameters`` and
-   ``condition_task`` operands to ``{{job.parameters.*}}`` dynamic value
-   references that Databricks understands.
-3. Resolves simple ADF functions like ``@concat(...)`` to plain strings.
-4. Builds the ``job_parameters`` pass-through map so the parent
-   ``for_each_task`` forwards the right values into the inner job.
-"""
+"""Collects and normalize parameters for ForEach inner jobs."""
 
 from __future__ import annotations
 
@@ -102,13 +89,6 @@ def collect_inner_job_params(
 def normalize_inner_task_params(tasks: list[dict[str, Any]]) -> None:
     """Normalise ADF expressions in task dicts for an inner job context.
 
-    Rewrites raw ADF expression dicts in ``base_parameters`` and
-    ``condition_task`` operands to ``{{job.parameters.*}}`` dynamic value
-    references.  Resolves simple ``@concat(...)`` expressions to string
-    concatenation.
-
-    Mutates the task dicts in place.
-
     Args:
         tasks: The inner job's task dicts.
     """
@@ -141,9 +121,6 @@ def _scan_tasks(
     item_field_names: set[str] | None = None,
 ) -> None:
     """Recursively scan task dicts for ADF parameter references.
-
-    Examines ``base_parameters``, ``job_parameters``, ``condition_task``
-    operands, and nested branches.
 
     Args:
         tasks: List of task dicts to scan.
@@ -180,10 +157,6 @@ def _scan_ir_tasks(
     item_field_names: set[str] | None = None,
 ) -> None:
     """Scans raw IR task dicts for parameter references in all fields.
-
-    Catches references in fields that ``_scan_tasks`` can't see because they
-    are consumed during DAB conversion -- e.g. WebActivity ``url`` and ``body``,
-    NotebookActivity ``base_parameters``, and nested control-flow structures.
 
     Args:
         ir_tasks: Raw serialised IR task dicts.
@@ -263,13 +236,6 @@ def _extract_refs(
 def _normalize_value(value: Any) -> str:
     """Normalize a single parameter value from ADF expression to DAB reference.
 
-    Handles:
-    - ``{type: Expression, value: ...}`` dicts -- unwrapped and processed
-    - ``@item().field`` -> ``{{job.parameters.item}}``
-    - ``@pipeline().parameters.X`` -> ``{{job.parameters.X}}``
-    - ``@variables('Y')`` -> ``{{job.parameters.Y}}``
-    - ``@concat('a', ref, 'b')`` -> resolved to a plain string with embedded refs
-
     Args:
         value: A string or ``{type: Expression, value: ...}`` dict.
 
@@ -302,9 +268,6 @@ def _normalize_value(value: Any) -> str:
 def _replace_refs(text: str) -> str:
     """Replaces ADF references with {{job.parameters.*}} or {{job.*}} refs.
 
-    Order matters: field-access patterns must fire before bare patterns
-    to avoid partial matches.
-
     Args:
         text: Expression text potentially containing ADF references.
 
@@ -328,10 +291,6 @@ def _replace_refs(text: str) -> str:
 
 def _resolve_concat(text: str) -> str:
     """Resolves ``@concat(arg1, arg2, ...)`` to a plain concatenated string.
-
-    Only resolves when all arguments are string literals or already-resolved
-    ``{{...}}`` references.  Returns the original text if the concat is too
-    complex.
 
     Args:
         text: Expression that may be a @concat(...) call.

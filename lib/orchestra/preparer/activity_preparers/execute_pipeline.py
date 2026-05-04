@@ -25,11 +25,9 @@ def _resolve_param_value(value: str) -> str:
     s = str(value)
     context = TranslationContext()
 
-    # Try @{...} interpolation
     if "@{" in s:
         return resolve_interpolated_string(s, context)
 
-    # Try @expr style
     if s.startswith("@"):
         result = resolve_expression(s, context)
         if result is not None and result.kind in ("dab_ref", "literal"):
@@ -40,10 +38,6 @@ def _resolve_param_value(value: str) -> str:
 
 def prepare(activity: ExecutePipelineActivity, *, scope: str = "") -> PreparedActivity:
     """Converts an ExecutePipelineActivity into a DAB run_job_task definition.
-
-    The referenced pipeline is expected to exist as another job in the same
-    bundle.  The ``run_job_task`` uses a resource reference so that DAB
-    resolves the job ID at deploy time.
 
     Args:
         activity: The translated execute-pipeline activity from the IR.

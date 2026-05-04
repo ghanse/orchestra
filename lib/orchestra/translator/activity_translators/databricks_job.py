@@ -17,8 +17,6 @@ def translate(
 ) -> Activity:
     """Translates a DatabricksJob activity.
 
-    Extracts the job name or job ID from the activity type properties.
-
     Args:
         activity: The ADF activity AST node.
         base_kwargs: Common fields (name, task_key, timeout, retries, depends_on, cluster).

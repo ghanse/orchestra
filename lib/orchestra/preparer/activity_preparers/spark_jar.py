@@ -42,9 +42,6 @@ def _jar_placeholder(libraries: list[dict] | None, activity_name: str) -> str:
 def prepare(activity: SparkJarActivity, *, scope: str = "") -> PreparedActivity:
     """Converts a SparkJarActivity into a DAB spark_jar_task definition.
 
-    Rewrites JAR library paths to bundle-relative paths and creates
-    placeholder files with download instructions.
-
     Args:
         activity: The translated Spark JAR activity from the IR.
 
@@ -63,7 +60,6 @@ def prepare(activity: SparkJarActivity, *, scope: str = "") -> PreparedActivity:
                 if isinstance(path, str) and ("dbfs:" in path or "/" in path):
                     filename = path.rsplit("/", 1)[-1] if "/" in path else path
                     rewritten_lib[key] = f"../lib/{filename}"
-                    # Try to download the JAR from DBFS
                     if key == "jar":
                         jar_content = download_dbfs_file(path)
                         if jar_content is not None:
@@ -78,7 +74,6 @@ def prepare(activity: SparkJarActivity, *, scope: str = "") -> PreparedActivity:
                     rewritten_lib[key] = path
             rewritten_libraries.append(rewritten_lib)
 
-        # Create a placeholder readme if we didn't download all JARs
         if not downloaded_any:
             placeholder_content = _jar_placeholder(activity.libraries, activity.name)
             notebooks.append(

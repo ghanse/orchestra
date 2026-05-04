@@ -11,9 +11,6 @@ from orchestra.parser.expression_parser import resolve_expression, resolve_inter
 def resolve_field(value: Any, context: TranslationContext) -> str:
     """Resolves a field value that may contain an ADF expression.
 
-    Handles: ``{"type": "Expression", "value": "@..."}`` dicts, ``@expr``
-    strings, ``@{...}`` interpolation, and plain literals.
-
     Args:
         value: The raw field value from ADF type properties.
         context: Translation context for variable resolution.

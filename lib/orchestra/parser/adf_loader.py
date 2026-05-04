@@ -1,18 +1,4 @@
-"""Loads ADF JSON files from a directory structure and produce typed AST objects.
-
-Supports two input formats:
-
-1. **Directory structure** — subdirectories for ``pipelines/``, ``datasets/``,
-   ``linked_services/``, and ``triggers/`` (with common name variants).
-2. **ARM template** — a single ``*.json`` file containing embedded ADF resource
-   definitions that are normalised before parsing.
-
-The public API exposes three entry points:
-
-* :func:`load_adf_definitions` — parse all JSON files into :class:`AdfDefinitions`.
-* :func:`classify_activity` — classify a single activity type.
-* :func:`build_inventory` — classify every activity in a set of definitions.
-"""
+"""Loads ADF JSON files from a directory structure and produce typed AST objects."""
 
 from __future__ import annotations
 
@@ -100,17 +86,14 @@ def load_adf_definitions(source_dir: Path) -> AdfDefinitions:
     """
     source_dir = Path(source_dir).resolve()
 
-    # Single ARM-template file ---------------------------------------------------
     if source_dir.is_file() and source_dir.suffix == ".json":
         return _load_arm_template(source_dir)
 
-    # Directory tree -------------------------------------------------------------
     pipelines: list[AdfPipeline] = []
     datasets: dict[str, AdfDataset] = {}
     linked_services: dict[str, AdfLinkedService] = {}
     triggers: list[AdfTrigger] = []
 
-    # Pipelines
     pipeline_dir = _find_json_dir(source_dir, "pipelines", "pipeline")
     if pipeline_dir is not None:
         for json_file in sorted(pipeline_dir.glob("*.json")):
@@ -120,7 +103,6 @@ def load_adf_definitions(source_dir: Path) -> AdfDefinitions:
             except Exception:
                 logger.exception("Failed to parse pipeline file %s", json_file)
 
-    # Datasets
     dataset_dir = _find_json_dir(source_dir, "datasets", "dataset")
     if dataset_dir is not None:
         for json_file in sorted(dataset_dir.glob("*.json")):
@@ -141,7 +123,6 @@ def load_adf_definitions(source_dir: Path) -> AdfDefinitions:
             except Exception:
                 logger.exception("Failed to parse linked-service file %s", json_file)
 
-    # Triggers
     trigger_dir = _find_json_dir(source_dir, "triggers", "trigger")
     if trigger_dir is not None:
         for json_file in sorted(trigger_dir.glob("*.json")):
@@ -297,14 +278,6 @@ def _parse_pipeline_json(data: dict[str, Any], *, fallback_name: str = "unknown"
 def parse_activity(data: dict[str, Any]) -> AdfActivity:
     """Parses an activity dict into a typed :class:`AdfActivity` AST node.
 
-    Supports two ADF JSON formats:
-
-    1. **Standard format** — type-specific fields nested under ``typeProperties``.
-    2. **Flattened format** — type-specific fields at the activity top level
-       (produced by some ADF REST API serialisations).  Detected when
-       ``typeProperties`` is absent; remaining non-common keys are collected
-       into ``type_properties``.
-
     Args:
         data: Raw activity JSON dictionary.
 
@@ -314,7 +287,6 @@ def parse_activity(data: dict[str, Any]) -> AdfActivity:
     name = data.get("name", "unnamed")
     adf_type = data.get("type", "Unknown")
 
-    # Dependencies
     depends_on: list[AdfDependency] | None = None
     raw_deps = data.get("dependsOn")
     if raw_deps:
@@ -326,7 +298,6 @@ def parse_activity(data: dict[str, Any]) -> AdfActivity:
             for dep in raw_deps
         ]
 
-    # Policy
     policy: AdfPolicy | None = None
     raw_policy = data.get("policy")
     if raw_policy:
@@ -344,11 +315,9 @@ def parse_activity(data: dict[str, Any]) -> AdfActivity:
     if type_properties is None:
         type_properties = _collect_type_properties(data)
 
-    # Inputs / outputs
     inputs = _parse_dataset_refs(data.get("inputs"))
     outputs = _parse_dataset_refs(data.get("outputs"))
 
-    # Linked service
     linked_service_name: AdfLinkedServiceReference | None = None
     raw_ls = data.get("linkedServiceName")
     if raw_ls and isinstance(raw_ls, dict):
@@ -357,7 +326,6 @@ def parse_activity(data: dict[str, Any]) -> AdfActivity:
             type=raw_ls.get("type", "LinkedServiceReference"),
         )
 
-    # Control-flow children
     if_true_activities: list[AdfActivity] | None = None
     if_false_activities: list[AdfActivity] | None = None
     child_activities: list[AdfActivity] | None = None
@@ -388,7 +356,6 @@ def parse_activity(data: dict[str, Any]) -> AdfActivity:
     )
 
 
-# Keys that belong to the common Activity envelope, NOT to typeProperties.
 _COMMON_ACTIVITY_KEYS: frozenset[str] = frozenset(
     {
         "name",
@@ -410,10 +377,6 @@ _COMMON_ACTIVITY_KEYS: frozenset[str] = frozenset(
 
 def _collect_type_properties(data: dict[str, Any]) -> dict[str, Any] | None:
     """Collects type-specific fields from a flattened activity dict.
-
-    When the ADF JSON omits the ``typeProperties`` wrapper, activity-specific
-    fields sit alongside common envelope keys.  This function returns the
-    non-common keys as a synthesised ``typeProperties`` dict.
 
     Args:
         data: Raw activity JSON dictionary.
@@ -519,10 +482,6 @@ def _parse_trigger_json(data: dict[str, Any], *, fallback_name: str = "unknown")
 def _normalize_arm(data: dict[str, Any]) -> dict[str, Any]:
     """If *data* is an ARM template wrapper, unwrap to the inner resource definition.
 
-    ARM templates wrap ADF resources in ``resources[].properties``.  This
-    function detects the ``$schema`` key and extracts the first resource whose
-    type ends with a known ADF resource suffix.
-
     Args:
         data: Possibly ARM-wrapped JSON dictionary.
 
@@ -536,15 +495,12 @@ def _normalize_arm(data: dict[str, Any]) -> dict[str, Any]:
     if not resources:
         return data
 
-    # Look for ADF resource types
     adf_suffixes = ("/pipelines", "/datasets", "/linkedServices", "/triggers")
     for resource in resources:
         rtype = resource.get("type", "")
         if any(rtype.endswith(suffix) for suffix in adf_suffixes):
-            # Return a dict with name + properties so callers find both
             result: dict[str, Any] = {}
             arm_name = resource.get("name", "")
-            # ARM names are often expressions like "[concat(factoryName, '/PipelineName')]"
             if "/" in arm_name:
                 result["name"] = arm_name.rsplit("/", 1)[-1].strip("'])")
             else:
@@ -576,7 +532,6 @@ def _load_arm_template(template_path: Path) -> AdfDefinitions:
         rtype = resource.get("type", "")
         props = resource.get("properties", {})
         raw_name = resource.get("name", "")
-        # Extract clean name from ARM expression
         if "/" in raw_name:
             name = raw_name.rsplit("/", 1)[-1].strip("'])")
         else:
@@ -647,7 +602,6 @@ def _classify_activities(
             )
         )
 
-        # Recurse into children
         if activity.if_true_activities:
             _classify_activities(pipeline_name, activity.if_true_activities, items)
         if activity.if_false_activities:
@@ -732,7 +686,6 @@ if __name__ == "__main__":
     inventory_path.write_text(json.dumps(inventory_dict, indent=2), encoding="utf-8")
     logger.info("Wrote inventory to %s", inventory_path)
 
-    # Summary
     summary = inventory_dict["summary"]
     print("\nADF Ingestion Summary")
     print("=====================")

@@ -1,11 +1,4 @@
-"""Shared naming helpers used by every activity preparer.
-
-The deterministic translators keep ``task_key`` aligned with the original ADF
-activity name (often PascalCase, e.g. ``BronzeIngest``).  Generated notebooks
-that orchestra emits into ``src/notebooks/`` are filesystem artifacts and use
-snake_case (``bronze_ingest.py``) so they read naturally in a Databricks
-workspace and a Git tree.
-"""
+"""Shared naming helpers used by every activity preparer."""
 
 from __future__ import annotations
 
@@ -21,7 +14,6 @@ def to_snake_case(name: str) -> str:
         ``ETL_Main`` -> ``etl_main``
         ``spaces and dashes-here`` -> ``spaces_and_dashes_here``
     """
-    # Split between a lower/digit and an upper to handle camelCase boundaries.
     s1 = re.sub(r"(.)([A-Z][a-z]+)", r"\1_\2", name)
     s2 = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", s1)
     s2 = re.sub(r"[^a-zA-Z0-9_]+", "_", s2)
@@ -30,11 +22,7 @@ def to_snake_case(name: str) -> str:
 
 
 def notebook_filename(task_key: str, activity_name: str | None = None) -> str:
-    """Derive a snake_case ``<name>.py`` filename for a generated notebook.
-
-    Prefer the ADF activity name (which carries human intent) when supplied;
-    fall back to the task key.  Always returns lower-snake-case.
-    """
+    """Derive a snake_case ``<name>.py`` filename for a generated notebook."""
     source = activity_name or task_key
     snake = to_snake_case(source)
     if not snake:

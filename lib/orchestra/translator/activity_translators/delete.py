@@ -17,8 +17,6 @@ def translate(
 ) -> Activity:
     """Translates a Delete activity.
 
-    Extracts dataset reference, recursive flag, and wildcard patterns.
-
     Args:
         activity: The ADF activity AST node.
         base_kwargs: Common fields (name, task_key, timeout, retries, depends_on, cluster).
@@ -30,24 +28,20 @@ def translate(
     """
     type_properties = activity.type_properties or {}
 
-    # Dataset reference from inputs
     dataset_name = ""
     if activity.inputs:
         dataset_name = activity.inputs[0].reference_name
 
-    # Properties from typeProperties
     recursive = type_properties.get("recursive", True)
     folder_path_raw = type_properties.get("dataset", {}).get("folderPath") if isinstance(type_properties.get("dataset"), dict) else None
     folder_path = resolve_field(folder_path_raw, context) if folder_path_raw is not None else None
 
-    # Also check storeSettings for wildcard paths
     store_settings = type_properties.get("storeSettings", {})
     wildcard_folder_path_raw = store_settings.get("wildcardFolderPath")
     wildcard_folder_path = (
         resolve_field(wildcard_folder_path_raw, context) if wildcard_folder_path_raw is not None else None
     )
 
-    # Build folder path from available data
     effective_folder = folder_path or wildcard_folder_path
 
     return DeleteActivity(

@@ -1,14 +1,4 @@
-"""Collapse detected motifs into MotifActivity IR nodes.
-
-Takes the list of :class:`DetectedMotif` results from the detector and
-replaces the matched activity groups in the translated :class:`Pipeline` IR
-with single :class:`MotifActivity` nodes.  Unclaimed activities pass through
-unchanged.
-
-The collapsed MotifActivity preserves the original activities for reference
-and carries metadata about the Databricks replacement strategy so the
-bundler and code generator can produce the appropriate output.
-"""
+"""Collapse detected motifs into MotifActivity IR nodes."""
 
 from __future__ import annotations
 
@@ -26,17 +16,6 @@ def collapse_motifs(
     motifs: list[DetectedMotif],
 ) -> Pipeline:
     """Replaces matched activity groups with MotifActivity nodes.
-
-    For each detected motif, the matched activities are removed from the
-    pipeline task list and replaced with a single :class:`MotifActivity`.
-    Dependencies are rewired so that:
-
-    - The MotifActivity inherits the *earliest* dependencies of the matched
-      group (i.e. dependencies on activities outside the group).
-    - Any activity that depended on a matched activity now depends on the
-      MotifActivity instead.
-
-    Activities not claimed by any motif pass through unchanged.
 
     Args:
         pipeline: The translated pipeline IR.
@@ -144,13 +123,7 @@ def _build_motif_config(
     original_activities: list[Activity],
     motif_task_key: str,
 ) -> dict[str, Any]:
-    """Extracts motif-specific settings from the activities being collapsed.
-
-    For ``for_each_ingestion``: pulls the driving Lookup's SQL query and
-    source type so the generated notebook can fetch the iteration list
-    itself — otherwise the ``items`` widget has no upstream writer and the
-    motif is a guaranteed no-op.
-    """
+    """Extracts motif-specific settings from the activities being collapsed."""
     if databricks_replacement != "for_each_ingestion":
         return {}
 
@@ -179,11 +152,7 @@ def _collect_external_dependencies(
     activities: list[Activity],
     matched_names: set[str],
 ) -> list[Dependency]:
-    """Collects dependencies that point outside the matched activity group.
-
-    These become the MotifActivity's upstream dependencies — preserving
-    the pipeline's overall execution order.
-    """
+    """Collects dependencies that point outside the matched activity group."""
     seen: set[str] = set()
     external_deps: list[Dependency] = []
 
@@ -202,11 +171,7 @@ def _rewire_dependencies(
     tasks: list[Activity],
     motif_task_keys: dict[str, str],
 ) -> None:
-    """Rewire dependencies so activities that depended on collapsed activities
-    now depend on the corresponding MotifActivity.
-
-    Mutates ``depends_on`` lists in place.
-    """
+    """Rewire dependencies so activities that depended on collapsed activities"""
     for task in tasks:
         if not task.depends_on:
             continue

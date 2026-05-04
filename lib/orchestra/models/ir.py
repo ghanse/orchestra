@@ -1,11 +1,4 @@
-"""Translation IR -- intermediate representation after translation.
-
-This module defines the typed intermediate representation produced by translating
-ADF AST nodes into Databricks-oriented structures.  The IR is consumed by the
-preparer and bundler stages to emit DAB bundles.
-
-Ported from wkmigrate with modifications for the orchestra plugin.
-"""
+"""Translation IR -- intermediate representation after translation."""
 
 from __future__ import annotations
 
@@ -16,19 +9,7 @@ from typing import Any, TypeAlias
 
 @dataclass(slots=True, kw_only=True)
 class ExpressionResult:
-    """Result of resolving an ADF expression.
-
-    kind:
-      - "literal": a plain string/number value for base_parameters
-      - "dab_ref": a DAB dynamic value reference like {{job.run_id}}
-      - "notebook_code": Python code that must go in the notebook body
-    value: the resolved value (literal, DAB ref template, or Python code)
-    imports: Python import statements needed (only for notebook_code)
-    required_parameters: Widget-name -> DAB ref mapping for every
-      ``dbutils.widgets.get(...)`` call emitted by ``notebook_code``.
-      Downstream preparers should thread these into ``base_parameters`` so
-      DAB resolves the refs at job runtime.
-    """
+    """Result of resolving an ADF expression."""
 
     kind: str  # "literal", "dab_ref", "notebook_code"
     value: str
@@ -128,10 +109,6 @@ class CopyActivity(Activity):
 @dataclass(slots=True, kw_only=True)
 class ForEachActivity(Activity):
     """ForEach loop activity.
-
-    When multiple inner activities exist, the bundler emits a separate inner
-    job (named ``{task_key}_inner_tasks``) containing the full task graph and
-    the ``for_each_task`` body becomes a ``run_job_task`` that calls it.
 
     Attributes:
         items_expression: ADF expression driving the iteration.
@@ -313,9 +290,6 @@ class SwitchCase:
 class SwitchActivity(Activity):
     """Switch (multi-branch) activity.
 
-    Evaluates an expression and routes to the matching case branch,
-    falling back to default activities if no case matches.
-
     Attributes:
         on_expression: The ADF expression to evaluate.
         cases: Ordered list of case branches.
@@ -331,8 +305,6 @@ class SwitchActivity(Activity):
 class WaitActivity(Activity):
     """Wait / sleep activity.
 
-    Pauses pipeline execution for a specified number of seconds.
-
     Attributes:
         wait_time_seconds: Duration to wait in seconds.
     """
@@ -343,8 +315,6 @@ class WaitActivity(Activity):
 @dataclass(slots=True, kw_only=True)
 class FilterActivity(Activity):
     """Filters activity.
-
-    Applies a condition to an input array, returning only matching items.
 
     Attributes:
         items_expression: ADF expression for the input array.
@@ -358,8 +328,6 @@ class FilterActivity(Activity):
 @dataclass(slots=True, kw_only=True)
 class AppendVariableActivity(Activity):
     """Appends variable activity.
-
-    Adds a value to an existing array variable.
 
     Attributes:
         variable_name: Name of the array variable.
@@ -407,10 +375,6 @@ class PlaceholderActivity(Activity):
 @dataclass(slots=True, kw_only=True)
 class MotifActivity(Activity):
     """Activity produced by collapsing a detected motif pattern.
-
-    Replaces a group of ADF activities that form a recognised pattern
-    (e.g. watermark-based incremental load) with a single Databricks-native
-    construct.
 
     Attributes:
         motif_id: Identifier of the matched motif definition.
@@ -466,9 +430,6 @@ class Pipeline:
 @dataclass(frozen=True, slots=True)
 class TranslationContext:
     """Immutable snapshot of translation state threaded through each visitor call.
-
-    Every function that needs to read or extend the caches receives a
-    ``TranslationContext`` and returns a new one -- the original is never mutated.
 
     Attributes:
         activity_cache: Read-only mapping of activity names to translated activities.

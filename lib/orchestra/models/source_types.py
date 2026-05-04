@@ -1,12 +1,4 @@
-"""Canonical source-type taxonomy used across the translator and preparer.
-
-ADF defines source connectors as opaque type strings (``AzureSqlSource``,
-``BlobSource``, ...).  Different translation and preparation steps need to
-ask the same questions: "is this a JDBC source?", "is this a file-based
-source?".  Centralising the sets here keeps the answers consistent across
-``preparer/code_generator.py``, ``preparer/activity_preparers/*.py``, and
-the translators.
-"""
+"""Canonical source-type taxonomy used across the translator and preparer."""
 
 from __future__ import annotations
 

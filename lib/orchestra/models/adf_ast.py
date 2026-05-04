@@ -1,10 +1,4 @@
-"""Typed ADF AST nodes.
-
-These dataclasses represent the parsed ADF JSON before translation into the
-Databricks IR.  They provide a strongly-typed layer between the raw JSON
-payloads and the translation pipeline, catching structural issues early and
-making the downstream code self-documenting.
-"""
+"""Typed ADF AST nodes."""
 
 from __future__ import annotations
 
@@ -148,7 +142,6 @@ class AdfActivity:
     inputs: list[AdfDatasetReference] | None = None
     outputs: list[AdfDatasetReference] | None = None
     linked_service_name: AdfLinkedServiceReference | None = None
-    # Control flow children:
     if_true_activities: list[AdfActivity] | None = None
     if_false_activities: list[AdfActivity] | None = None
     activities: list[AdfActivity] | None = None  # ForEach, Until

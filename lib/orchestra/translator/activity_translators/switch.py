@@ -1,9 +1,4 @@
-"""Translates ADF Switch activities to Databricks SwitchActivity IR.
-
-Switch is a control-flow container that evaluates an expression and routes
-to one of N case branches (or a default branch).  It threads context through
-each branch translation.  Returns a ``(Activity, TranslationContext)`` tuple.
-"""
+"""Translates ADF Switch activities to Databricks SwitchActivity IR."""
 
 from __future__ import annotations
 
@@ -19,9 +14,6 @@ from orchestra.translator.activity_translators._resolve import resolve_field
 def _resolve_on_expression(on_expression: str, context: TranslationContext) -> str:
     """Resolves the ``on`` expression to a DAB dynamic value ref.
 
-    Handles ``@variables('name')``, ``@pipeline().parameters.X``,
-    ``@{expr}`` interpolation, and other ADF expressions.
-
     Args:
         on_expression: Raw ADF on-expression string.
         context: Translation context for resolving variables.
@@ -29,11 +21,9 @@ def _resolve_on_expression(on_expression: str, context: TranslationContext) -> s
     Returns:
         Resolved DAB ref string, or the original if unresolvable.
     """
-    # Try @{...} interpolation
     if "@{" in on_expression:
         return resolve_interpolated_string(on_expression, context)
 
-    # Try @expr style
     if on_expression.startswith("@"):
         result = resolve_expression(on_expression, context)
         if result is not None and result.kind in ("dab_ref", "literal"):
@@ -65,7 +55,6 @@ def translate(
     """
     type_properties = activity.type_properties or {}
 
-    # Extract the switch expression from typeProperties.on.value
     on_raw = type_properties.get("on", {})
     if isinstance(on_raw, dict):
         on_expression_raw = on_raw.get("value", "")
@@ -74,17 +63,14 @@ def translate(
     else:
         on_expression_raw = str(on_raw) if on_raw else ""
 
-    # Resolve through expression parser (handles @variables, @pipeline, etc.)
     on_expression = _resolve_on_expression(on_expression_raw, context)
 
-    # Translate each case branch
     cases: list[SwitchCase] = []
     raw_cases = type_properties.get("cases", [])
     for raw_case in raw_cases:
         case_value = resolve_field(raw_case.get("value", ""), context)
         case_activities_raw = raw_case.get("activities", [])
 
-        # Parse raw activity dicts into AdfActivity nodes if needed
         case_adf_activities = _ensure_adf_activities(case_activities_raw)
 
         case_translated: list[Activity] = []
@@ -97,7 +83,6 @@ def translate(
 
         cases.append(SwitchCase(value=case_value, activities=case_translated))
 
-    # Translate default branch
     default_activities: list[Activity] = []
     default_raw = type_properties.get("defaultActivities", [])
     default_adf_activities = _ensure_adf_activities(default_raw)
@@ -121,10 +106,6 @@ def translate(
 def _ensure_adf_activities(raw_activities: list[Any]) -> list[AdfActivity]:
     """Ensure a list of activities are AdfActivity instances.
 
-    The ADF loader may have already parsed child activities from
-    ``typeProperties`` into :class:`AdfActivity` objects (via
-    ``parse_activity``).  If they are still raw dicts, we convert them here.
-
     Args:
         raw_activities: List that may contain AdfActivity instances or raw dicts.
 
@@ -137,5 +118,4 @@ def _ensure_adf_activities(raw_activities: list[Any]) -> list[AdfActivity]:
             result.append(item)
         elif isinstance(item, dict):
             result.append(parse_activity(item))
-        # Skip anything else
     return result

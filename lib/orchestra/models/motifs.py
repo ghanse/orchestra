@@ -1,14 +1,4 @@
-"""Motif definitions for common ADF pipeline patterns.
-
-A *motif* is a recurring multi-activity pattern in ADF pipelines that maps
-to a single, more idiomatic Databricks construct.  Each :class:`MotifDefinition`
-describes the expected activity types, the Databricks replacement strategy,
-and human-readable documentation.
-
-The detector module scans ADF pipelines for these patterns and produces
-:class:`DetectedMotif` instances.  The collapser then replaces the matched
-activities with a single :class:`MotifActivity` in the translation IR.
-"""
+"""Motif definitions for common ADF pipeline patterns."""
 
 from __future__ import annotations
 

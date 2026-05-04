@@ -1,9 +1,4 @@
-"""DAB output models.
-
-These dataclasses represent the final Databricks Asset Bundle (DAB) artefacts
-produced by the bundler stage.  They are serialized to YAML/JSON and written
-to disk alongside generated notebooks and setup scripts.
-"""
+"""DAB output models."""
 
 from __future__ import annotations
 

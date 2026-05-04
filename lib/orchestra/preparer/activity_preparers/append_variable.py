@@ -19,12 +19,7 @@ def prepare(
     scope: str = "",
     variable_task_keys: dict[str, str] | None = None,
 ) -> PreparedActivity:
-    """Converts an AppendVariableActivity into a notebook_task that appends to an array.
-
-    ``variable_task_keys`` maps each pipeline variable to the task_key of its
-    most-recent writer; the generated notebook reads that task's value and
-    appends to it.
-    """
+    """Converts an AppendVariableActivity into a notebook_task that appends to an array."""
     base_parameters: dict[str, str] = {
         "variable_name": activity.variable_name,
         "source_task_key": (variable_task_keys or {}).get(activity.variable_name, ""),

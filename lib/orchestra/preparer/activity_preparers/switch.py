@@ -1,12 +1,5 @@
 """Preparer for SwitchActivity -> chained condition_tasks + flattened branches.
 
-Each case becomes a ``condition_task`` that tests equality between the switch
-expression and the case value.  Condition tasks are chained via
-``depends_on[...].outcome: "false"`` so the next case only evaluates when the
-prior case did not match.  Case-branch children are emitted as sibling tasks
-that depend on the case's condition with ``outcome: "true"``.  The default
-branch hangs off the last case's ``outcome: "false"``.
-
 References:
 - https://docs.databricks.com/aws/en/jobs/if-else
 - https://docs.databricks.com/aws/en/dev-tools/bundles/job-task-types
@@ -68,12 +61,6 @@ def _resolve_on_expression(on_expr: str) -> str:
 def prepare(activity: SwitchActivity, *, scope: str = "") -> PreparedActivity:
     """Converts a SwitchActivity into a chain of flattened condition tasks.
 
-    Produces one condition task per case, linked together by ``outcome:
-    "false"`` dependencies so cases are evaluated in order.  Each case's
-    children are returned as sibling tasks gated on that case's
-    ``outcome: "true"``; the default branch is gated on the last case's
-    ``outcome: "false"``.
-
     Args:
         activity: The translated switch activity from the IR.
         scope: Secret scope name passed through to child preparers.
@@ -87,7 +74,6 @@ def prepare(activity: SwitchActivity, *, scope: str = "") -> PreparedActivity:
 
     resolved_expr = _resolve_on_expression(activity.on_expression)
 
-    # Degenerate case: no cases at all -> fire the default (if any) unconditionally.
     if not activity.cases:
         task = build_common_task_fields(activity)
         task["condition_task"] = {"op": "EQUAL_TO", "left": "true", "right": "true"}
@@ -132,7 +118,6 @@ def prepare(activity: SwitchActivity, *, scope: str = "") -> PreparedActivity:
             base.pop("task_key", None)
             condition_task.update(base)
         else:
-            # Subsequent conditions fire when the prior case did not match.
             condition_task["depends_on"] = [{"task_key": case_keys[index - 1], "outcome": "false"}]
 
         case_branch_tasks: list[dict[str, Any]] = []
@@ -149,7 +134,6 @@ def prepare(activity: SwitchActivity, *, scope: str = "") -> PreparedActivity:
             extra_tasks.append(condition_task)
         extra_tasks.extend(case_branch_tasks)
 
-    # Default branch fires when the last case did not match.
     branch_default_tasks: list[dict[str, Any]] = []
     for child in activity.default_activities:
         prepared = prepare_activity(child, scope=scope)

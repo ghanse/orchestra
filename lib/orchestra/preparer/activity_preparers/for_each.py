@@ -1,16 +1,5 @@
 """Preparer for ForEachActivity -> for_each_task dict.
 
-The ForEach task in Databricks jobs iterates over an array of values and runs
-an inner task for each item.  The inner task receives the current item via the
-``{{input}}`` dynamic value reference.
-
-When the ForEach body contains **a single activity**, it is inlined directly
-as the ``for_each_task.task``.
-
-When the body contains **multiple activities**, an inner job is created
-(named ``{parent_task_key}_inner_tasks``) holding the full task graph, and
-the ``for_each_task.task`` becomes a ``run_job_task`` calling that inner job.
-
 References:
 - https://docs.databricks.com/aws/en/jobs/for-each
 - https://docs.databricks.com/aws/en/jobs/task-values
@@ -42,9 +31,6 @@ if TYPE_CHECKING:
 def _resolve_for_each_inputs(items_expression: str) -> str:
     """Converts an ADF items expression to a DAB dynamic value reference.
 
-    Uses the unified ``resolve_expression()`` to map ADF expressions to DAB
-    refs.  Falls back to the original expression if it cannot be resolved.
-
     Args:
         items_expression: The raw ADF expression for ForEach items.
 
@@ -52,11 +38,9 @@ def _resolve_for_each_inputs(items_expression: str) -> str:
         A DAB dynamic value reference string, or the original expression if
         it cannot be resolved.
     """
-    # The items_expression may already be a DAB ref (resolved by the translator)
     if items_expression.startswith("{{"):
         return items_expression
 
-    # Try to resolve via the unified expression parser
     context = TranslationContext()
     result = resolve_expression(items_expression, context)
     if result is not None and result.kind in ("dab_ref", "literal"):
@@ -73,12 +57,6 @@ def _resolve_for_each_inputs(items_expression: str) -> str:
 
 def _inject_input_parameter(inner_task: dict) -> dict:
     """Adds ``{{input}}`` as a base_parameter on the inner task.
-
-    For notebook tasks, each item from the ForEach array is passed as the
-    ``item`` widget parameter using the ``{{input}}`` dynamic value reference.
-    The notebook can then read it with ``dbutils.widgets.get("item")``.
-
-    For run_job_task, the item is passed as a job parameter.
 
     Args:
         inner_task: The prepared inner task dict.
@@ -97,11 +75,6 @@ def _inject_input_parameter(inner_task: dict) -> dict:
 
 def prepare(activity: ForEachActivity, *, scope: str = "") -> PreparedActivity:
     """Converts a ForEachActivity into a DAB for_each_task definition.
-
-    - **Single inner activity**: inlined directly in ``for_each_task.task``.
-    - **Multiple inner activities**: emits a separate inner job
-      (``{task_key}_inner_tasks``) with the full task graph, and the
-      ``for_each_task.task`` becomes a ``run_job_task`` calling it.
 
     Args:
         activity: The translated for-each activity from the IR.
@@ -147,10 +120,8 @@ def prepare(activity: ForEachActivity, *, scope: str = "") -> PreparedActivity:
             all_setup_tasks.extend(child_prepared.setup_tasks)
             inner_workflows.extend(child_prepared.inner_workflows)
 
-        # Normalise ADF expressions to {{job.parameters.*}} references
         normalize_inner_task_params(inner_tasks)
 
-        # Scan for all parameter references and build declarations + pass-through
         parameters, job_parameters = collect_inner_job_params(inner_tasks)
 
         inner_workflow = PreparedWorkflow(
@@ -163,7 +134,6 @@ def prepare(activity: ForEachActivity, *, scope: str = "") -> PreparedActivity:
         )
         inner_workflows.append(inner_workflow)
 
-        # The for_each body calls the inner job via run_job_task
         inner_job_key = normalize_task_key(inner_job_name)
         body_task: dict[str, Any] = {
             "task_key": f"{activity.task_key}_iteration",
@@ -180,7 +150,6 @@ def prepare(activity: ForEachActivity, *, scope: str = "") -> PreparedActivity:
         }
 
     else:
-        # No inner activities — degenerate case, emit a no-op
         task["for_each_task"] = {
             "inputs": inputs,
             "task": {"task_key": f"{activity.task_key}_noop"},

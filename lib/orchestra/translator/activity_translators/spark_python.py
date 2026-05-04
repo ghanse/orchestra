@@ -13,8 +13,6 @@ from orchestra.translator.activity_translators._resolve import resolve_field
 def _resolve_parameter(param: str, context: TranslationContext) -> str:
     """Resolves a single ADF parameter string to a DAB value.
 
-    Handles both ``@expr`` style and ``@{expr}`` string interpolation.
-
     Args:
         param: A parameter string that may contain ADF expressions.
         context: Translation context for variable resolution.
@@ -25,11 +23,9 @@ def _resolve_parameter(param: str, context: TranslationContext) -> str:
     if not isinstance(param, str):
         return param
 
-    # Try @{...} interpolation first
     if "@{" in param:
         return resolve_interpolated_string(param, context)
 
-    # Try @expr style
     if param.startswith("@"):
         result = resolve_expression(param, context)
         if result is not None and result.kind in ("dab_ref", "literal"):
@@ -60,7 +56,6 @@ def translate(
     python_file = resolve_field(type_properties.get("pythonFile", ""), context)
     raw_parameters = type_properties.get("parameters") or []
 
-    # Resolve each parameter through the expression parser
     parameters = [_resolve_parameter(p, context) for p in raw_parameters]
 
     return SparkPythonActivity(

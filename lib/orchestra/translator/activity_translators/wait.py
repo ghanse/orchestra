@@ -1,8 +1,4 @@
-"""Translates ADF Wait activities to Databricks WaitActivity IR.
-
-Wait is a simple leaf activity that pauses execution for a specified
-number of seconds.
-"""
+"""Translates ADF Wait activities to Databricks WaitActivity IR."""
 
 from __future__ import annotations
 
