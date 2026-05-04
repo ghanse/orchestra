@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any
 from orchestra.preparer.workflow_preparer import (
     PreparedActivity,
     PreparedArtifacts,
-    _build_common_task_fields,
+    build_common_task_fields,
     merge_prepared_artifacts,
     prepare_activity,
 )
@@ -27,7 +27,7 @@ if TYPE_CHECKING:
     from orchestra.models.ir import IfConditionActivity
 
 
-def _inject_outcome_dependency(tasks: list[dict[str, Any]], condition_key: str, outcome: str) -> None:
+def inject_outcome_dependency(tasks: list[dict[str, Any]], condition_key: str, outcome: str) -> None:
     """Gate root tasks in a branch on the condition's outcome.
 
     A "root" task is one with no ``depends_on`` (or with ``depends_on`` that
@@ -49,7 +49,7 @@ def _inject_outcome_dependency(tasks: list[dict[str, Any]], condition_key: str, 
 
 
 def prepare(activity: IfConditionActivity, *, scope: str = "") -> PreparedActivity:
-    """Convert an IfConditionActivity into a condition_task + flattened branches.
+    """Converts an IfConditionActivity into a condition_task + flattened branches.
 
     The returned ``PreparedActivity.task`` is the condition evaluator.  All
     branch children are returned via ``extra_tasks`` and will be flattened
@@ -63,7 +63,7 @@ def prepare(activity: IfConditionActivity, *, scope: str = "") -> PreparedActivi
         A PreparedActivity with the condition_task, sibling branch tasks,
         and aggregated artifacts from both branches.
     """
-    task = _build_common_task_fields(activity)
+    task = build_common_task_fields(activity)
     task["condition_task"] = {
         "op": activity.op,
         "left": activity.left,
@@ -78,7 +78,7 @@ def prepare(activity: IfConditionActivity, *, scope: str = "") -> PreparedActivi
         if_true_tasks.append(prepared.task)
         if_true_tasks.extend(prepared.extra_tasks)
         artifacts = merge_prepared_artifacts(artifacts, prepared)
-    _inject_outcome_dependency(if_true_tasks, activity.task_key, "true")
+    inject_outcome_dependency(if_true_tasks, activity.task_key, "true")
 
     if_false_tasks: list[dict[str, Any]] = []
     for child in activity.if_false_activities:
@@ -86,7 +86,7 @@ def prepare(activity: IfConditionActivity, *, scope: str = "") -> PreparedActivi
         if_false_tasks.append(prepared.task)
         if_false_tasks.extend(prepared.extra_tasks)
         artifacts = merge_prepared_artifacts(artifacts, prepared)
-    _inject_outcome_dependency(if_false_tasks, activity.task_key, "false")
+    inject_outcome_dependency(if_false_tasks, activity.task_key, "false")
 
     return PreparedActivity(
         task=task,

@@ -1,4 +1,4 @@
-"""Translate ADF ForEach activities to Databricks ForEachActivity IR.
+"""Translates ADF ForEach activities to Databricks ForEachActivity IR.
 
 ForEach is a control-flow container that threads context through inner
 activity translation.  It returns a ``(Activity, TranslationContext)`` tuple
@@ -27,7 +27,7 @@ def translate(
     *,
     translate_activities_fn: Any = None,
 ) -> tuple[Activity, TranslationContext]:
-    """Translate a ForEach activity with recursive inner translation.
+    """Translates a ForEach activity with recursive inner translation.
 
     All inner activities are preserved in ``inner_activities`` so the
     bundler can emit them as a proper Databricks task graph (either inline

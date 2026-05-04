@@ -8,7 +8,7 @@ from orchestra.models.dab import DabNotebook
 from orchestra.models.ir import TranslationContext
 from orchestra.parser.expression_parser import resolve_expression, resolve_interpolated_string
 from orchestra.preparer.activity_preparers._naming import notebook_filename
-from orchestra.preparer.workflow_preparer import PreparedActivity, _build_common_task_fields
+from orchestra.preparer.workflow_preparer import PreparedActivity, build_common_task_fields
 from orchestra.preparer.workspace_downloader import download_notebook
 
 if TYPE_CHECKING:
@@ -48,7 +48,7 @@ def _resolve_base_parameters(
     *,
     variable_task_keys: dict[str, str] | None = None,
 ) -> dict[str, str]:
-    """Resolve ADF expressions in ``base_parameters`` to DAB-compatible values.
+    """Resolves ADF expressions in ``base_parameters`` to DAB-compatible values.
 
     Only ``literal`` and ``dab_ref`` results are kept -- ``notebook_code``
     results would emit Python source into a base_parameter (which DAB cannot
@@ -74,7 +74,7 @@ def _resolve_base_parameters(
 
 
 def _resolve_notebook_path(path: str) -> str:
-    """Resolve any ADF expression embedded in a notebook workspace path."""
+    """Resolves any ADF expression embedded in a notebook workspace path."""
     context = TranslationContext()
     if "@{" in path:
         return resolve_interpolated_string(path, context)
@@ -91,7 +91,7 @@ def prepare(
     scope: str = "",
     variable_task_keys: dict[str, str] | None = None,
 ) -> PreparedActivity:
-    """Convert a NotebookActivity into a DAB notebook_task definition.
+    """Converts a NotebookActivity into a DAB notebook_task definition.
 
     An absolute workspace path (``/Shared/...``) points at an existing
     notebook -- the task is bound to that path directly so the original
@@ -99,7 +99,7 @@ def prepare(
     placeholder under ``src/notebooks/`` so the user can fill it in.
     """
     resolved_path = _resolve_notebook_path(activity.notebook_path)
-    task = _build_common_task_fields(activity)
+    task = build_common_task_fields(activity)
 
     base_parameters: dict[str, str] | None = None
     if activity.base_parameters:

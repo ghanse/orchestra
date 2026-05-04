@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 from orchestra.models.dab import DabNotebook
 from orchestra.preparer.activity_preparers._helpers import resolve_param_value
-from orchestra.preparer.workflow_preparer import PreparedActivity, _build_common_task_fields
+from orchestra.preparer.workflow_preparer import PreparedActivity, build_common_task_fields
 from orchestra.preparer.workspace_downloader import download_dbfs_file
 
 if TYPE_CHECKING:
@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 
 
 def _python_placeholder(original_path: str, activity_name: str) -> str:
-    """Generate placeholder Python script with download instructions.
+    """Generates placeholder Python script with download instructions.
 
     Args:
         original_path: The original DBFS/workspace path from ADF.
@@ -35,7 +35,7 @@ def _python_placeholder(original_path: str, activity_name: str) -> str:
 
 
 def prepare(activity: SparkPythonActivity, *, scope: str = "") -> PreparedActivity:
-    """Convert a SparkPythonActivity into a DAB spark_python_task definition.
+    """Converts a SparkPythonActivity into a DAB spark_python_task definition.
 
     Rewrites the python_file to a bundle-relative path and creates a
     placeholder script with download instructions.
@@ -46,7 +46,7 @@ def prepare(activity: SparkPythonActivity, *, scope: str = "") -> PreparedActivi
     Returns:
         A PreparedActivity containing the spark_python_task dict and placeholder file.
     """
-    task = _build_common_task_fields(activity)
+    task = build_common_task_fields(activity)
 
     original_path = resolve_param_value(activity.python_file) if activity.python_file else ""
     if original_path and ("dbfs:" in original_path or "/" in original_path):

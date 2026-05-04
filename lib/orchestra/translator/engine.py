@@ -100,7 +100,7 @@ TRANSLATOR_REGISTRY: dict[str, Callable[..., Activity]] = {
 
 
 def translate_pipeline(pipeline: AdfPipeline, definitions: AdfDefinitions) -> TranslationReport:
-    """Translate an ADF pipeline into a Databricks pipeline IR.
+    """Translates an ADF pipeline into a Databricks pipeline IR.
 
     Visits all activities in topological order, dispatching each to its
     deterministic translator or recording an agentic gap.
@@ -297,7 +297,7 @@ def _translate_activity_list(
     context: TranslationContext,
     definitions: AdfDefinitions,
 ) -> tuple[list[Activity], TranslationContext]:
-    """Translate a list of ADF activities, threading context through each.
+    """Translates a list of ADF activities, threading context through each.
 
     Used as a callback by control-flow translators (ForEach, IfCondition) to
     recursively translate their inner activities.
@@ -378,7 +378,7 @@ _TIMEOUT_RE = re.compile(r"(?:(\d+)\.)?(\d{2}):(\d{2}):(\d{2})")
 
 
 def _build_base_kwargs(activity: AdfActivity, definitions: AdfDefinitions) -> dict[str, Any]:
-    """Extract common fields shared by all Activity IR subclasses.
+    """Extracts common fields shared by all Activity IR subclasses.
 
     Args:
         activity: ADF activity AST node.
@@ -439,7 +439,7 @@ def _build_base_kwargs(activity: AdfActivity, definitions: AdfDefinitions) -> di
 
 
 def _sanitize_task_key(name: str) -> str:
-    """Convert an ADF activity name to a valid Databricks task key.
+    """Converts an ADF activity name to a valid Databricks task key.
 
     Task keys must be alphanumeric plus underscores and hyphens.
 
@@ -459,7 +459,7 @@ def _sanitize_task_key(name: str) -> str:
 
 
 def _parse_adf_timeout(timeout_str: str) -> int | None:
-    """Parse an ADF timeout string to total seconds.
+    """Parses an ADF timeout string to total seconds.
 
     Args:
         timeout_str: Timeout in ``"d.hh:mm:ss"`` or ``"hh:mm:ss"`` format.
@@ -478,7 +478,7 @@ def _parse_adf_timeout(timeout_str: str) -> int | None:
 
 
 def _extract_cluster_config(ls_properties: dict[str, Any]) -> dict[str, Any] | None:
-    """Extract Databricks cluster configuration from a linked-service properties dict.
+    """Extracts Databricks cluster configuration from a linked-service properties dict.
 
     Reads the AzureDatabricks linked service's ``newCluster*`` fields.  Two
     JSON shapes show up in practice: classic ARM exports nest the cluster
@@ -579,7 +579,7 @@ def _activity_to_dict(task: Activity) -> dict[str, Any]:
 
 
 def _activity_extra_fields(activity: Activity) -> dict[str, Any]:
-    """Extract type-specific fields from an Activity subclass.
+    """Extracts type-specific fields from an Activity subclass.
 
     Args:
         activity: Any Activity IR node.

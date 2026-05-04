@@ -1,4 +1,4 @@
-"""Translate ADF DatabricksNotebook activities to Databricks NotebookActivity IR."""
+"""Translates ADF DatabricksNotebook activities to Databricks NotebookActivity IR."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ def translate(
     context: TranslationContext,
     definitions: AdfDefinitions,
 ) -> Activity:
-    """Translate a DatabricksNotebook activity.
+    """Translates a DatabricksNotebook activity.
 
     Args:
         activity: The ADF activity AST node.

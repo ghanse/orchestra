@@ -13,7 +13,7 @@ import re
 
 
 def to_snake_case(name: str) -> str:
-    """Convert PascalCase / camelCase / mixed identifiers to snake_case.
+    """Converts PascalCase / camelCase / mixed identifiers to snake_case.
 
     Examples:
         ``BronzeIngest`` -> ``bronze_ingest``

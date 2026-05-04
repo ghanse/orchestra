@@ -1,4 +1,4 @@
-"""Translate ADF Copy activities to Databricks CopyActivity IR."""
+"""Translates ADF Copy activities to Databricks CopyActivity IR."""
 
 from __future__ import annotations
 
@@ -90,7 +90,7 @@ def _dataset_props(dataset_ref: Any, definitions: AdfDefinitions) -> dict[str, A
 
 
 def _sanitize_volume_name(value: str) -> str:
-    """Sanitise an ADF container name for use as a UC volume name."""
+    """Sanitises an ADF container name for use as a UC volume name."""
     cleaned = re.sub(r"[^A-Za-z0-9_]", "_", value or "default_volume").strip("_")
     return cleaned or "default_volume"
 
@@ -102,7 +102,7 @@ def _resolve_param_value(
     *,
     for_notebook: bool = False,
 ) -> str:
-    """Resolve a single ADF location field to a string.
+    """Resolves a single ADF location field to a string.
 
     Handles the four shapes the loader leaves these in:
     - A literal string with no expression.
@@ -145,7 +145,7 @@ def _resolve_param_value(
 
 
 def _resolve_storage_account(linked_service: Any) -> str | None:
-    """Try to pull a storage account name out of a linked service, if present."""
+    """Tries to pull a storage account name out of a linked service, if present."""
     if linked_service is None:
         return None
     type_props = linked_service.properties.get("typeProperties") or linked_service.properties
@@ -183,7 +183,7 @@ def _resolve_storage_account(linked_service: Any) -> str | None:
 
 
 def _resolve_dataset_path(dataset_props: dict[str, Any], definitions: AdfDefinitions) -> str | None:
-    """Resolve a dataset's storage path using its location + linked service.
+    """Resolves a dataset's storage path using its location + linked service.
 
     Handles both ADLS Gen2 (``fileSystem`` / ``folderPath``) and Blob Storage
     (``container`` / ``folderPath``) location shapes, plus the synthesised
@@ -198,13 +198,13 @@ def _resolve_dataset_path(dataset_props: dict[str, Any], definitions: AdfDefinit
     if isinstance(file_system, dict) or isinstance(folder_path, dict):
         return None  # parameterised; caller handles via _resolve_path_info
 
-    ls_ref = dataset_props.get("linkedServiceName") or {}
-    if isinstance(ls_ref, dict):
-        ls_name = ls_ref.get("referenceName", "")
+    linked_service_ref = dataset_props.get("linkedServiceName") or {}
+    if isinstance(linked_service_ref, dict):
+        linked_service_name = linked_service_ref.get("referenceName", "")
     else:
-        ls_name = str(ls_ref)
-    ls = definitions.linked_services.get(ls_name) if ls_name else None
-    account = _resolve_storage_account(ls)
+        linked_service_name = str(linked_service_ref)
+    linked_service = definitions.linked_services.get(linked_service_name) if linked_service_name else None
+    account = _resolve_storage_account(linked_service)
     if not account:
         return None
 
@@ -217,7 +217,7 @@ def _resolve_path_info(
     definitions: AdfDefinitions,
     context: TranslationContext,
 ) -> SinkPathInfo | None:
-    """Resolve a (possibly parameterised) file-on-cloud-storage dataset.
+    """Resolves a (possibly parameterised) file-on-cloud-storage dataset.
 
     Walks the dataset's ``location`` block, resolves ``@dataset().X``
     references using ``dataset_ref.parameters`` (with the dataset's own
@@ -254,11 +254,13 @@ def _resolve_path_info(
     if not container:
         return None
 
-    # Storage account: prefer the linked-service-derived value, else placeholder.
-    ls_ref = dataset_props.get("linkedServiceName") or {}
-    ls_name = ls_ref.get("referenceName", "") if isinstance(ls_ref, dict) else str(ls_ref)
-    ls = definitions.linked_services.get(ls_name) if ls_name else None
-    storage_account = _resolve_storage_account(ls) if ls else None
+    linked_service_ref = dataset_props.get("linkedServiceName") or {}
+    if isinstance(linked_service_ref, dict):
+        linked_service_name = linked_service_ref.get("referenceName", "")
+    else:
+        linked_service_name = str(linked_service_ref)
+    linked_service = definitions.linked_services.get(linked_service_name) if linked_service_name else None
+    storage_account = _resolve_storage_account(linked_service) if linked_service else None
 
     if location_type in ("AmazonS3Location", "GoogleCloudStorageLocation"):
         # S3/GCS: container is the bucket name; account is N/A.
@@ -288,7 +290,7 @@ def _resolve_path_info(
 
 
 def _resolve_source_path(activity: AdfActivity, definitions: AdfDefinitions) -> str | None:
-    """Resolve the full storage path from the activity's input dataset."""
+    """Resolves the full storage path from the activity's input dataset."""
     if not activity.inputs:
         return None
     props = _dataset_props(activity.inputs[0], definitions)
@@ -303,7 +305,7 @@ def translate(
     context: TranslationContext,
     definitions: AdfDefinitions,
 ) -> Activity:
-    """Translate a Copy activity.
+    """Translates a Copy activity.
 
     Extracts source/sink dataset references, connection properties, and
     column mappings from the ADF type properties.  Also resolves the input
@@ -318,10 +320,10 @@ def translate(
     Returns:
         A :class:`CopyActivity` IR node.
     """
-    tp = activity.type_properties or {}
+    type_properties = activity.type_properties or {}
 
     # Source
-    source_raw = tp.get("source", {})
+    source_raw = type_properties.get("source", {})
     source_type = source_raw.get("type")
     source_properties = {k: v for k, v in source_raw.items() if k != "type"} if source_raw else {}
 
@@ -331,13 +333,13 @@ def translate(
         source_properties["resolved_path"] = resolved_path
 
     # Sink
-    sink_raw = tp.get("sink", {})
+    sink_raw = type_properties.get("sink", {})
     sink_type = sink_raw.get("type")
     sink_properties = {k: v for k, v in sink_raw.items() if k != "type"} if sink_raw else {}
 
     # Column mapping
     column_mapping: list[dict[str, str]] = []
-    translator_raw = tp.get("translator")
+    translator_raw = type_properties.get("translator")
     if translator_raw and isinstance(translator_raw, dict):
         mappings = translator_raw.get("mappings", [])
         for mapping in mappings:

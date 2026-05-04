@@ -1,4 +1,4 @@
-"""Translate ADF DatabricksSparkPython activities to Databricks SparkPythonActivity IR."""
+"""Translates ADF DatabricksSparkPython activities to Databricks SparkPythonActivity IR."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from orchestra.translator.activity_translators._resolve import resolve_field
 
 
 def _resolve_parameter(param: str, context: TranslationContext) -> str:
-    """Resolve a single ADF parameter string to a DAB value.
+    """Resolves a single ADF parameter string to a DAB value.
 
     Handles both ``@expr`` style and ``@{expr}`` string interpolation.
 
@@ -44,7 +44,7 @@ def translate(
     context: TranslationContext,
     definitions: AdfDefinitions,
 ) -> Activity:
-    """Translate a DatabricksSparkPython activity.
+    """Translates a DatabricksSparkPython activity.
 
     Args:
         activity: The ADF activity AST node.
@@ -55,10 +55,10 @@ def translate(
     Returns:
         A :class:`SparkPythonActivity` IR node.
     """
-    tp = activity.type_properties or {}
+    type_properties = activity.type_properties or {}
 
-    python_file = resolve_field(tp.get("pythonFile", ""), context)
-    raw_parameters = tp.get("parameters") or []
+    python_file = resolve_field(type_properties.get("pythonFile", ""), context)
+    raw_parameters = type_properties.get("parameters") or []
 
     # Resolve each parameter through the expression parser
     parameters = [_resolve_parameter(p, context) for p in raw_parameters]

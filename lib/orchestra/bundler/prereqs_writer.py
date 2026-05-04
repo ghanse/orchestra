@@ -1,4 +1,4 @@
-"""Generate a SETUP.md file listing steps required before a bundle can run.
+"""Generates a SETUP.md file listing steps required before a bundle can run.
 
 A translated bundle may depend on external setup that neither ``databricks
 bundle deploy`` nor any of the deployed jobs can perform on the user's
@@ -143,7 +143,7 @@ class Prereqs:
 
 
 def _walk_tasks(tasks: list[dict[str, Any]]):
-    """Yield every task dict including nested ``for_each_task.task`` bodies.
+    """Yields every task dict including nested ``for_each_task.task`` bodies.
 
     The bundler flattens condition branches into top-level siblings (per DAB
     schema) so the only still-nested tasks are ``for_each_task`` bodies.
@@ -156,7 +156,7 @@ def _walk_tasks(tasks: list[dict[str, Any]]):
 
 
 def scan_notebooks_for_secrets(notebooks: list[DabNotebook]) -> dict[str, set[str]]:
-    """Extract all ``dbutils.secrets.get(scope=..., key=...)`` references.
+    """Extracts all ``dbutils.secrets.get(scope=..., key=...)`` references.
 
     Args:
         notebooks: Generated notebooks in the bundle.
@@ -228,7 +228,7 @@ def collect_missing_notebooks(
 
 
 def collect_cross_bundle_refs(tasks: list[dict[str, Any]], known_bundle_jobs: set[str]) -> list[CrossBundleReference]:
-    """Find ``run_job_task`` entries pointing outside this bundle.
+    """Finds ``run_job_task`` entries pointing outside this bundle.
 
     A ``run_job_task.job_id`` of ``${resources.jobs.X.id}`` where ``X`` is not
     defined in this bundle cannot be resolved at ``bundle validate`` time and
@@ -259,7 +259,7 @@ def collect_cross_bundle_refs(tasks: list[dict[str, Any]], known_bundle_jobs: se
 
 
 def collect_empty_parameters(tasks: list[dict[str, Any]]) -> list[EmptyParameter]:
-    """Find base_parameters whose values are empty strings.
+    """Finds base_parameters whose values are empty strings.
 
     The bundler's widget auto-augment pass fills in any widget the notebook
     reads but the translator didn't populate, using ``""`` as the default.
@@ -284,7 +284,7 @@ def collect_empty_parameters(tasks: list[dict[str, Any]]) -> list[EmptyParameter
 
 
 def collect_network_endpoints(notebooks: list[DabNotebook]) -> list[NetworkEndpoint]:
-    """Scan generated notebook content for network-dependent endpoints.
+    """Scans generated notebook content for network-dependent endpoints.
 
     Looks for three signals that show up in deterministically-generated
     notebook bodies:
@@ -412,7 +412,7 @@ def build_prereqs(
 
 
 def render_setup_md(prereqs: Prereqs, *, bundle_name: str) -> str:
-    """Render a :class:`Prereqs` into a human-readable ``SETUP.md``.
+    """Renders a :class:`Prereqs` into a human-readable ``SETUP.md``.
 
     Args:
         prereqs: Collected dependencies for this bundle.

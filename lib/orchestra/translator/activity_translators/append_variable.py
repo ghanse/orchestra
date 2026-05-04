@@ -1,4 +1,4 @@
-"""Translate ADF AppendVariable activities to Databricks AppendVariableActivity IR.
+"""Translates ADF AppendVariable activities to Databricks AppendVariableActivity IR.
 
 AppendVariable threads context by registering the variable mapping in the
 translation context, so that downstream ``@variables('name')`` references
@@ -20,7 +20,7 @@ def translate(
     context: TranslationContext,
     definitions: AdfDefinitions,
 ) -> tuple[Activity, TranslationContext]:
-    """Translate an AppendVariable activity and register the variable in context.
+    """Translates an AppendVariable activity and register the variable in context.
 
     Args:
         activity: The ADF activity AST node.
@@ -32,10 +32,10 @@ def translate(
         Tuple of ``(AppendVariableActivity, updated_context)`` where the context
         now maps the variable name to this activity's task key.
     """
-    tp = activity.type_properties or {}
+    type_properties = activity.type_properties or {}
 
-    variable_name = tp.get("variableName", "")
-    value_raw = tp.get("value", "")
+    variable_name = type_properties.get("variableName", "")
+    value_raw = type_properties.get("value", "")
 
     # Resolve via unified expression resolver
     expr_result = resolve_expression(value_raw, context)

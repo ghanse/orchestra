@@ -1,4 +1,4 @@
-"""Translate ADF DatabricksSparkJar activities to Databricks SparkJarActivity IR."""
+"""Translates ADF DatabricksSparkJar activities to Databricks SparkJarActivity IR."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ def translate(
     context: TranslationContext,
     definitions: AdfDefinitions,
 ) -> Activity:
-    """Translate a DatabricksSparkJar activity.
+    """Translates a DatabricksSparkJar activity.
 
     Args:
         activity: The ADF activity AST node.
@@ -44,7 +44,7 @@ def translate(
 
 
 def _resolve_parameter(param: Any, context: TranslationContext) -> str:
-    """Resolve a single ADF parameter to a DAB value string.
+    """Resolves a single ADF parameter to a DAB value string.
 
     Handles expression dicts, ``@expr`` style, and ``@{expr}`` interpolation.
 

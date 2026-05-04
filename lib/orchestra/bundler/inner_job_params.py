@@ -1,4 +1,4 @@
-"""Collect and normalize parameters for ForEach inner jobs.
+"""Collects and normalize parameters for ForEach inner jobs.
 
 Scans task dicts and their ``base_parameters`` for ADF expression references
 (``@item()``, ``@pipeline().parameters.X``, ``@variables('Y')``) and:
@@ -52,7 +52,7 @@ def collect_inner_job_params(
     *,
     raw_ir_tasks: list[dict[str, Any]] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, str]]:
-    """Scan task dicts for parameter references and return declarations + pass-through map.
+    """Scans task dicts for parameter references and return declarations + pass-through map.
 
     Args:
         tasks: The inner job's DAB task dicts (may be nested via condition_task).
@@ -179,7 +179,7 @@ def _scan_ir_tasks(
     *,
     item_field_names: set[str] | None = None,
 ) -> None:
-    """Scan raw IR task dicts for parameter references in all fields.
+    """Scans raw IR task dicts for parameter references in all fields.
 
     Catches references in fields that ``_scan_tasks`` can't see because they
     are consumed during DAB conversion -- e.g. WebActivity ``url`` and ``body``,
@@ -223,7 +223,7 @@ def _extract_refs(
     *,
     item_field_names: set[str] | None = None,
 ) -> None:
-    """Extract parameter names from a single value that may be a string or ADF expression dict."""
+    """Extracts parameter names from a single value that may be a string or ADF expression dict."""
     text = ""
     if isinstance(value, str):
         text = value
@@ -300,7 +300,7 @@ def _normalize_value(value: Any) -> str:
 
 
 def _replace_refs(text: str) -> str:
-    """Replace ADF references with {{job.parameters.*}} or {{job.*}} refs.
+    """Replaces ADF references with {{job.parameters.*}} or {{job.*}} refs.
 
     Order matters: field-access patterns must fire before bare patterns
     to avoid partial matches.
@@ -327,7 +327,7 @@ def _replace_refs(text: str) -> str:
 
 
 def _resolve_concat(text: str) -> str:
-    """Resolve ``@concat(arg1, arg2, ...)`` to a plain concatenated string.
+    """Resolves ``@concat(arg1, arg2, ...)`` to a plain concatenated string.
 
     Only resolves when all arguments are string literals or already-resolved
     ``{{...}}`` references.  Returns the original text if the concat is too
@@ -362,7 +362,7 @@ def _resolve_concat(text: str) -> str:
 
 
 def _split_concat_args(args_str: str) -> list[str] | None:
-    """Split concat arguments respecting nested parentheses and quotes.
+    """Splits concat arguments respecting nested parentheses and quotes.
 
     Args:
         args_str: The argument string inside concat(...).

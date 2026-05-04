@@ -1,4 +1,4 @@
-"""Translate ADF IfCondition activities to Databricks IfConditionActivity IR.
+"""Translates ADF IfCondition activities to Databricks IfConditionActivity IR.
 
 IfCondition is a control-flow container that threads context through both
 branch translations.  Returns a ``(Activity, TranslationContext)`` tuple.
@@ -63,7 +63,7 @@ def translate(
     *,
     translate_activities_fn: Any = None,
 ) -> tuple[Activity, TranslationContext]:
-    """Translate an IfCondition activity with recursive branch translation.
+    """Translates an IfCondition activity with recursive branch translation.
 
     Args:
         activity: The ADF activity AST node.
@@ -76,10 +76,10 @@ def translate(
     Returns:
         Tuple of ``(IfConditionActivity, updated_context)``.
     """
-    tp = activity.type_properties or {}
+    type_properties = activity.type_properties or {}
 
     # Parse expression
-    expression_raw = tp.get("expression", {})
+    expression_raw = type_properties.get("expression", {})
     op, left, right = _parse_condition(expression_raw, context)
 
     # Translate true branch
@@ -107,7 +107,7 @@ def translate(
 
 
 def _parse_condition(expression: dict[str, Any] | str, context: TranslationContext) -> tuple[str, str, str]:
-    """Parse an ADF IfCondition expression into ``(op, left, right)``.
+    """Parses an ADF IfCondition expression into ``(op, left, right)``.
 
     The operator is mapped to a Databricks ``condition_task`` operator
     (``EQUAL_TO``, ``GREATER_THAN``, etc.).  Operands that reference ADF
@@ -166,7 +166,7 @@ def _parse_condition(expression: dict[str, Any] | str, context: TranslationConte
 
 
 def _resolve_operand(operand: str, context: TranslationContext) -> str:
-    """Convert an ADF expression operand to a Databricks task value reference.
+    """Converts an ADF expression operand to a Databricks task value reference.
 
     Uses the shared ``resolve_expression()`` for activity output, variable,
     and pipeline property references.  Also handles nested function calls
@@ -224,7 +224,7 @@ def _resolve_operand(operand: str, context: TranslationContext) -> str:
 
 
 def _unwrap_functions(expr: str) -> str:
-    """Strip wrapping ADF functions like ``int(...)`` to expose the inner expression.
+    """Strips wrapping ADF functions like ``int(...)`` to expose the inner expression.
 
     Args:
         expr: Expression that may be wrapped in a type-casting function.
@@ -240,7 +240,7 @@ def _unwrap_functions(expr: str) -> str:
 
 
 def _split_args(args_str: str) -> list[str]:
-    """Split function arguments respecting nested parentheses and quotes.
+    """Splits function arguments respecting nested parentheses and quotes.
 
     Args:
         args_str: Comma-separated argument string.

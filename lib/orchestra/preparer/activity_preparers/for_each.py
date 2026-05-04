@@ -30,7 +30,7 @@ from orchestra.parser.expression_parser import resolve_expression
 from orchestra.preparer.workflow_preparer import (
     PreparedActivity,
     PreparedWorkflow,
-    _build_common_task_fields,
+    build_common_task_fields,
     prepare_activity,
 )
 from orchestra.utils import normalize_task_key
@@ -40,7 +40,7 @@ if TYPE_CHECKING:
 
 
 def _resolve_for_each_inputs(items_expression: str) -> str:
-    """Convert an ADF items expression to a DAB dynamic value reference.
+    """Converts an ADF items expression to a DAB dynamic value reference.
 
     Uses the unified ``resolve_expression()`` to map ADF expressions to DAB
     refs.  Falls back to the original expression if it cannot be resolved.
@@ -72,7 +72,7 @@ def _resolve_for_each_inputs(items_expression: str) -> str:
 
 
 def _inject_input_parameter(inner_task: dict) -> dict:
-    """Add ``{{input}}`` as a base_parameter on the inner task.
+    """Adds ``{{input}}`` as a base_parameter on the inner task.
 
     For notebook tasks, each item from the ForEach array is passed as the
     ``item`` widget parameter using the ``{{input}}`` dynamic value reference.
@@ -96,7 +96,7 @@ def _inject_input_parameter(inner_task: dict) -> dict:
 
 
 def prepare(activity: ForEachActivity, *, scope: str = "") -> PreparedActivity:
-    """Convert a ForEachActivity into a DAB for_each_task definition.
+    """Converts a ForEachActivity into a DAB for_each_task definition.
 
     - **Single inner activity**: inlined directly in ``for_each_task.task``.
     - **Multiple inner activities**: emits a separate inner job
@@ -111,7 +111,7 @@ def prepare(activity: ForEachActivity, *, scope: str = "") -> PreparedActivity:
         A PreparedActivity with the for_each_task, plus any notebooks, secrets,
         and inner_workflows from the child activities.
     """
-    task = _build_common_task_fields(activity)
+    task = build_common_task_fields(activity)
     concurrency = activity.concurrency if activity.concurrency is not None else 20
     inputs = _resolve_for_each_inputs(activity.items_expression)
 

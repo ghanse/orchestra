@@ -19,11 +19,11 @@ from typing import TYPE_CHECKING, Any
 
 from orchestra.models.ir import TranslationContext
 from orchestra.parser.expression_parser import resolve_expression, resolve_interpolated_string
-from orchestra.preparer.activity_preparers.if_condition import _inject_outcome_dependency
+from orchestra.preparer.activity_preparers.if_condition import inject_outcome_dependency
 from orchestra.preparer.workflow_preparer import (
     PreparedActivity,
     PreparedArtifacts,
-    _build_common_task_fields,
+    build_common_task_fields,
     merge_prepared_artifacts,
     prepare_activity,
 )
@@ -33,7 +33,7 @@ if TYPE_CHECKING:
 
 
 def _sanitize_key(value: str) -> str:
-    """Sanitize a case value for use in a task key.
+    """Sanitizes a case value for use in a task key.
 
     Args:
         value: Raw case value string.
@@ -47,7 +47,7 @@ def _sanitize_key(value: str) -> str:
 
 
 def _resolve_on_expression(on_expr: str) -> str:
-    """Resolve the switch ``on`` expression to a DAB dynamic value ref.
+    """Resolves the switch ``on`` expression to a DAB dynamic value ref.
 
     Args:
         on_expr: Raw ADF on-expression string.
@@ -66,7 +66,7 @@ def _resolve_on_expression(on_expr: str) -> str:
 
 
 def prepare(activity: SwitchActivity, *, scope: str = "") -> PreparedActivity:
-    """Convert a SwitchActivity into a chain of flattened condition tasks.
+    """Converts a SwitchActivity into a chain of flattened condition tasks.
 
     Produces one condition task per case, linked together by ``outcome:
     "false"`` dependencies so cases are evaluated in order.  Each case's
@@ -89,7 +89,7 @@ def prepare(activity: SwitchActivity, *, scope: str = "") -> PreparedActivity:
 
     # Degenerate case: no cases at all -> fire the default (if any) unconditionally.
     if not activity.cases:
-        task = _build_common_task_fields(activity)
+        task = build_common_task_fields(activity)
         task["condition_task"] = {"op": "EQUAL_TO", "left": "true", "right": "true"}
 
         default_tasks: list[dict[str, Any]] = []
@@ -98,7 +98,7 @@ def prepare(activity: SwitchActivity, *, scope: str = "") -> PreparedActivity:
             default_tasks.append(prepared.task)
             default_tasks.extend(prepared.extra_tasks)
             artifacts = merge_prepared_artifacts(artifacts, prepared)
-        _inject_outcome_dependency(default_tasks, activity.task_key, "true")
+        inject_outcome_dependency(default_tasks, activity.task_key, "true")
 
         return PreparedActivity(
             task=task,
@@ -128,7 +128,7 @@ def prepare(activity: SwitchActivity, *, scope: str = "") -> PreparedActivity:
         if is_first:
             # First condition takes the original activity's depends_on, timeouts,
             # retries, etc. — same baseline as before, just under the new key.
-            base = _build_common_task_fields(activity)
+            base = build_common_task_fields(activity)
             base.pop("task_key", None)
             condition_task.update(base)
         else:
@@ -141,7 +141,7 @@ def prepare(activity: SwitchActivity, *, scope: str = "") -> PreparedActivity:
             case_branch_tasks.append(prepared.task)
             case_branch_tasks.extend(prepared.extra_tasks)
             artifacts = merge_prepared_artifacts(artifacts, prepared)
-        _inject_outcome_dependency(case_branch_tasks, case_key, "true")
+        inject_outcome_dependency(case_branch_tasks, case_key, "true")
 
         if is_first:
             first_condition_task = condition_task
@@ -157,7 +157,7 @@ def prepare(activity: SwitchActivity, *, scope: str = "") -> PreparedActivity:
         branch_default_tasks.extend(prepared.extra_tasks)
         artifacts = merge_prepared_artifacts(artifacts, prepared)
     if branch_default_tasks:
-        _inject_outcome_dependency(branch_default_tasks, case_keys[-1], "false")
+        inject_outcome_dependency(branch_default_tasks, case_keys[-1], "false")
         extra_tasks.extend(branch_default_tasks)
 
     # Tell prepare_workflow to remap any depends_on that referenced the

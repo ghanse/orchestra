@@ -9,7 +9,7 @@ from orchestra.parser.expression_parser import resolve_expression, resolve_inter
 
 
 def resolve_field(value: Any, context: TranslationContext) -> str:
-    """Resolve a field value that may contain an ADF expression.
+    """Resolves a field value that may contain an ADF expression.
 
     Handles: ``{"type": "Expression", "value": "@..."}`` dicts, ``@expr``
     strings, ``@{...}`` interpolation, and plain literals.
@@ -35,7 +35,7 @@ def resolve_field(value: Any, context: TranslationContext) -> str:
 
 
 def resolve_field_int(value: Any, context: TranslationContext, default: int = 0) -> int:
-    """Resolve a field to an integer, handling expressions that resolve to literals.
+    """Resolves a field to an integer, handling expressions that resolve to literals.
 
     Args:
         value: The raw field value from ADF type properties.
@@ -53,7 +53,7 @@ def resolve_field_int(value: Any, context: TranslationContext, default: int = 0)
 
 
 def resolve_dict_values(d: dict[str, Any] | None, context: TranslationContext) -> dict[str, str]:
-    """Resolve all values in a dict that may contain ADF expressions.
+    """Resolves all values in a dict that may contain ADF expressions.
 
     Args:
         d: Dict of field name to raw values.

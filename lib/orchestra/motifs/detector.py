@@ -86,7 +86,7 @@ def detect_motifs(
     pipeline: AdfPipeline,
     definitions: AdfDefinitions,
 ) -> list[DetectedMotif]:
-    """Scan *pipeline* for known multi-activity motifs.
+    """Scans *pipeline* for known multi-activity motifs.
 
     Each motif detector is a specialised heuristic.  Detection order follows
     the ``MOTIF_REGISTRY`` priority so that more specific motifs (e.g.
@@ -156,7 +156,7 @@ def _depends_on(
 
 
 def _type_props_text(activity: AdfActivity) -> str:
-    """Flatten type_properties to a lowercase string for keyword searches."""
+    """Flattens type_properties to a lowercase string for keyword searches."""
     if not activity.type_properties:
         return ""
     return str(activity.type_properties).lower()
@@ -198,16 +198,16 @@ def _infer_source_type(
     if isinstance(source, dict):
         source_type = source.get("type", "")
         if any(
-            kw in source_type.lower()
-            for kw in ("blob", "s3", "datalake", "file", "parquet", "csv", "json", "avro", "orc")
+            keyword in source_type.lower()
+            for keyword in ("blob", "s3", "datalake", "file", "parquet", "csv", "json", "avro", "orc")
         ):
             return "files"
         if any(
-            kw in source_type.lower()
-            for kw in ("sql", "oracle", "db2", "mysql", "postgre", "snowflake", "redshift", "cosmos")
+            keyword in source_type.lower()
+            for keyword in ("sql", "oracle", "db2", "mysql", "postgre", "snowflake", "redshift", "cosmos")
         ):
             return "database"
-        if any(kw in source_type.lower() for kw in ("rest", "http", "odata")):
+        if any(keyword in source_type.lower() for keyword in ("rest", "http", "odata")):
             return "rest_api"
 
     return None
@@ -230,7 +230,7 @@ def _record_motif(
     source_type_hint: str | None,
     confidence_notes: list[str],
 ) -> None:
-    """Append a fully-populated :class:`DetectedMotif` to *results*.
+    """Appends a fully-populated :class:`DetectedMotif` to *results*.
 
     Centralising the construction keeps every detector emitting the same
     field shape and lets callers focus on the matching logic instead of
@@ -249,7 +249,7 @@ def _record_motif(
 def _has_keyword(text: str, *keywords: str) -> bool:
     """Case-insensitive keyword check in *text*."""
     lower = text.lower()
-    return any(kw.lower() in lower for kw in keywords)
+    return any(keyword.lower() in lower for keyword in keywords)
 
 
 def _detect_incremental_watermark(
@@ -258,7 +258,7 @@ def _detect_incremental_watermark(
     definitions: AdfDefinitions,
     claimed: set[str],
 ) -> list[DetectedMotif]:
-    """Detect incremental-load-watermark pattern.
+    """Detects incremental-load-watermark pattern.
 
     Heuristic:
     - 2+ Lookup activities upstream of a Copy activity
@@ -332,7 +332,7 @@ def _detect_cdc_change_tracking(
     definitions: AdfDefinitions,
     claimed: set[str],
 ) -> list[DetectedMotif]:
-    """Detect CDC change-tracking pattern.
+    """Detects CDC change-tracking pattern.
 
     Very similar to watermark but specifically looks for CHANGETABLE /
     SYS_CHANGE_VERSION keywords.
@@ -394,7 +394,7 @@ def _detect_metadata_driven_bulk_copy(
     definitions: AdfDefinitions,
     claimed: set[str],
 ) -> list[DetectedMotif]:
-    """Detect metadata-driven bulk copy pattern.
+    """Detects metadata-driven bulk copy pattern.
 
     Heuristic:
     - A Lookup activity upstream of a ForEach
@@ -462,7 +462,7 @@ def _detect_file_landing_zone(
     definitions: AdfDefinitions,
     claimed: set[str],
 ) -> list[DetectedMotif]:
-    """Detect file landing zone processing pattern.
+    """Detects file landing zone processing pattern.
 
     Heuristic:
     - GetMetadata (list files) upstream
@@ -545,7 +545,7 @@ def _detect_copy_and_notify(
     definitions: AdfDefinitions,
     claimed: set[str],
 ) -> list[DetectedMotif]:
-    """Detect copy-and-notify pattern.
+    """Detects copy-and-notify pattern.
 
     Heuristic:
     - A Copy activity followed by one or more WebActivity calls
@@ -613,7 +613,7 @@ def _detect_staged_load_synapse(
     definitions: AdfDefinitions,
     claimed: set[str],
 ) -> list[DetectedMotif]:
-    """Detect staged-load (Synapse) pattern.
+    """Detects staged-load (Synapse) pattern.
 
     Heuristic:
     - Copy activity followed by a StoredProcedure
@@ -689,7 +689,7 @@ def _detect_rest_api_pagination(
     definitions: AdfDefinitions,
     claimed: set[str],
 ) -> list[DetectedMotif]:
-    """Detect REST API pagination pattern.
+    """Detects REST API pagination pattern.
 
     Heuristic:
     - WebActivity (auth / token) early in the chain
@@ -780,7 +780,7 @@ def _detect_parent_child_orchestration(
     definitions: AdfDefinitions,
     claimed: set[str],
 ) -> list[DetectedMotif]:
-    """Detect parent-child orchestration pattern.
+    """Detects parent-child orchestration pattern.
 
     Heuristic:
     - Lookup upstream of ForEach
@@ -834,7 +834,7 @@ def _detect_file_existence_validation(
     definitions: AdfDefinitions,
     claimed: set[str],
 ) -> list[DetectedMotif]:
-    """Detect file-existence validation pattern.
+    """Detects file-existence validation pattern.
 
     Heuristic:
     - GetMetadata checking ``exists`` field
@@ -885,7 +885,7 @@ def _detect_scd_type_2(
     definitions: AdfDefinitions,
     claimed: set[str],
 ) -> list[DetectedMotif]:
-    """Detect SCD Type 2 pattern.
+    """Detects SCD Type 2 pattern.
 
     Heuristic:
     - Copy activity to staging

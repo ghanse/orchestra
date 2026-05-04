@@ -19,24 +19,11 @@ def prepare(
     scope: str = "",
     variable_task_keys: dict[str, str] | None = None,
 ) -> PreparedActivity:
-    """Convert an AppendVariableActivity into a notebook_task that appends to an array.
+    """Converts an AppendVariableActivity into a notebook_task that appends to an array.
 
-    The generated notebook reads the current array from the task value set by
-    the most-recent prior writer of this variable, appends, and writes back.
-
-    When ``value_kind`` is ``"literal"`` or ``"dab_ref"`` the value is passed
-    via ``base_parameters``.  When ``"notebook_code"`` the code is embedded
-    directly in the notebook.
-
-    Args:
-        activity: The translated append-variable activity from the IR.
-        scope: Secret scope name (unused here but accepted for dispatch).
-        variable_task_keys: Map of pipeline variable name -> task_key of the
-            most recent writer, used to populate the ``source_task_key``
-            widget so the generated notebook can read the current value.
-
-    Returns:
-        A PreparedActivity with the notebook_task and generated notebook.
+    ``variable_task_keys`` maps each pipeline variable to the task_key of its
+    most-recent writer; the generated notebook reads that task's value and
+    appends to it.
     """
     base_parameters: dict[str, str] = {
         "variable_name": activity.variable_name,
@@ -44,9 +31,6 @@ def prepare(
     }
     if activity.value_kind in ("literal", "dab_ref"):
         base_parameters["value"] = activity.append_value
-    # ``notebook_code`` values are embedded directly in the body, but any
-    # ``dbutils.widgets.get()`` calls still need their refs threaded through
-    # base_parameters so DAB can supply the matching widget values.
     for widget_name, dab_ref in activity.required_parameters.items():
         base_parameters.setdefault(widget_name, dab_ref)
 

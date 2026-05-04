@@ -1,4 +1,4 @@
-"""Generate Python notebook content for activities that need custom notebooks.
+"""Generates Python notebook content for activities that need custom notebooks.
 
 Each generator produces a self-contained Databricks notebook with:
 - A ``# Databricks notebook source`` header
@@ -36,7 +36,7 @@ if TYPE_CHECKING:
 
 
 def generate_lookup_notebook(activity: LookupActivity, *, scope: str = "") -> str:
-    """Generate a Python notebook that executes a lookup query.
+    """Generates a Python notebook that executes a lookup query.
 
     Args:
         activity: The LookupActivity IR node.
@@ -49,8 +49,6 @@ def generate_lookup_notebook(activity: LookupActivity, *, scope: str = "") -> st
     source_type = activity.source_type or ""
     query = activity.source_query or ""
 
-    # Determine whether the query is static SQL or computed Python code
-    # (e.g. contains dbutils.widgets.get() calls from expression resolution).
     is_dynamic_query = "dbutils.widgets.get" in query or "dbutils.jobs.taskValues" in query
 
     if source_type in JDBC_SOURCE_TYPES:
@@ -130,7 +128,7 @@ def generate_lookup_notebook(activity: LookupActivity, *, scope: str = "") -> st
 
 
 def generate_web_activity_notebook(activity: WebActivity, *, scope: str = "") -> str:
-    """Generate a Python notebook that makes an HTTP request.
+    """Generates a Python notebook that makes an HTTP request.
 
     Args:
         activity: The WebActivity IR node.
@@ -251,7 +249,7 @@ def generate_web_activity_notebook(activity: WebActivity, *, scope: str = "") ->
 
 
 def generate_delete_notebook(activity: DeleteActivity) -> str:
-    """Generate a notebook using dbutils.fs.rm().
+    """Generates a notebook using dbutils.fs.rm().
 
     Args:
         activity: The DeleteActivity IR node.
@@ -279,7 +277,7 @@ def generate_delete_notebook(activity: DeleteActivity) -> str:
 
 
 def generate_set_variable_notebook(activity: SetVariableActivity) -> str:
-    """Generate a notebook that sets a task value.
+    """Generates a notebook that sets a task value.
 
     Databricks jobs use ``dbutils.jobs.taskValues.set()`` as the equivalent
     of ADF pipeline variables, allowing downstream tasks to read values via
@@ -348,7 +346,7 @@ def generate_set_variable_notebook(activity: SetVariableActivity) -> str:
 
 
 def generate_wait_notebook(activity: WaitActivity) -> str:
-    """Generate a notebook that sleeps for a specified duration.
+    """Generates a notebook that sleeps for a specified duration.
 
     ADF Wait activities pause pipeline execution for N seconds.  The
     Databricks equivalent is a simple ``time.sleep()`` call inside a
@@ -380,7 +378,7 @@ def generate_wait_notebook(activity: WaitActivity) -> str:
 
 
 def generate_copy_notebook(activity: CopyActivity, *, scope: str = "") -> str:
-    """Generate a notebook for copy operations (Auto Loader, COPY INTO, or JDBC).
+    """Generates a notebook for copy operations (Auto Loader, COPY INTO, or JDBC).
 
     The ingestion strategy is chosen based on the source type string:
     - **File-based sources** (BlobSource, AzureBlobFSSource, etc.): Auto Loader
@@ -448,7 +446,7 @@ def _strip_inline_imports(body: str, hoisted: list[str]) -> str:
 
 
 def generate_filter_notebook(activity: FilterActivity) -> str:
-    """Generate a notebook that filters an array and stores the result as a task value.
+    """Generates a notebook that filters an array and stores the result as a task value.
 
     The notebook reads the input array from a task value or parameter, applies
     the filter condition, and writes the filtered result via
@@ -504,7 +502,7 @@ def generate_filter_notebook(activity: FilterActivity) -> str:
 
 
 def generate_append_variable_notebook(activity: AppendVariableActivity) -> str:
-    """Generate a notebook that appends a value to an array task value.
+    """Generates a notebook that appends a value to an array task value.
 
     Reads the current array from a task value (or initialises an empty list),
     appends the new value, and writes the updated array back via
@@ -634,7 +632,7 @@ _DAB_REF_TASK_VALUE_RE = re.compile(r"\{\{tasks\.([^.]+)\.values\.(\w+)\}\}")
 
 
 def _dab_ref_to_fstring_expr(ref: str) -> str:
-    """Convert a DAB ref (``{{job.name}}``) to a Python f-string expression.
+    """Converts a DAB ref (``{{job.name}}``) to a Python f-string expression.
 
     The returned snippet is meant to be inlined in an f-string, so it always
     evaluates to a string at notebook runtime via ``dbutils`` or
@@ -657,7 +655,7 @@ def _dab_ref_to_fstring_expr(ref: str) -> str:
 
 
 def _resolve_body(body: Any) -> str:
-    """Resolve ADF expressions in a request body and return a Python expression.
+    """Resolves ADF expressions in a request body and return a Python expression.
 
     The returned string must be valid Python that evaluates (at notebook
     execution time) to a ``dict`` / ``list`` / ``str`` — whatever
@@ -691,7 +689,7 @@ def _resolve_body(body: Any) -> str:
 
 
 def _resolve_string_body(body: str) -> str:
-    """Render a string-shaped WebActivity body as Python source."""
+    """Renders a string-shaped WebActivity body as Python source."""
     context = TranslationContext()
     if "@{" in body:
         resolved_str = resolve_interpolated_string_for_notebook(body, context)
@@ -708,7 +706,7 @@ def _resolve_string_body(body: str) -> str:
 
 
 def _resolve_dict_body(body: dict[str, Any]) -> str:
-    """Render a dict-shaped WebActivity body as Python source.
+    """Renders a dict-shaped WebActivity body as Python source.
 
     Unwraps the ``{"type": "Expression", "value": "@..."}`` shape (the body
     itself is an ADF expression).  Otherwise resolves each value -- when at
@@ -739,7 +737,7 @@ def _resolve_dict_body(body: dict[str, Any]) -> str:
 
 
 def _resolve_dict_value(value: Any, context: TranslationContext) -> tuple[Any, bool]:
-    """Resolve a single dict value; return ``(new_value, needs_fstring)``."""
+    """Resolves a single dict value; return ``(new_value, needs_fstring)``."""
     if isinstance(value, str) and "@{" in value:
         return resolve_interpolated_string_for_notebook(value, context), True
     if isinstance(value, str) and value.startswith("@"):
@@ -753,7 +751,7 @@ def _resolve_dict_value(value: Any, context: TranslationContext) -> tuple[Any, b
 def _resolve_expression_value(
     raw: Any, context: TranslationContext, *, fallback: Any
 ) -> tuple[Any, bool]:
-    """Resolve a string/dict expression to either an f-string or a literal.
+    """Resolves a string/dict expression to either an f-string or a literal.
 
     Returns ``(value, needs_fstring)``.  ``dab_ref`` results are turned into
     f-string fragments; ``literal`` results pass through; anything else
@@ -770,7 +768,7 @@ def _resolve_expression_value(
 
 
 def _resolve_headers(headers: dict[str, str] | None) -> tuple[str, str]:
-    """Resolve ADF expressions in HTTP header values.
+    """Resolves ADF expressions in HTTP header values.
 
     Header values may be plain strings or ADF expression dicts like
     ``{"type": "Expression", "value": "@concat('Bearer ', ...)"}``.
@@ -959,7 +957,7 @@ def _infer_file_format(source_type: str | None, source_properties: dict | None) 
 
 
 def _generate_autoloader_body(activity: CopyActivity) -> str:
-    """Generate Auto Loader ingestion body for file-based sources."""
+    """Generates Auto Loader ingestion body for file-based sources."""
     source_properties = activity.source_properties or {}
     sink_properties = activity.sink_properties or {}
 
@@ -1014,7 +1012,7 @@ def _generate_autoloader_body(activity: CopyActivity) -> str:
 
 
 def _adf_timeout_to_seconds(value: Any) -> int | None:
-    """Parse ADF duration strings (e.g. ``"02:00:00"`` / ``"0.01:30:00"``) to seconds.
+    """Parses ADF duration strings (e.g. ``"02:00:00"`` / ``"0.01:30:00"``) to seconds.
 
     ADF timeout strings use ``[d.]HH:MM:SS`` format.  Return ``None`` when the
     value is empty or can't be parsed so the caller can decide whether to
@@ -1042,7 +1040,7 @@ def _adf_timeout_to_seconds(value: Any) -> int | None:
 
 
 def _generate_jdbc_body(activity: CopyActivity, *, scope: str = "") -> str:
-    """Generate JDBC ingestion body for database sources.
+    """Generates JDBC ingestion body for database sources.
 
     When the SQL query contains an ADF expression like
     ``@concat('SELECT * FROM ', item().schema_name, '.', item().table_name)``,
@@ -1166,7 +1164,7 @@ def _generate_jdbc_body(activity: CopyActivity, *, scope: str = "") -> str:
 
 
 def _generate_rest_copy_body(activity: CopyActivity) -> str:
-    """Generate REST API ingestion body."""
+    """Generates REST API ingestion body."""
     source_properties = activity.source_properties or {}
     sink_properties = activity.sink_properties or {}
 
@@ -1208,7 +1206,7 @@ def _generate_rest_copy_body(activity: CopyActivity) -> str:
 
 
 def _generate_generic_copy_body(activity: CopyActivity) -> str:
-    """Generate a generic Spark read/write copy body as fallback."""
+    """Generates a generic Spark read/write copy body as fallback."""
     source_properties = activity.source_properties or {}
     sink_properties = activity.sink_properties or {}
 

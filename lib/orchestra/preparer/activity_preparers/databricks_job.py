@@ -6,14 +6,14 @@ from typing import TYPE_CHECKING
 
 from orchestra.models.ir import TranslationContext
 from orchestra.parser.expression_parser import resolve_expression, resolve_interpolated_string
-from orchestra.preparer.workflow_preparer import PreparedActivity, _build_common_task_fields
+from orchestra.preparer.workflow_preparer import PreparedActivity, build_common_task_fields
 
 if TYPE_CHECKING:
     from orchestra.models.ir import RunJobActivity
 
 
 def _resolve_param_value(value: str) -> str:
-    """Resolve an ADF expression parameter value to a DAB ref.
+    """Resolves an ADF expression parameter value to a DAB ref.
 
     Args:
         value: A parameter value string that may contain ADF expressions.
@@ -21,15 +21,15 @@ def _resolve_param_value(value: str) -> str:
     Returns:
         Resolved value string.
     """
-    ctx = TranslationContext()
+    context = TranslationContext()
 
     # Try @{...} interpolation
     if "@{" in value:
-        return resolve_interpolated_string(value, ctx)
+        return resolve_interpolated_string(value, context)
 
     # Try @expr style
     if value.startswith("@"):
-        result = resolve_expression(value, ctx)
+        result = resolve_expression(value, context)
         if result is not None and result.kind in ("dab_ref", "literal"):
             return result.value
 
@@ -37,7 +37,7 @@ def _resolve_param_value(value: str) -> str:
 
 
 def prepare(activity: RunJobActivity, *, scope: str = "") -> PreparedActivity:
-    """Convert a RunJobActivity into a DAB run_job_task definition.
+    """Converts a RunJobActivity into a DAB run_job_task definition.
 
     If the activity specifies an ``existing_job_id``, it is used directly.
     Otherwise the ``job_name`` is included as a resource reference.
@@ -48,7 +48,7 @@ def prepare(activity: RunJobActivity, *, scope: str = "") -> PreparedActivity:
     Returns:
         A PreparedActivity containing the run_job_task dict.
     """
-    task = _build_common_task_fields(activity)
+    task = build_common_task_fields(activity)
     run_job: dict = {}
 
     if activity.existing_job_id:

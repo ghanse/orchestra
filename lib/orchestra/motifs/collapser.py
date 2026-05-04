@@ -25,7 +25,7 @@ def collapse_motifs(
     pipeline: Pipeline,
     motifs: list[DetectedMotif],
 ) -> Pipeline:
-    """Replace matched activity groups with MotifActivity nodes.
+    """Replaces matched activity groups with MotifActivity nodes.
 
     For each detected motif, the matched activities are removed from the
     pipeline task list and replaced with a single :class:`MotifActivity`.
@@ -94,7 +94,7 @@ def _find_motif_for_activity(
     activity_name: str,
     motifs: list[DetectedMotif],
 ) -> DetectedMotif | None:
-    """Find the motif that claimed a given activity."""
+    """Finds the motif that claimed a given activity."""
     for motif in motifs:
         if activity_name in motif.matched_activities:
             return motif
@@ -105,7 +105,7 @@ def _build_motif_activity(
     motif: DetectedMotif,
     tasks_by_name: dict[str, Activity],
 ) -> MotifActivity:
-    """Build a MotifActivity from a detected motif and the original tasks."""
+    """Builds a MotifActivity from a detected motif and the original tasks."""
     definition = motif.definition
 
     task_key = f"motif_{definition.motif_id}"
@@ -144,7 +144,7 @@ def _build_motif_config(
     original_activities: list[Activity],
     motif_task_key: str,
 ) -> dict[str, Any]:
-    """Extract motif-specific settings from the activities being collapsed.
+    """Extracts motif-specific settings from the activities being collapsed.
 
     For ``for_each_ingestion``: pulls the driving Lookup's SQL query and
     source type so the generated notebook can fetch the iteration list
@@ -179,7 +179,7 @@ def _collect_external_dependencies(
     activities: list[Activity],
     matched_names: set[str],
 ) -> list[Dependency]:
-    """Collect dependencies that point outside the matched activity group.
+    """Collects dependencies that point outside the matched activity group.
 
     These become the MotifActivity's upstream dependencies — preserving
     the pipeline's overall execution order.

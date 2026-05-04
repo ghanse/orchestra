@@ -1,4 +1,4 @@
-"""Translate ADF Wait activities to Databricks WaitActivity IR.
+"""Translates ADF Wait activities to Databricks WaitActivity IR.
 
 Wait is a simple leaf activity that pauses execution for a specified
 number of seconds.
@@ -19,7 +19,7 @@ def translate(
     context: TranslationContext,
     definitions: AdfDefinitions,
 ) -> Activity:
-    """Translate a Wait activity.
+    """Translates a Wait activity.
 
     Args:
         activity: The ADF activity AST node.
@@ -30,9 +30,9 @@ def translate(
     Returns:
         A :class:`WaitActivity` IR node.
     """
-    tp = activity.type_properties or {}
+    type_properties = activity.type_properties or {}
 
-    wait_time_seconds = resolve_field_int(tp.get("waitTimeInSeconds", 0), context, default=0)
+    wait_time_seconds = resolve_field_int(type_properties.get("waitTimeInSeconds", 0), context, default=0)
 
     return WaitActivity(
         **base_kwargs,

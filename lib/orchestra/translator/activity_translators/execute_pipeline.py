@@ -1,4 +1,4 @@
-"""Translate ADF ExecutePipeline activities to Databricks ExecutePipelineActivity IR."""
+"""Translates ADF ExecutePipeline activities to Databricks ExecutePipelineActivity IR."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ def translate(
     context: TranslationContext,
     definitions: AdfDefinitions,
 ) -> Activity:
-    """Translate an ExecutePipeline activity.
+    """Translates an ExecutePipeline activity.
 
     Extracts the child pipeline reference name, parameters, and wait-on-completion flag.
 
@@ -28,18 +28,18 @@ def translate(
     Returns:
         An :class:`ExecutePipelineActivity` IR node.
     """
-    tp = activity.type_properties or {}
+    type_properties = activity.type_properties or {}
 
     # Pipeline reference
-    pipeline_ref = tp.get("pipeline", {})
+    pipeline_ref = type_properties.get("pipeline", {})
     pipeline_name = (
         resolve_field(pipeline_ref.get("referenceName", ""), context)
         if isinstance(pipeline_ref, dict)
         else str(pipeline_ref)
     )
 
-    parameters = resolve_dict_values(tp.get("parameters"), context) or {}
-    wait_on_completion = tp.get("waitOnCompletion", True)
+    parameters = resolve_dict_values(type_properties.get("parameters"), context) or {}
+    wait_on_completion = type_properties.get("waitOnCompletion", True)
 
     return ExecutePipelineActivity(
         **base_kwargs,

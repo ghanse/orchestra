@@ -1,4 +1,4 @@
-"""Translate ADF WebActivity activities to Databricks WebActivity IR."""
+"""Translates ADF WebActivity activities to Databricks WebActivity IR."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ def translate(
     context: TranslationContext,
     definitions: AdfDefinitions,
 ) -> Activity:
-    """Translate a WebActivity.
+    """Translates a WebActivity.
 
     Extracts URL, HTTP method, headers, body, and authentication config.
 
@@ -91,7 +91,7 @@ def _resolve_body(body: Any, context: TranslationContext) -> Any:
 
 
 def _parse_timeout_to_seconds(timeout_str: str) -> int | None:
-    """Parse an ADF timeout string to seconds.
+    """Parses an ADF timeout string to seconds.
 
     Args:
         timeout_str: Timeout in ``"d.hh:mm:ss"`` or ``"hh:mm:ss"`` format.

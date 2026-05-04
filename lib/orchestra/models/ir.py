@@ -166,7 +166,7 @@ class IfConditionActivity(Activity):
 
 @dataclass(slots=True, kw_only=True)
 class SetVariableActivity(Activity):
-    """Set variable activity.
+    """Sets variable activity.
 
     Attributes:
         variable_name: Name of the variable being set.
@@ -225,7 +225,7 @@ class WebActivity(Activity):
 
 @dataclass(slots=True, kw_only=True)
 class DeleteActivity(Activity):
-    """Delete files / folders activity.
+    """Deletes files / folders activity.
 
     Attributes:
         dataset_name: Reference name of the target dataset.
@@ -255,7 +255,7 @@ class ExecutePipelineActivity(Activity):
 
 @dataclass(slots=True, kw_only=True)
 class RunJobActivity(Activity):
-    """Run an existing Databricks job.
+    """Runs an existing Databricks job.
 
     Attributes:
         job_name: Name of the job to run.
@@ -342,7 +342,7 @@ class WaitActivity(Activity):
 
 @dataclass(slots=True, kw_only=True)
 class FilterActivity(Activity):
-    """Filter activity.
+    """Filters activity.
 
     Applies a condition to an input array, returning only matching items.
 
@@ -357,7 +357,7 @@ class FilterActivity(Activity):
 
 @dataclass(slots=True, kw_only=True)
 class AppendVariableActivity(Activity):
-    """Append variable activity.
+    """Appends variable activity.
 
     Adds a value to an existing array variable.
 

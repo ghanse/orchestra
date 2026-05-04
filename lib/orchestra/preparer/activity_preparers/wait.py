@@ -14,14 +14,7 @@ if TYPE_CHECKING:
 
 
 def prepare(activity: WaitActivity, *, scope: str = "") -> PreparedActivity:
-    """Convert a WaitActivity into a notebook_task that sleeps for N seconds.
-
-    Args:
-        activity: The translated wait activity from the IR.
-
-    Returns:
-        A PreparedActivity with the notebook_task and generated notebook.
-    """
+    """Converts a WaitActivity into a notebook_task that sleeps for N seconds."""
     task, notebooks = build_notebook_activity_task(
         activity,
         notebook_relative_path=f"notebooks/{notebook_filename(activity.task_key, activity.name)}",

@@ -1,4 +1,4 @@
-"""Translate ADF Filter activities to Databricks FilterActivity IR."""
+"""Translates ADF Filter activities to Databricks FilterActivity IR."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ def translate(
     context: TranslationContext,
     definitions: AdfDefinitions,
 ) -> Activity:
-    """Translate a Filter activity.
+    """Translates a Filter activity.
 
     Extracts the items expression and condition expression from ADF
     typeProperties.
@@ -29,10 +29,10 @@ def translate(
     Returns:
         A :class:`FilterActivity` IR node.
     """
-    tp = activity.type_properties or {}
+    type_properties = activity.type_properties or {}
 
-    items_raw = tp.get("items", {})
-    condition_raw = tp.get("condition", {})
+    items_raw = type_properties.get("items", {})
+    condition_raw = type_properties.get("condition", {})
 
     # Resolve items expression via unified resolver
     items_result = resolve_expression(items_raw, context)

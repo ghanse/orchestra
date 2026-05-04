@@ -18,14 +18,7 @@ if TYPE_CHECKING:
 
 
 def prepare(activity: WebActivity, *, scope: str = "") -> PreparedActivity:
-    """Convert a WebActivity into a notebook_task with a generated HTTP notebook.
-
-    Args:
-        activity: The translated web activity from the IR.
-
-    Returns:
-        A PreparedActivity with the notebook_task, generated notebook, and secret instructions.
-    """
+    """Converts a WebActivity into a notebook_task with a generated HTTP notebook."""
     task, notebooks = build_notebook_activity_task(
         activity,
         notebook_relative_path=f"notebooks/{notebook_filename(activity.task_key, activity.name)}",

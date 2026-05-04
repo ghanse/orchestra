@@ -1,4 +1,4 @@
-"""Load ADF JSON files from a directory structure and produce typed AST objects.
+"""Loads ADF JSON files from a directory structure and produce typed AST objects.
 
 Supports two input formats:
 
@@ -88,7 +88,7 @@ AGENTIC_TYPES: dict[str, str] = {
 
 
 def load_adf_definitions(source_dir: Path) -> AdfDefinitions:
-    """Load all ADF JSON files from *source_dir* and return an :class:`AdfDefinitions`.
+    """Loads all ADF JSON files from *source_dir* and return an :class:`AdfDefinitions`.
 
     Args:
         source_dir: Root directory containing ADF JSON exports.  May be a
@@ -126,19 +126,18 @@ def load_adf_definitions(source_dir: Path) -> AdfDefinitions:
         for json_file in sorted(dataset_dir.glob("*.json")):
             try:
                 data = json.loads(json_file.read_text(encoding="utf-8"))
-                ds = _parse_dataset_json(data, fallback_name=json_file.stem)
-                datasets[ds.name] = ds
+                dataset = _parse_dataset_json(data, fallback_name=json_file.stem)
+                datasets[dataset.name] = dataset
             except Exception:
                 logger.exception("Failed to parse dataset file %s", json_file)
 
-    # Linked services
-    ls_dir = _find_json_dir(source_dir, "linked_services", "linkedService", "linkedServices")
-    if ls_dir is not None:
-        for json_file in sorted(ls_dir.glob("*.json")):
+    linked_service_dir = _find_json_dir(source_dir, "linked_services", "linkedService", "linkedServices")
+    if linked_service_dir is not None:
+        for json_file in sorted(linked_service_dir.glob("*.json")):
             try:
                 data = json.loads(json_file.read_text(encoding="utf-8"))
-                ls = _parse_linked_service_json(data, fallback_name=json_file.stem)
-                linked_services[ls.name] = ls
+                linked_service = _parse_linked_service_json(data, fallback_name=json_file.stem)
+                linked_services[linked_service.name] = linked_service
             except Exception:
                 logger.exception("Failed to parse linked-service file %s", json_file)
 
@@ -178,7 +177,7 @@ def classify_activity(activity_type: str) -> tuple[TranslationStrategy, str | No
 
 
 def build_inventory(definitions: AdfDefinitions) -> Inventory:
-    """Walk all pipelines in *definitions* and classify every activity.
+    """Walks all pipelines in *definitions* and classify every activity.
 
     Args:
         definitions: Parsed ADF definitions.
@@ -239,7 +238,7 @@ def _find_json_dir(source_dir: Path, *candidate_names: str) -> Path | None:
 
 
 def _parse_pipeline_json(data: dict[str, Any], *, fallback_name: str = "unknown") -> AdfPipeline:
-    """Parse a single pipeline JSON payload into an :class:`AdfPipeline`.
+    """Parses a single pipeline JSON payload into an :class:`AdfPipeline`.
 
     Args:
         data: Raw JSON dictionary (either a bare pipeline or wrapped in ``properties``).
@@ -253,7 +252,7 @@ def _parse_pipeline_json(data: dict[str, Any], *, fallback_name: str = "unknown"
     name = data.get("name") or props.get("name") or fallback_name
 
     activities_raw: list[dict[str, Any]] = props.get("activities", [])
-    activities = [_parse_activity(a) for a in activities_raw]
+    activities = [parse_activity(a) for a in activities_raw]
 
     parameters: dict[str, AdfParameter] | None = None
     raw_params = props.get("parameters")
@@ -295,8 +294,8 @@ def _parse_pipeline_json(data: dict[str, Any], *, fallback_name: str = "unknown"
     )
 
 
-def _parse_activity(data: dict[str, Any]) -> AdfActivity:
-    """Parse an activity dict into a typed :class:`AdfActivity` AST node.
+def parse_activity(data: dict[str, Any]) -> AdfActivity:
+    """Parses an activity dict into a typed :class:`AdfActivity` AST node.
 
     Supports two ADF JSON formats:
 
@@ -366,13 +365,13 @@ def _parse_activity(data: dict[str, Any]) -> AdfActivity:
     if type_properties:
         raw_if_true = type_properties.get("ifTrueActivities")
         if raw_if_true:
-            if_true_activities = [_parse_activity(a) for a in raw_if_true]
+            if_true_activities = [parse_activity(a) for a in raw_if_true]
         raw_if_false = type_properties.get("ifFalseActivities")
         if raw_if_false:
-            if_false_activities = [_parse_activity(a) for a in raw_if_false]
+            if_false_activities = [parse_activity(a) for a in raw_if_false]
         raw_children = type_properties.get("activities")
         if raw_children:
-            child_activities = [_parse_activity(a) for a in raw_children]
+            child_activities = [parse_activity(a) for a in raw_children]
 
     return AdfActivity(
         name=name,
@@ -410,7 +409,7 @@ _COMMON_ACTIVITY_KEYS: frozenset[str] = frozenset(
 
 
 def _collect_type_properties(data: dict[str, Any]) -> dict[str, Any] | None:
-    """Collect type-specific fields from a flattened activity dict.
+    """Collects type-specific fields from a flattened activity dict.
 
     When the ADF JSON omits the ``typeProperties`` wrapper, activity-specific
     fields sit alongside common envelope keys.  This function returns the
@@ -422,12 +421,12 @@ def _collect_type_properties(data: dict[str, Any]) -> dict[str, Any] | None:
     Returns:
         Synthesised type-properties dict, or ``None`` if no extra keys exist.
     """
-    tp: dict[str, Any] = {k: v for k, v in data.items() if k not in _COMMON_ACTIVITY_KEYS}
-    return tp if tp else None
+    type_properties: dict[str, Any] = {k: v for k, v in data.items() if k not in _COMMON_ACTIVITY_KEYS}
+    return type_properties if type_properties else None
 
 
 def _parse_dataset_refs(raw: list[dict[str, Any]] | None) -> list[AdfDatasetReference] | None:
-    """Parse a list of dataset reference dicts into typed objects.
+    """Parses a list of dataset reference dicts into typed objects.
 
     Args:
         raw: Raw list of dataset reference dictionaries, or ``None``.
@@ -451,7 +450,7 @@ def _parse_dataset_refs(raw: list[dict[str, Any]] | None) -> list[AdfDatasetRefe
 
 
 def _parse_dataset_json(data: dict[str, Any], *, fallback_name: str = "unknown") -> AdfDataset:
-    """Parse a dataset JSON payload.
+    """Parses a dataset JSON payload.
 
     Args:
         data: Raw JSON dictionary.
@@ -476,7 +475,7 @@ def _parse_dataset_json(data: dict[str, Any], *, fallback_name: str = "unknown")
 
 
 def _parse_linked_service_json(data: dict[str, Any], *, fallback_name: str = "unknown") -> AdfLinkedService:
-    """Parse a linked-service JSON payload.
+    """Parses a linked-service JSON payload.
 
     Args:
         data: Raw JSON dictionary.
@@ -494,7 +493,7 @@ def _parse_linked_service_json(data: dict[str, Any], *, fallback_name: str = "un
 
 
 def _parse_trigger_json(data: dict[str, Any], *, fallback_name: str = "unknown") -> AdfTrigger:
-    """Parse a trigger JSON payload.
+    """Parses a trigger JSON payload.
 
     Args:
         data: Raw JSON dictionary.
@@ -557,7 +556,7 @@ def _normalize_arm(data: dict[str, Any]) -> dict[str, Any]:
 
 
 def _load_arm_template(template_path: Path) -> AdfDefinitions:
-    """Load all ADF resources from a single ARM template file.
+    """Loads all ADF resources from a single ARM template file.
 
     Args:
         template_path: Path to the ARM template JSON file.
@@ -592,14 +591,14 @@ def _load_arm_template(template_path: Path) -> AdfDefinitions:
                 logger.exception("Failed to parse ARM pipeline resource %s", name)
         elif rtype.endswith("/datasets"):
             try:
-                ds = _parse_dataset_json(wrapped, fallback_name=name)
-                datasets[ds.name] = ds
+                dataset = _parse_dataset_json(wrapped, fallback_name=name)
+                datasets[dataset.name] = dataset
             except Exception:
                 logger.exception("Failed to parse ARM dataset resource %s", name)
         elif rtype.endswith("/linkedServices"):
             try:
-                ls = _parse_linked_service_json(wrapped, fallback_name=name)
-                linked_services[ls.name] = ls
+                linked_service = _parse_linked_service_json(wrapped, fallback_name=name)
+                linked_services[linked_service.name] = linked_service
             except Exception:
                 logger.exception("Failed to parse ARM linked-service resource %s", name)
         elif rtype.endswith("/triggers"):

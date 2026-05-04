@@ -1,4 +1,4 @@
-"""Translate ADF SetVariable activities to Databricks SetVariableActivity IR.
+"""Translates ADF SetVariable activities to Databricks SetVariableActivity IR.
 
 SetVariable threads context by registering the variable mapping in the
 translation context, so that downstream ``@variables('name')`` references
@@ -20,7 +20,7 @@ def translate(
     context: TranslationContext,
     definitions: AdfDefinitions,
 ) -> tuple[Activity, TranslationContext]:
-    """Translate a SetVariable activity and register the variable in context.
+    """Translates a SetVariable activity and register the variable in context.
 
     Args:
         activity: The ADF activity AST node.

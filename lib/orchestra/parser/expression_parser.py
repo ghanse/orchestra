@@ -1,4 +1,4 @@
-"""Translate ADF expressions to a unified ExpressionResult.
+"""Translates ADF expressions to a unified ExpressionResult.
 
 Provides a single ``resolve_expression()`` that returns an
 :class:`ExpressionResult` discriminated union with kind ``"literal"``,
@@ -107,7 +107,7 @@ def resolve_expression(
     *,
     variable_task_keys: dict[str, str] | None = None,
 ) -> ExpressionResult | None:
-    """Translate an ADF expression to an :class:`ExpressionResult`.
+    """Translates an ADF expression to an :class:`ExpressionResult`.
 
     Args:
         value: The ADF expression value.  May be a plain scalar, an
@@ -185,7 +185,7 @@ def resolve_interpolated_string(
     *,
     variable_task_keys: dict[str, str] | None = None,
 ) -> str:
-    """Resolve ``@{...}`` interpolation tokens within a string.
+    """Resolves ``@{...}`` interpolation tokens within a string.
 
     ADF uses ``@{expr}`` for inline string interpolation, e.g.
     ``"prefix_@{pipeline().parameters.name}_suffix"``.  Each ``@{...}``
@@ -227,7 +227,7 @@ def resolve_interpolated_string_for_notebook(
     *,
     variable_task_keys: dict[str, str] | None = None,
 ) -> str:
-    """Resolve ``@{...}`` tokens to Python f-string expressions for notebook code.
+    """Resolves ``@{...}`` tokens to Python f-string expressions for notebook code.
 
     Like :func:`resolve_interpolated_string` but produces Python expressions
     suitable for embedding in an f-string inside a generated notebook (e.g.,
@@ -323,7 +323,7 @@ def parse_expression_for_dab(
 
 
 def _resolve_pipeline_param(expr: str) -> ExpressionResult | None:
-    """Resolve ``pipeline().parameters.X`` -> DAB ref."""
+    """Resolves ``pipeline().parameters.X`` -> DAB ref."""
     match = _PIPELINE_PARAM_RE.match(expr)
     if match is None:
         return None
@@ -332,7 +332,7 @@ def _resolve_pipeline_param(expr: str) -> ExpressionResult | None:
 
 
 def _resolve_pipeline_property(expr: str) -> ExpressionResult | None:
-    """Resolve ``pipeline().PropertyName`` -> DAB ref."""
+    """Resolves ``pipeline().PropertyName`` -> DAB ref."""
     match = _PIPELINE_PROPERTY_RE.match(expr)
     if match is None:
         return None
@@ -346,7 +346,7 @@ def _resolve_pipeline_property(expr: str) -> ExpressionResult | None:
 
 
 def _resolve_activity_output(expr: str) -> ExpressionResult | None:
-    """Resolve ``activity('Name').output...`` -> DAB ref."""
+    """Resolves ``activity('Name').output...`` -> DAB ref."""
     match = _ACTIVITY_OUTPUT_RE.match(expr)
     if match is None:
         return None
@@ -372,7 +372,7 @@ def _resolve_variable(
     *,
     variable_task_keys: dict[str, str] | None = None,
 ) -> ExpressionResult | None:
-    """Resolve ``variables('name')`` -> task value DAB ref."""
+    """Resolves ``variables('name')`` -> task value DAB ref."""
     match = _VARIABLE_RE.match(expr)
     if match is None:
         return None
@@ -389,7 +389,7 @@ def _resolve_variable(
 
 
 def _resolve_utcnow(expr: str) -> ExpressionResult | None:
-    """Resolve ``utcNow()`` or ``utcNow('format')`` -> notebook_code.
+    """Resolves ``utcNow()`` or ``utcNow('format')`` -> notebook_code.
 
     Always returns ``notebook_code`` (rather than a job-trigger DAB ref)
     so the surrounding Python composes naturally: e.g.
@@ -419,7 +419,7 @@ def _resolve_utcnow(expr: str) -> ExpressionResult | None:
 
 
 def _convert_date_format(adf_format: str) -> str:
-    """Convert an ADF .NET date format string to Python strftime format.
+    """Converts an ADF .NET date format string to Python strftime format.
 
     Args:
         adf_format: ADF format string (e.g., ``"yyyy-MM-dd"``).
@@ -439,7 +439,7 @@ def _resolve_concat(
     *,
     variable_task_keys: dict[str, str] | None = None,
 ) -> ExpressionResult | None:
-    """Resolve ``concat(arg1, arg2, ...)`` -> notebook_code.
+    """Resolves ``concat(arg1, arg2, ...)`` -> notebook_code.
 
     Concat always produces notebook_code because its arguments may include
     DAB refs that need to be read from widget parameters at runtime.
@@ -491,7 +491,7 @@ def _resolve_concat(
 
 
 def _dab_ref_to_widget_code(dab_ref: str) -> str:
-    """Convert a DAB ref like ``{{tasks.X.values.Y}}`` to widget get code.
+    """Converts a DAB ref like ``{{tasks.X.values.Y}}`` to widget get code.
 
     The preparer will ensure the DAB ref is passed as a named parameter,
     so the notebook can read it via ``dbutils.widgets.get(...)``.
@@ -520,7 +520,7 @@ def _required_parameter_for_ref(dab_ref: str) -> tuple[str, str]:
 
 
 def _split_concat_args(inner: str) -> list[str]:
-    """Split concat arguments respecting nested parentheses and quoted strings.
+    """Splits concat arguments respecting nested parentheses and quoted strings.
 
     Args:
         inner: The inner content of ``concat(...)``.
@@ -532,7 +532,7 @@ def _split_concat_args(inner: str) -> list[str]:
 
 
 def _split_args(inner: str) -> list[str]:
-    """Split function arguments respecting nested parentheses and quoted strings.
+    """Splits function arguments respecting nested parentheses and quoted strings.
 
     Args:
         inner: The inner content between the outermost parentheses.
@@ -575,7 +575,7 @@ def _resolve_function_call(
     *,
     variable_task_keys: dict[str, str] | None = None,
 ) -> ExpressionResult | None:
-    """Resolve a generic ADF function call via the dispatch table.
+    """Resolves a generic ADF function call via the dispatch table.
 
     Matches ``functionName(args...)``, recursively resolves each argument,
     and dispatches to the registered handler.
@@ -649,7 +649,7 @@ def _is_numeric(text: str) -> bool:
 
 
 def _arg_to_code(arg: ExpressionResult) -> str:
-    """Convert a resolved argument to a Python code snippet."""
+    """Converts a resolved argument to a Python code snippet."""
     if arg.kind == "literal":
         if arg.value in ("True", "False", "None") or _is_numeric(arg.value):
             return arg.value
@@ -688,7 +688,7 @@ def _datetime_arg_code(arg: ExpressionResult) -> str:
 
 
 def _collect_imports(*args: ExpressionResult) -> list[str]:
-    """Collect unique imports from resolved arguments."""
+    """Collects unique imports from resolved arguments."""
     imports: list[str] = []
     for arg in args:
         imports.extend(arg.imports)
@@ -696,7 +696,7 @@ def _collect_imports(*args: ExpressionResult) -> list[str]:
 
 
 def _collect_required_parameters(*args: ExpressionResult) -> dict[str, str]:
-    """Collect widget → DAB ref mappings across resolved arguments.
+    """Collects widget → DAB ref mappings across resolved arguments.
 
     Merges ``required_parameters`` from each arg and, for ``dab_ref`` args
     that weren't already tracked, adds the ref under its widget name so the
@@ -718,7 +718,7 @@ def _result_from_args(
     *,
     extra_imports: list[str] | None = None,
 ) -> ExpressionResult:
-    """Build a ``notebook_code`` result that propagates imports and widget refs.
+    """Builds a ``notebook_code`` result that propagates imports and widget refs.
 
     Used by every ``_handle_*`` that synthesises Python code from argument
     expressions.  Centralising this ensures ``required_parameters`` (the
@@ -1162,7 +1162,7 @@ def _handle_sub(args: list[ExpressionResult]) -> ExpressionResult | None:
 def _make_add_unit_handler(
     timedelta_keyword: str,
 ) -> Callable[[list[ExpressionResult]], ExpressionResult | None]:
-    """Build a handler for ``addDays`` / ``addHours`` / ``addMinutes`` / ``addSeconds``.
+    """Builds a handler for ``addDays`` / ``addHours`` / ``addMinutes`` / ``addSeconds``.
 
     Each ADF function differs only in the ``timedelta`` keyword argument it
     bumps (``days``, ``hours``, ``minutes``, ``seconds``).  Generating the
@@ -1237,7 +1237,7 @@ def _handle_format_date_time(args: list[ExpressionResult]) -> ExpressionResult |
 def _make_now_offset_handler(
     operator: str,
 ) -> Callable[[list[ExpressionResult]], ExpressionResult | None]:
-    """Build a ``getFutureTime`` / ``getPastTime`` handler.
+    """Builds a ``getFutureTime`` / ``getPastTime`` handler.
 
     Both functions read ``(interval, unit, fmt?)`` and emit
     ``datetime.now(utc) ±  timedelta(...)``; ``operator`` is ``"+"`` or
@@ -1315,7 +1315,7 @@ def _handle_subtract_from_time(args: list[ExpressionResult]) -> ExpressionResult
 
 
 def _get_format_arg(args: list[ExpressionResult], idx: int) -> str:
-    """Extract a format argument from the args list, converting ADF .NET format if needed.
+    """Extracts a format argument from the args list, converting ADF .NET format if needed.
 
     Returns a Python string expression suitable for embedding in generated code.
     """

@@ -1,4 +1,4 @@
-"""Translate ADF Delete activities to Databricks DeleteActivity IR."""
+"""Translates ADF Delete activities to Databricks DeleteActivity IR."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ def translate(
     context: TranslationContext,
     definitions: AdfDefinitions,
 ) -> Activity:
-    """Translate a Delete activity.
+    """Translates a Delete activity.
 
     Extracts dataset reference, recursive flag, and wildcard patterns.
 
@@ -28,7 +28,7 @@ def translate(
     Returns:
         A :class:`DeleteActivity` IR node.
     """
-    tp = activity.type_properties or {}
+    type_properties = activity.type_properties or {}
 
     # Dataset reference from inputs
     dataset_name = ""
@@ -36,12 +36,12 @@ def translate(
         dataset_name = activity.inputs[0].reference_name
 
     # Properties from typeProperties
-    recursive = tp.get("recursive", True)
-    folder_path_raw = tp.get("dataset", {}).get("folderPath") if isinstance(tp.get("dataset"), dict) else None
+    recursive = type_properties.get("recursive", True)
+    folder_path_raw = type_properties.get("dataset", {}).get("folderPath") if isinstance(type_properties.get("dataset"), dict) else None
     folder_path = resolve_field(folder_path_raw, context) if folder_path_raw is not None else None
 
     # Also check storeSettings for wildcard paths
-    store_settings = tp.get("storeSettings", {})
+    store_settings = type_properties.get("storeSettings", {})
     wildcard_folder_path_raw = store_settings.get("wildcardFolderPath")
     wildcard_folder_path = (
         resolve_field(wildcard_folder_path_raw, context) if wildcard_folder_path_raw is not None else None

@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 from orchestra.models.ir import TranslationContext
 from orchestra.parser.expression_parser import resolve_expression, resolve_interpolated_string
-from orchestra.preparer.workflow_preparer import PreparedActivity, _build_common_task_fields
+from orchestra.preparer.workflow_preparer import PreparedActivity, build_common_task_fields
 from orchestra.utils import normalize_task_key
 
 if TYPE_CHECKING:
@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 
 
 def _resolve_param_value(value: str) -> str:
-    """Resolve an ADF expression parameter value to a DAB ref.
+    """Resolves an ADF expression parameter value to a DAB ref.
 
     Args:
         value: A parameter value string that may contain ADF expressions.
@@ -23,15 +23,15 @@ def _resolve_param_value(value: str) -> str:
         Resolved value string.
     """
     s = str(value)
-    ctx = TranslationContext()
+    context = TranslationContext()
 
     # Try @{...} interpolation
     if "@{" in s:
-        return resolve_interpolated_string(s, ctx)
+        return resolve_interpolated_string(s, context)
 
     # Try @expr style
     if s.startswith("@"):
-        result = resolve_expression(s, ctx)
+        result = resolve_expression(s, context)
         if result is not None and result.kind in ("dab_ref", "literal"):
             return result.value
 
@@ -39,7 +39,7 @@ def _resolve_param_value(value: str) -> str:
 
 
 def prepare(activity: ExecutePipelineActivity, *, scope: str = "") -> PreparedActivity:
-    """Convert an ExecutePipelineActivity into a DAB run_job_task definition.
+    """Converts an ExecutePipelineActivity into a DAB run_job_task definition.
 
     The referenced pipeline is expected to exist as another job in the same
     bundle.  The ``run_job_task`` uses a resource reference so that DAB
@@ -51,7 +51,7 @@ def prepare(activity: ExecutePipelineActivity, *, scope: str = "") -> PreparedAc
     Returns:
         A PreparedActivity containing the run_job_task dict.
     """
-    task = _build_common_task_fields(activity)
+    task = build_common_task_fields(activity)
     resource_key = normalize_task_key(activity.pipeline_name)
     task["run_job_task"] = {
         "job_id": f"${{resources.jobs.{resource_key}.id}}",

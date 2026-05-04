@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 from orchestra.models.dab import DabNotebook
 from orchestra.preparer.activity_preparers._helpers import resolve_param_value
-from orchestra.preparer.workflow_preparer import PreparedActivity, _build_common_task_fields
+from orchestra.preparer.workflow_preparer import PreparedActivity, build_common_task_fields
 from orchestra.preparer.workspace_downloader import download_dbfs_file
 
 if TYPE_CHECKING:
@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 
 
 def _jar_placeholder(libraries: list[dict] | None, activity_name: str) -> str:
-    """Generate a placeholder file with download instructions for JAR libraries.
+    """Generates a placeholder file with download instructions for JAR libraries.
 
     Args:
         libraries: Library descriptors from the SparkJarActivity.
@@ -40,7 +40,7 @@ def _jar_placeholder(libraries: list[dict] | None, activity_name: str) -> str:
 
 
 def prepare(activity: SparkJarActivity, *, scope: str = "") -> PreparedActivity:
-    """Convert a SparkJarActivity into a DAB spark_jar_task definition.
+    """Converts a SparkJarActivity into a DAB spark_jar_task definition.
 
     Rewrites JAR library paths to bundle-relative paths and creates
     placeholder files with download instructions.
@@ -51,7 +51,7 @@ def prepare(activity: SparkJarActivity, *, scope: str = "") -> PreparedActivity:
     Returns:
         A PreparedActivity containing the spark_jar_task dict and placeholder files.
     """
-    task = _build_common_task_fields(activity)
+    task = build_common_task_fields(activity)
 
     rewritten_libraries: list[dict] = []
     notebooks: list[DabNotebook] = []

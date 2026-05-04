@@ -33,7 +33,7 @@ def _get_databrickscfg_path() -> Path:
 
 
 def _list_profiles() -> list[str]:
-    """Parse ``~/.databrickscfg`` and return available profile names.
+    """Parses ``~/.databrickscfg`` and return available profile names.
 
     Uses ``default_section=None`` so that the ``[DEFAULT]`` section is
     treated as a regular profile (``configparser`` normally hides it).
@@ -58,7 +58,7 @@ def _list_profiles() -> list[str]:
 
 
 def _resolve_profile() -> str | None:
-    """Determine which ``~/.databrickscfg`` profile to use.
+    """Determines which ``~/.databrickscfg`` profile to use.
 
     Resolution order:
 

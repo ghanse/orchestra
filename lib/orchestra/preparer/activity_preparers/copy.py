@@ -24,16 +24,7 @@ _VOLUME_NAME_SANITIZE_RE = re.compile(r"[^a-zA-Z0-9_]")
 
 @dataclass(frozen=True, slots=True)
 class _VolumeBinding:
-    """Resolved UC volume info derived from a file source's resolved ABFSS URL.
-
-    Attributes:
-        volume_name: UC volume name (sanitised from the container).
-        container_location: ``abfss://<container>@<storage_account>`` -- used
-            as the EXTERNAL LOCATION URL for the volume DDL.
-        volume_base: ``/Volumes/${var.catalog}/${var.schema}/<volume>``.
-        source_path: ``<volume_base>/<folder>`` (or ``<volume_base>`` when
-            the dataset has no folder), used as the notebook's source_path.
-    """
+    """Resolved UC volume info derived from a file source's resolved ABFSS URL."""
 
     volume_name: str
     container_location: str
@@ -42,11 +33,11 @@ class _VolumeBinding:
 
 
 def _resolve_volume_binding(source_properties: dict) -> _VolumeBinding | None:
-    """Derive UC volume info from a file source's resolved ABFSS URL.
+    """Derives UC volume info from a file source's resolved ABFSS URL.
 
-    The volume is created at the **container level** so multiple Copy
-    activities sharing the same container reuse a single external volume;
-    the folder portion of the URL becomes a subdirectory under the volume.
+    The volume is created at the *container* level so multiple Copy
+    activities sharing the same container reuse one external volume; the
+    folder portion of the URL becomes a subdirectory under the volume.
     Returns ``None`` when the source has no resolved abfss:// path.
     """
     resolved_path = source_properties.get("resolved_path", "")
@@ -69,7 +60,7 @@ def _resolve_volume_binding(source_properties: dict) -> _VolumeBinding | None:
 
 
 def _augment_with_volume_paths(activity: CopyActivity, binding: _VolumeBinding) -> CopyActivity:
-    """Return a copy of *activity* with volume paths threaded into source_properties."""
+    """Returns a copy of *activity* with volume paths threaded into source_properties."""
     augmented_properties = {
         **(activity.source_properties or {}),
         "volume_path": binding.source_path,
@@ -79,15 +70,12 @@ def _augment_with_volume_paths(activity: CopyActivity, binding: _VolumeBinding) 
 
 
 def prepare(activity: CopyActivity, *, scope: str = "") -> PreparedActivity:
-    """Convert a CopyActivity into a notebook_task with a generated copy notebook.
+    """Converts a CopyActivity into a notebook_task with a generated copy notebook.
 
-    The ingestion strategy is determined by the source type string:
-    - File-based sources use Auto Loader (``cloudFiles``).
-    - Database sources use JDBC reads.
-    - Unknown sources use a generic Spark read/write.
-
-    For file-based sources with a resolved ABFSS path, a UC external volume
-    setup task is also created.
+    File-based sources use Auto Loader (``cloudFiles``); database sources
+    use JDBC reads; everything else uses a generic Spark read/write.  File
+    sources with a resolved ABFSS path also emit a UC external volume
+    setup task.
     """
     source_type = activity.source_type or ""
     volume_binding: _VolumeBinding | None = None
@@ -101,7 +89,6 @@ def prepare(activity: CopyActivity, *, scope: str = "") -> PreparedActivity:
         base_parameters["source_type"] = activity.source_type
     if activity.sink_type:
         base_parameters["sink_type"] = activity.sink_type
-    # Prefer the resolved volume path; fall back to the raw abfss:// URL.
     source_path = (
         volume_binding.source_path
         if volume_binding is not None
@@ -127,7 +114,7 @@ def prepare(activity: CopyActivity, *, scope: str = "") -> PreparedActivity:
 def _build_secrets(
     activity: CopyActivity, source_type: str, scope_name: str
 ) -> list[SecretInstruction]:
-    """Return the SecretInstructions a Copy activity needs to deploy."""
+    """Returns the SecretInstructions a Copy activity needs to deploy."""
     if source_type in JDBC_SOURCE_TYPES:
         return make_jdbc_secrets(
             scope_name=scope_name,
@@ -154,7 +141,7 @@ def _build_setup_tasks(
     source_type: str,
     volume_binding: _VolumeBinding | None,
 ) -> list[SetupTask]:
-    """Return the SetupTasks (UC volumes etc.) a Copy activity needs."""
+    """Returns the SetupTasks (UC volumes etc.) a Copy activity needs."""
     if source_type not in FILE_SOURCE_TYPES or volume_binding is None:
         return []
     return [

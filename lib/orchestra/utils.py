@@ -26,7 +26,7 @@ _CAMEL_RE_2 = re.compile(r"([a-z0-9])([A-Z])")
 
 
 def camel_to_snake(name: str) -> str:
-    """Convert a camelCase or PascalCase string to snake_case.
+    """Converts a camelCase or PascalCase string to snake_case.
 
     Used when loading ADF definitions that use camelCase (e.g. REST/portal
     export) so downstream code, which expects snake_case keys, works unchanged.
@@ -68,7 +68,7 @@ _TASK_KEY_RE = re.compile(r"[^a-z0-9_]")
 
 
 def normalize_task_key(name: str) -> str:
-    """Sanitise a display name for use as a Databricks task key.
+    """Sanitises a display name for use as a Databricks task key.
 
     Replaces spaces and special characters with underscores, lowercases the
     result, and collapses runs of underscores.
@@ -94,7 +94,7 @@ _TIMEOUT_PATTERN = re.compile(r"^(?:(\d+)\.)?((\d{1,2}):(\d{2}):(\d{2}))$")
 
 
 def parse_timeout(timeout_str: str | None) -> int | None:
-    """Parse an ADF timeout string into total seconds.
+    """Parses an ADF timeout string into total seconds.
 
     Supports ADF timeout formats including:
     - ``"0.12:00:00"`` (12 hours)
@@ -136,7 +136,7 @@ def parse_timeout(timeout_str: str | None) -> int | None:
 
 
 def parse_retry_policy(policy: AdfPolicy | None) -> tuple[int | None, int | None]:
-    """Extract retry count and interval from an ADF policy.
+    """Extracts retry count and interval from an ADF policy.
 
     Args:
         policy: Parsed ``AdfPolicy``, or ``None``.

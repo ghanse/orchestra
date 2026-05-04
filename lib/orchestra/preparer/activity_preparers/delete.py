@@ -17,14 +17,7 @@ if TYPE_CHECKING:
 
 
 def prepare(activity: DeleteActivity, *, scope: str = "") -> PreparedActivity:
-    """Convert a DeleteActivity into a notebook_task with a generated delete notebook.
-
-    Args:
-        activity: The translated delete activity from the IR.
-
-    Returns:
-        A PreparedActivity with the notebook_task and generated notebook.
-    """
+    """Converts a DeleteActivity into a notebook_task with a generated delete notebook."""
     base_parameters = {
         "dataset_name": resolve_param_value(activity.dataset_name),
         "recursive": str(activity.recursive).lower(),

@@ -1,4 +1,4 @@
-"""Generate setup notebooks for creating Databricks resources needed by translated jobs.
+"""Generates setup notebooks for creating Databricks resources needed by translated jobs.
 
 Setup notebooks handle one-time provisioning of:
 - Secret scopes and secrets
@@ -19,7 +19,7 @@ def generate_setup_tasks(
     catalog: str,
     schema: str,
 ) -> list[DabNotebook]:
-    """Generate setup notebooks for provisioning required Databricks resources.
+    """Generates setup notebooks for provisioning required Databricks resources.
 
     Args:
         secrets: Secret instructions collected from all prepared activities.
@@ -33,24 +33,24 @@ def generate_setup_tasks(
     notebooks: list[DabNotebook] = []
 
     if secrets:
-        nb = _generate_secrets_setup_notebook(secrets)
-        notebooks.append(nb)
+        notebook = _generate_secrets_setup_notebook(secrets)
+        notebooks.append(notebook)
 
     volume_tasks = [t for t in setup_tasks if t.type == "volume"]
     if volume_tasks:
-        nb = _generate_volume_setup_notebook(volume_tasks, catalog, schema)
-        notebooks.append(nb)
+        notebook = _generate_volume_setup_notebook(volume_tasks, catalog, schema)
+        notebooks.append(notebook)
 
     connection_tasks = [t for t in setup_tasks if t.type == "connection"]
     if connection_tasks:
-        nb = _generate_connection_setup_notebook(connection_tasks, catalog)
-        notebooks.append(nb)
+        notebook = _generate_connection_setup_notebook(connection_tasks, catalog)
+        notebooks.append(notebook)
 
     return notebooks
 
 
 def _generate_secrets_setup_notebook(secrets: list[SecretInstruction]) -> DabNotebook:
-    """Generate a notebook that creates secret scopes and populates secrets.
+    """Generates a notebook that creates secret scopes and populates secrets.
 
     Args:
         secrets: Secret instructions to provision.
@@ -129,7 +129,7 @@ def _generate_volume_setup_notebook(
     catalog: str,
     schema: str,
 ) -> DabNotebook:
-    """Generate a notebook that creates Unity Catalog volumes.
+    """Generates a notebook that creates Unity Catalog volumes.
 
     For external volumes on cloud object storage (Azure ADLS / Blob, S3,
     GCS), the notebook also emits the upstream Storage Credential and
@@ -230,7 +230,7 @@ def _external_location_name_for(volume_name: str) -> str:
 
 
 def _render_storage_credential_ddl(credential_name: str, location_type: str) -> str:
-    """Emit a CREATE STORAGE CREDENTIAL block keyed off the source cloud.
+    """Emits a CREATE STORAGE CREDENTIAL block keyed off the source cloud.
 
     The credential body is a placeholder — the user must replace it with the
     appropriate access-connector ID, IAM role, or service account email
@@ -290,7 +290,7 @@ def _generate_connection_setup_notebook(
     connection_tasks: list[SetupTask],
     catalog: str,
 ) -> DabNotebook:
-    """Generate a notebook that creates external connections.
+    """Generates a notebook that creates external connections.
 
     Args:
         connection_tasks: Connection creation setup tasks.

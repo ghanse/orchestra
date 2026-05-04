@@ -16,21 +16,11 @@ if TYPE_CHECKING:
 
 
 def prepare(activity: FilterActivity, *, scope: str = "") -> PreparedActivity:
-    """Convert a FilterActivity into a notebook_task that filters an array.
+    """Converts a FilterActivity into a notebook_task that filters an array.
 
-    The generated notebook reads the input array, applies the filter condition,
-    and writes the filtered result as a task value for downstream activities.
-
-    Only DAB-resolvable values (literals and dynamic value references) are
-    placed in ``base_parameters``.  The condition expression is always
-    embedded in the notebook body since it typically involves ``item()``
-    field access which requires runtime JSON parsing.
-
-    Args:
-        activity: The translated filter activity from the IR.
-
-    Returns:
-        A PreparedActivity with the notebook_task and generated notebook.
+    The condition expression is embedded in the notebook body (it typically
+    involves ``item().field`` which requires runtime JSON parsing); only the
+    items expression flows through ``base_parameters``.
     """
     items_result = resolve_expression(activity.items_expression, TranslationContext())
     if items_result is not None and items_result.kind in ("dab_ref", "literal"):

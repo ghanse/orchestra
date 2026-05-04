@@ -1,4 +1,4 @@
-"""Write a PreparedWorkflow to Databricks Declarative Automation Bundle files.
+"""Writes a PreparedWorkflow to Databricks Declarative Automation Bundle files.
 
 Produces a complete DAB directory structure that ``databricks bundle validate``
 will accept:
@@ -65,7 +65,7 @@ from orchestra.preparer.code_generator import (
     generate_web_activity_notebook,
 )
 from orchestra.preparer.activity_preparers._naming import notebook_filename
-from orchestra.preparer.workflow_preparer import PreparedWorkflow, _run_if_from_adf_outcomes
+from orchestra.preparer.workflow_preparer import PreparedWorkflow, run_if_from_adf_outcomes
 from orchestra.preparer.workspace_downloader import download_notebook
 from orchestra.utils import normalize_task_key
 
@@ -100,7 +100,7 @@ def write_bundle(
     schema: str = "default",
     bundle_name: str | None = None,
 ) -> list[Path]:
-    """Write all DAB files to output_dir.
+    """Writes all DAB files to output_dir.
 
     Creates the following directory structure::
 
@@ -405,7 +405,7 @@ def _build_databricks_yml(
     node_type_id: str = _DEFAULT_NODE_TYPE_ID,
     include_cluster_variables: bool = True,
 ) -> dict[str, Any]:
-    """Build the root ``databricks.yml`` configuration as a dict.
+    """Builds the root ``databricks.yml`` configuration as a dict.
 
     Args:
         bundle_name: Name for the bundle.
@@ -523,7 +523,7 @@ def _value_needs_manual_handling(value: Any) -> bool:
 def _extract_manual_parameters_from_existing_notebook_tasks(
     tasks: list[dict[str, Any]],
 ) -> list[ManualParameter]:
-    """Find base_parameters orchestra couldn't evaluate for existing-notebook tasks.
+    """Finds base_parameters orchestra couldn't evaluate for existing-notebook tasks.
 
     Walks the task graph (including ``for_each_task.task`` bodies).  For any
     notebook_task that points at an absolute workspace path (i.e. the user's
@@ -564,7 +564,7 @@ def _extract_manual_parameters_from_existing_notebook_tasks(
 
 
 def _iter_tasks_recursively(tasks: list[dict[str, Any]]) -> Iterator[dict[str, Any]]:
-    """Yield every task in *tasks*, descending into ``for_each_task.task``."""
+    """Yields every task in *tasks*, descending into ``for_each_task.task``."""
     for task in tasks:
         yield task
         for_each = task.get("for_each_task") or {}
@@ -586,7 +586,7 @@ def _any_task_uses_classic_cluster(tasks: list[dict[str, Any]]) -> bool:
 
 
 def _bind_cluster_to_notebook_tasks(tasks: list[dict[str, Any]]) -> None:
-    """Attach the default job_cluster_key to existing-notebook tasks.
+    """Attaches the default job_cluster_key to existing-notebook tasks.
 
     Generated notebooks (bundle-relative paths like ``../src/notebooks/...``)
     install no Python libraries, so we leave them with no compute binding --
@@ -611,7 +611,7 @@ def _bind_cluster_to_notebook_tasks(tasks: list[dict[str, Any]]) -> None:
 
 
 def _rewrite_post_branch_dependencies(tasks: list[dict[str, Any]]) -> None:
-    """Rewrite ``depends_on`` edges that target a condition_task to target its branches.
+    """Rewrites ``depends_on`` edges that target a condition_task to target its branches.
 
     When ADF has ``PostProcess.dependsOn: [IfCondition]``, the intent is
     "run after whichever branch ran."  In DAB, depending on the condition
@@ -629,7 +629,7 @@ def _rewrite_post_branch_dependencies(tasks: list[dict[str, Any]]) -> None:
     and the default branch.
 
     Edges that already carry an ``outcome`` are left alone (those are branch
-    roots introduced by :func:`_inject_outcome_dependency`).
+    roots introduced by :func:`inject_outcome_dependency`).
 
     Args:
         tasks: Top-level task list, mutated in place.
@@ -699,7 +699,7 @@ _TASK_VALUE_REF = re.compile(r"\{\{tasks\.([^.]+)\.values\.[^}]+\}\}")
 
 
 def _strip_dangling_task_value_refs(tasks: list[dict[str, Any]], all_task_keys: set[str]) -> None:
-    """Replace ``{{tasks.X.values.Y}}`` refs whose ``X`` is not in the bundle.
+    """Replaces ``{{tasks.X.values.Y}}`` refs whose ``X`` is not in the bundle.
 
     When an ADF variable's only writer lives inside a ``run_job_task`` inner
     job, its ``@variables('X')`` references in the outer job resolve to
@@ -734,7 +734,7 @@ def _strip_dangling_task_value_refs(tasks: list[dict[str, Any]], all_task_keys: 
 
 
 def _collect_all_task_keys(tasks: list[dict[str, Any]]) -> set[str]:
-    """Collect every task_key reachable from the job's top-level task list."""
+    """Collects every task_key reachable from the job's top-level task list."""
     keys: set[str] = set()
     for task in tasks:
         keys.add(task.get("task_key", ""))
@@ -785,7 +785,7 @@ def _build_job_resource(
     attach_clusters: bool = True,
     extra_notebooks_for_augment: list[DabNotebook] | None = None,
 ) -> dict[str, Any]:
-    """Build a job resource dict for a single workflow.
+    """Builds a job resource dict for a single workflow.
 
     Args:
         workflow: The prepared workflow to serialize.
@@ -876,7 +876,7 @@ def _normalize_base_parameters(
 
 
 def _load_report(report_path: Path) -> list[PreparedWorkflow]:
-    """Load a translation report and reconstruct PreparedWorkflow objects.
+    """Loads a translation report and reconstruct PreparedWorkflow objects.
 
     Reads the translation_report.json or pipeline IR JSON format produced by the
     translate phase and builds PreparedWorkflow objects suitable for the bundle writer.
@@ -955,7 +955,7 @@ def _load_report(report_path: Path) -> list[PreparedWorkflow]:
 
 
 def _pipeline_dict_to_workflow(pipeline_dict: dict[str, Any]) -> PreparedWorkflow:
-    """Convert a serialized pipeline IR dict to a PreparedWorkflow.
+    """Converts a serialized pipeline IR dict to a PreparedWorkflow.
 
     Args:
         pipeline_dict: Dict loaded from a pipeline IR JSON file.
@@ -1040,7 +1040,7 @@ def _pipeline_dict_to_workflow(pipeline_dict: dict[str, Any]) -> PreparedWorkflo
 
 
 def _collect_setup_tasks_from_ir(pipeline_dict: dict[str, Any]) -> list[SetupTask]:
-    """Walk a pipeline IR dict and emit setup tasks for sink-side UC volumes.
+    """Walks a pipeline IR dict and emit setup tasks for sink-side UC volumes.
 
     Today only Copy sinks declare a UC external volume (via the translator's
     ``_resolve_path_info``).  Each unique external location maps to one
@@ -1191,7 +1191,7 @@ def _motif_notebook(
     confidence_notes: list[str],
     motif_config: dict[str, Any] | None = None,
 ) -> str:
-    """Generate a notebook for a collapsed motif activity.
+    """Generates a notebook for a collapsed motif activity.
 
     Produces a structured notebook with the Databricks-native implementation
     strategy, the list of ADF activities that were collapsed, and TODO
@@ -1405,7 +1405,7 @@ def _motif_notebook(
 
 
 def _placeholder_notebook(task_key: str, activity_name: str, activity_type: str, original_path: str = "") -> str:
-    """Generate placeholder notebook content for the JSON reload path.
+    """Generates placeholder notebook content for the JSON reload path.
 
     When loading from a serialized translation report, we don't have access to
     the rich IR objects or code generators.  This produces a minimal placeholder
@@ -1463,7 +1463,7 @@ def _placeholder_notebook(task_key: str, activity_name: str, activity_type: str,
 
 
 def _web_activity_notebook(task_key: str, activity_name: str, task_ir: dict[str, Any]) -> str:
-    """Generate a notebook that performs an HTTP request for a WebActivity.
+    """Generates a notebook that performs an HTTP request for a WebActivity.
 
     Produces a ready-to-run notebook using the ``requests`` library with the
     URL, method, headers, and body from the translated IR.
@@ -1552,7 +1552,7 @@ def _download_or_placeholder(
     activity_name: str,
     task_type_name: str,
 ) -> str:
-    """Try to download a notebook from the workspace; fall back to a placeholder.
+    """Tries to download a notebook from the workspace; fall back to a placeholder.
 
     Args:
         workspace_path: Original workspace path from the ADF definition.
@@ -1579,7 +1579,7 @@ def _task_ir_to_dab(
     *,
     task_key_remap: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    """Convert a single serialized task IR dict to a DAB task dict.
+    """Converts a single serialized task IR dict to a DAB task dict.
 
     Returns a dict with keys ``task``, ``extra_tasks``, ``notebooks``, and
     ``inner_workflows``.  ``extra_tasks`` is non-empty when the activity
@@ -1610,7 +1610,7 @@ def _task_ir_to_dab(
 
     if task_ir.get("depends_on"):
         task["depends_on"] = [{"task_key": dep["task_key"]} for dep in task_ir["depends_on"]]
-        run_if = _run_if_from_adf_outcomes([dep.get("outcome") for dep in task_ir["depends_on"]])
+        run_if = run_if_from_adf_outcomes([dep.get("outcome") for dep in task_ir["depends_on"]])
         if run_if:
             task["run_if"] = run_if
     if task_ir.get("timeout_seconds"):
@@ -1846,7 +1846,7 @@ def _task_ir_to_dab(
 # Control flow handlers
 
 
-def _inject_outcome_dependency(tasks: list[dict[str, Any]], condition_key: str, outcome: str) -> None:
+def inject_outcome_dependency(tasks: list[dict[str, Any]], condition_key: str, outcome: str) -> None:
     """Gate root tasks in a branch on the condition's outcome.
 
     A "root" task is one whose ``depends_on`` does not reference another
@@ -1873,7 +1873,7 @@ def _collect_branch_tasks(
     notebooks: list[DabNotebook],
     inner_workflows: list[PreparedWorkflow],
 ) -> list[dict[str, Any]]:
-    """Prepare a branch of child IR dicts into a flat list of DAB task dicts.
+    """Prepares a branch of child IR dicts into a flat list of DAB task dicts.
 
     Flattens any siblings emitted by nested condition/switch children so the
     whole branch lives at the job's top level.
@@ -1904,7 +1904,7 @@ def _handle_if_condition(
     inner_workflows: list[PreparedWorkflow],
     extra_tasks: list[dict[str, Any]],
 ) -> None:
-    """Build a condition_task and flatten both branches into sibling tasks.
+    """Builds a condition_task and flatten both branches into sibling tasks.
 
     Per the DAB spec ([condition_task](https://docs.databricks.com/aws/en/jobs/if-else)),
     the condition task only carries ``op``/``left``/``right``.  Branch tasks
@@ -1926,11 +1926,11 @@ def _handle_if_condition(
     }
 
     if_true_tasks = _collect_branch_tasks(task_ir.get("if_true_activities", []), notebooks, inner_workflows)
-    _inject_outcome_dependency(if_true_tasks, task_key, "true")
+    inject_outcome_dependency(if_true_tasks, task_key, "true")
     extra_tasks.extend(if_true_tasks)
 
     if_false_tasks = _collect_branch_tasks(task_ir.get("if_false_activities", []), notebooks, inner_workflows)
-    _inject_outcome_dependency(if_false_tasks, task_key, "false")
+    inject_outcome_dependency(if_false_tasks, task_key, "false")
     extra_tasks.extend(if_false_tasks)
 
 
@@ -1943,7 +1943,7 @@ def _handle_switch(
     extra_tasks: list[dict[str, Any]],
     task_key_remap: dict[str, str] | None = None,
 ) -> None:
-    """Build a chain of condition_tasks from a SwitchActivity IR dict.
+    """Builds a chain of condition_tasks from a SwitchActivity IR dict.
 
     Produces one condition task per case, linked via ``outcome: "false"`` so
     cases evaluate in order.  Each case body is a set of sibling tasks gated
@@ -1967,7 +1967,7 @@ def _handle_switch(
     if not cases:
         task["condition_task"] = {"op": "EQUAL_TO", "left": "true", "right": "true"}
         default_tasks = _collect_branch_tasks(default_activity_dicts, notebooks, inner_workflows)
-        _inject_outcome_dependency(default_tasks, task_key, "true")
+        inject_outcome_dependency(default_tasks, task_key, "true")
         extra_tasks.extend(default_tasks)
         return
 
@@ -1997,7 +1997,7 @@ def _handle_switch(
             )
 
         branch_tasks = _collect_branch_tasks(case.get("activities", []), notebooks, inner_workflows)
-        _inject_outcome_dependency(branch_tasks, case_key, "true")
+        inject_outcome_dependency(branch_tasks, case_key, "true")
         extra_tasks.extend(branch_tasks)
 
     # Record the rename so downstream tasks that referenced the bare
@@ -2007,12 +2007,12 @@ def _handle_switch(
 
     default_tasks = _collect_branch_tasks(default_activity_dicts, notebooks, inner_workflows)
     if default_tasks:
-        _inject_outcome_dependency(default_tasks, case_keys[-1], "false")
+        inject_outcome_dependency(default_tasks, case_keys[-1], "false")
         extra_tasks.extend(default_tasks)
 
 
 def _sanitize_case_key(value: str) -> str:
-    """Sanitize a case value for use as a task key suffix."""
+    """Sanitizes a case value for use as a task key suffix."""
     sanitized = re.sub(r"[^a-zA-Z0-9_]", "_", value)
     sanitized = re.sub(r"_+", "_", sanitized).strip("_")
     return sanitized or "empty"
@@ -2025,7 +2025,7 @@ def _handle_for_each(
     notebooks: list[DabNotebook],
     inner_workflows: list[PreparedWorkflow],
 ) -> None:
-    """Build a for_each_task from a serialized ForEachActivity IR dict.
+    """Builds a for_each_task from a serialized ForEachActivity IR dict.
 
     Single inner activity: inlined directly in ``for_each_task.task``.
     Multiple inner activities: creates a self-contained inner job with its
