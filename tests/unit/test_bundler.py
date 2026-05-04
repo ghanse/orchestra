@@ -210,6 +210,56 @@ class TestWriteBundle:
         assert not (first_dir / "WARNINGS.md").exists()
         assert not (second_dir / "WARNINGS.md").exists()
 
+    def test_load_report_handles_aggregated_translations_format(self, tmp_path):
+        """``_load_report`` accepts the multi-pipeline aggregated report.
+
+        Regression: an earlier collapse refactor left this branch calling a
+        deleted ``_placeholder_notebook`` helper, so any user passing the
+        documented ``translation_report.json`` aggregated format would have
+        hit ``NameError`` the first time a notebook task was emitted.
+        """
+        import json
+
+        from orchestra.bundler.dab_writer import _load_report
+
+        report = {
+            "translations": [
+                {
+                    "pipeline": "agg_pipeline",
+                    "status": "translated",
+                    "ir": {
+                        "type": "WaitActivity",
+                        "name": "Pause",
+                        "task_key": "pause",
+                        "wait_time_seconds": 5,
+                    },
+                },
+                {
+                    "pipeline": "agg_pipeline",
+                    "status": "translated",
+                    "ir": {
+                        "type": "NotebookActivity",
+                        "name": "Run NB",
+                        "task_key": "run_nb",
+                        "notebook_path": "/Shared/etl/run",
+                    },
+                },
+                {
+                    "pipeline": "agg_pipeline",
+                    "status": "skipped",
+                    "ir": {},
+                },
+            ]
+        }
+        report_path = tmp_path / "translation_report.json"
+        report_path.write_text(json.dumps(report))
+
+        workflows = _load_report(report_path)
+        assert len(workflows) == 1
+        assert workflows[0].name == "agg_pipeline"
+        task_keys = {task["task_key"] for task in workflows[0].tasks}
+        assert task_keys == {"pause", "run_nb"}
+
 
 class TestSetupGenerator:
     def test_secrets_setup_notebook_content(self):

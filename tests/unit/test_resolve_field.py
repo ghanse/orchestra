@@ -1,4 +1,4 @@
-"""Unit tests for the _resolve.py helpers (resolve_field, resolve_field_int, resolve_dict_values)."""
+"""Unit tests for the resolve.py helpers (resolve_field, resolve_field_int, resolve_dict_values)."""
 
 from __future__ import annotations
 

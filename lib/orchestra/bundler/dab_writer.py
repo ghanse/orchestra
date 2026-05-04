@@ -12,20 +12,11 @@ from typing import Any
 
 import yaml
 
-from orchestra.bundler.inner_job_params import (
-    normalize_value,
-    collect_inner_job_params,
-    normalize_inner_task_params,
-)
+from orchestra.bundler.inner_job_params import normalize_value
 from orchestra.bundler.notebook_writer import write_notebooks
-from orchestra.bundler.prereqs_writer import (
-    ManualParameter,
-    build_prereqs,
-    render_setup_md,
-    scan_notebooks_for_secrets,
-)
+from orchestra.bundler.prereqs_writer import ManualParameter, build_prereqs, render_setup_md
 from orchestra.bundler.setup_generator import generate_setup_tasks
-from orchestra.models.dab import DabNotebook, SecretInstruction, SetupTask
+from orchestra.models.dab import DabNotebook
 from orchestra.models.ir import (
     Activity,
     AppendVariableActivity,
@@ -51,21 +42,7 @@ from orchestra.models.ir import (
     WaitActivity,
     WebActivity,
 )
-from orchestra.preparer.code_generator import (
-    generate_append_variable_notebook,
-    generate_copy_notebook,
-    generate_delete_notebook,
-    generate_filter_notebook,
-    generate_lookup_notebook,
-    generate_motif_notebook,
-    generate_set_variable_notebook,
-    generate_wait_notebook,
-    generate_web_activity_notebook,
-)
-from orchestra.preparer.activity_preparers.naming import notebook_filename
-from orchestra.preparer.activity_preparers.switch import resolve_switch_on_expression, sanitize_case_key
-from orchestra.preparer.workflow_preparer import PreparedWorkflow, prepare_workflow, run_if_from_adf_outcomes
-from orchestra.preparer.workspace_downloader import download_notebook
+from orchestra.preparer.workflow_preparer import PreparedWorkflow, prepare_workflow
 from orchestra.utils import normalize_task_key
 
 
@@ -790,57 +767,28 @@ def _load_report(report_path: Path) -> list[PreparedWorkflow]:
         return workflows
 
     if "translations" in report:
+        # Aggregated translation_report.json format: ``translations`` is a
+        # flat list of ``{pipeline, ir, status, ...}`` entries.  Group by
+        # pipeline name and route each group through the same
+        # ``_pipeline_dict_to_workflow`` machinery as the single-pipeline IR
+        # format, so secret discovery / setup tasks / control-flow handling
+        # all match.
         pipelines: dict[str, list[dict]] = {}
         for translation in report.get("translations", []):
             pipeline_name = translation.get("pipeline", "unknown")
-            pipelines.setdefault(pipeline_name, []).append(translation)
+            if translation.get("status") != "translated":
+                continue
+            ir = translation.get("ir") or {}
+            if not ir:
+                continue
+            pipelines.setdefault(pipeline_name, []).append(ir)
 
-        for pipeline_name, translations in pipelines.items():
-            tasks: list[dict[str, Any]] = []
-            notebooks: list[DabNotebook] = []
+        for pipeline_name, task_irs in pipelines.items():
+            workflow = _pipeline_dict_to_workflow({"name": pipeline_name, "tasks": task_irs})
+            workflows.append(workflow)
+        return workflows
 
-            for translation in translations:
-                if translation.get("status") != "translated":
-                    continue
-                ir = translation.get("ir", {})
-                if not ir:
-                    continue
-
-                task_key = ir.get("task_key", "")
-                activity_name = ir.get("name", task_key)
-                task: dict[str, Any] = {"task_key": task_key}
-                task_type = ir.get("task_type", "notebook_task")
-
-                if task_type == "notebook_task":
-                    notebook_path = ir.get("notebook_path", "")
-                    notebook_relative_path = (
-                        notebook_path if not notebook_path.startswith("../") else notebook_path[len("../src/") :]
-                    )
-                    resolved_notebook_path = (
-                        f"../src/{notebook_relative_path}" if not notebook_path.startswith("../") else notebook_path
-                    )
-                    task["notebook_task"] = {"notebook_path": resolved_notebook_path}
-                    if ir.get("parameters"):
-                        task["notebook_task"]["base_parameters"] = ir["parameters"]
-                    notebooks.append(
-                        DabNotebook(
-                            relative_path=notebook_relative_path,
-                            content=_placeholder_notebook(task_key, activity_name, task_type),
-                        )
-                    )
-
-                tasks.append(task)
-
-            workflows.append(
-                PreparedWorkflow(
-                    name=pipeline_name,
-                    tasks=tasks,
-                    notebooks=notebooks,
-                    secrets=[],
-                    setup_tasks=[],
-                )
-            )
-
+    # Empty or unrecognised report shape — nothing to do.
     return workflows
 
 

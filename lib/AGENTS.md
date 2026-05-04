@@ -83,7 +83,7 @@ neighbouring module.
 - The same block across modules: extract to a public helper in the most
   semantically appropriate module (often
   ``orchestra/utils.py`` or
-  ``orchestra/preparer/activity_preparers/_helpers.py``).
+  ``orchestra/preparer/activity_preparers/helpers.py``).
 
 ## Tests
 
