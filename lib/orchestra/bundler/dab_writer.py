@@ -6,8 +6,8 @@ import argparse
 import json
 import re
 import sys
-from pathlib import Path
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Any
 
 import yaml
@@ -314,8 +314,6 @@ def main() -> None:
     print("  2. Run the setup notebooks to create secrets and volumes")
     print("  3. Validate the bundle: databricks bundle validate")
     print("  4. Deploy: databricks bundle deploy -t dev")
-
-
 
 
 def _warn(task_key: str, message: str) -> None:
@@ -745,8 +743,6 @@ def _normalize_base_parameters(
     return resolved
 
 
-
-
 def _load_report(report_path: Path) -> list[PreparedWorkflow]:
     """Loads a translation report and reconstruct PreparedWorkflow objects.
 
@@ -960,9 +956,7 @@ def _reconstruct_ir(task_ir: dict[str, Any]) -> Activity:
                 )
                 for case in task_ir.get("cases") or []
             ],
-            default_activities=[
-                _reconstruct_ir(child) for child in task_ir.get("default_activities") or []
-            ],
+            default_activities=[_reconstruct_ir(child) for child in task_ir.get("default_activities") or []],
         )
     if task_type == "MotifActivity":
         return MotifActivity(
@@ -1020,11 +1014,6 @@ def _reconstruct_dependencies(raw: list[dict[str, Any]] | None) -> list[Dependen
 
 
 # Notebook content generators
-
-
-
-
-
 
 
 if __name__ == "__main__":

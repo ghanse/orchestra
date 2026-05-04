@@ -248,6 +248,5 @@ class TestCollapser:
         notify = next(t for t in result.tasks if t.name == "Notify Done")
         downstream_keys = {dep.task_key for dep in notify.depends_on or []}
         assert downstream_keys == {motif.task_key}, (
-            "Downstream task should be rewired to point at the motif, "
-            f"got {downstream_keys}"
+            f"Downstream task should be rewired to point at the motif, got {downstream_keys}"
         )

@@ -17,7 +17,6 @@ from orchestra.preparer.activity_preparers.naming import notebook_filename
 from orchestra.preparer.code_generator import generate_copy_notebook
 from orchestra.preparer.workflow_preparer import PreparedActivity
 
-
 _ABFSS_URL_RE = re.compile(r"abfss://([^@]+)@([^/]+)/?(.*)")
 _VOLUME_NAME_SANITIZE_RE = re.compile(r"[^a-zA-Z0-9_]")
 
@@ -99,9 +98,7 @@ def prepare(activity: CopyActivity, *, scope: str = "") -> PreparedActivity:
     return PreparedActivity(task=task, notebooks=notebooks, secrets=secrets, setup_tasks=setup_tasks)
 
 
-def _build_secrets(
-    activity: CopyActivity, source_type: str, scope_name: str
-) -> list[SecretInstruction]:
+def _build_secrets(activity: CopyActivity, source_type: str, scope_name: str) -> list[SecretInstruction]:
     """Returns the SecretInstructions a Copy activity needs to deploy."""
     if source_type in JDBC_SOURCE_TYPES:
         return make_jdbc_secrets(

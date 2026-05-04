@@ -33,7 +33,11 @@ def translate(
         dataset_name = activity.inputs[0].reference_name
 
     recursive = type_properties.get("recursive", True)
-    folder_path_raw = type_properties.get("dataset", {}).get("folderPath") if isinstance(type_properties.get("dataset"), dict) else None
+    folder_path_raw = (
+        type_properties.get("dataset", {}).get("folderPath")
+        if isinstance(type_properties.get("dataset"), dict)
+        else None
+    )
     folder_path = resolve_field(folder_path_raw, context) if folder_path_raw is not None else None
 
     store_settings = type_properties.get("storeSettings", {})

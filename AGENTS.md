@@ -12,7 +12,7 @@ make clean        # Remove build artifacts
 
 ## Project Overview
 
-Orchestra is a Claude Code plugin that translates Azure Data Factory (ADF) pipeline definitions into Databricks Lakeflow Jobs via Declarative Automation Bundles (DABs).
+Orchestra is an agent plugin that translates Azure Data Factory (ADF) pipeline definitions into Databricks Lakeflow Jobs via Declarative Automation Bundles (DABs).
 
 ## Data Flow
 

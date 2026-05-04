@@ -1,9 +1,9 @@
 # Library Code Conventions
 
-Companion to the top-level [AGENTS.md](../AGENTS.md) (architecture).  This
-file documents *code-style* expectations for everything under
+ This file documents *code-style* expectations for everything under
 `lib/orchestra/`.  When in doubt, match the existing code in the
-neighbouring module.
+neighbouring module. This is a companion to the top-level [AGENTS.md](../AGENTS.md)
+ file which documents the plugin architecture. 
 
 ## Naming
 

@@ -575,9 +575,7 @@ class TestSwitchPreparer:
 
         job_yml = next((bundle_dir / "resources").iterdir())
         job = yaml.safe_load(job_yml.read_text())
-        switch_task = next(
-            t for t in job["resources"]["jobs"]["switch_pipeline"]["tasks"] if "condition_task" in t
-        )
+        switch_task = next(t for t in job["resources"]["jobs"]["switch_pipeline"]["tasks"] if "condition_task" in t)
         assert switch_task["condition_task"]["left"] == "{{job.parameters.env}}"
         assert switch_task["task_key"].endswith("_case_dev")
 

@@ -54,9 +54,7 @@ def prepare(activity: SparkPythonActivity, *, scope: str = "") -> PreparedActivi
 
     downloaded = download_dbfs_file(original_path)
     content = (
-        downloaded.decode("utf-8")
-        if downloaded is not None
-        else _python_placeholder(original_path, activity.name)
+        downloaded.decode("utf-8") if downloaded is not None else _python_placeholder(original_path, activity.name)
     )
     notebooks = [
         DabNotebook(

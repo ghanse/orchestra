@@ -703,7 +703,9 @@ def _handle_replace(args: list[ExpressionResult]) -> ExpressionResult | None:
     """replace(text, old, new) -> str(text).replace(str(old), str(new))"""
     if len(args) != 3:
         return None
-    return _result_from_args(f"str({_arg_to_code(args[0])}).replace(str({_arg_to_code(args[1])}), str({_arg_to_code(args[2])}))", args)
+    return _result_from_args(
+        f"str({_arg_to_code(args[0])}).replace(str({_arg_to_code(args[1])}), str({_arg_to_code(args[2])}))", args
+    )
 
 
 def _handle_split(args: list[ExpressionResult]) -> ExpressionResult | None:
@@ -717,7 +719,9 @@ def _handle_starts_with(args: list[ExpressionResult]) -> ExpressionResult | None
     """startsWith(text, search) -> str(text).lower().startswith(str(search).lower())"""
     if len(args) != 2:
         return None
-    return _result_from_args(f"str({_arg_to_code(args[0])}).lower().startswith(str({_arg_to_code(args[1])}).lower())", args)
+    return _result_from_args(
+        f"str({_arg_to_code(args[0])}).lower().startswith(str({_arg_to_code(args[1])}).lower())", args
+    )
 
 
 def _handle_substring(args: list[ExpressionResult]) -> ExpressionResult | None:
@@ -958,7 +962,9 @@ def _handle_encode_uri_component(args: list[ExpressionResult]) -> ExpressionResu
     """encodeUriComponent(value) -> urllib.parse.quote(str(value), safe='')"""
     if len(args) != 1:
         return None
-    return _result_from_args(f"__import__('urllib.parse', fromlist=['quote']).quote(str({_arg_to_code(args[0])}), safe='')", args)
+    return _result_from_args(
+        f"__import__('urllib.parse', fromlist=['quote']).quote(str({_arg_to_code(args[0])}), safe='')", args
+    )
 
 
 def _handle_float(args: list[ExpressionResult]) -> ExpressionResult | None:
@@ -1040,7 +1046,9 @@ def _handle_rand(args: list[ExpressionResult]) -> ExpressionResult | None:
     """rand(min, max) -> random.randint(min, max-1)"""
     if len(args) != 2:
         return None
-    return _result_from_args(f"__import__('random').randint({_arg_to_code(args[0])}, {_arg_to_code(args[1])} - 1)", args)
+    return _result_from_args(
+        f"__import__('random').randint({_arg_to_code(args[0])}, {_arg_to_code(args[1])} - 1)", args
+    )
 
 
 def _handle_range(args: list[ExpressionResult]) -> ExpressionResult | None:
@@ -1070,7 +1078,11 @@ def _make_add_unit_handler(
         timestamp_dt = _datetime_arg_code(args[0])
         amount = _arg_to_code(args[1])
         format_string = _get_format_arg(args, 2)
-        return _result_from_args(f"({timestamp_dt} + timedelta({timedelta_keyword}={amount})).strftime({format_string})", args, extra_imports=_DATETIME_IMPORTS)
+        return _result_from_args(
+            f"({timestamp_dt} + timedelta({timedelta_keyword}={amount})).strftime({format_string})",
+            args,
+            extra_imports=_DATETIME_IMPORTS,
+        )
 
     return handler
 
@@ -1094,7 +1106,11 @@ def _handle_add_to_time(args: list[ExpressionResult]) -> ExpressionResult | None
     if timedelta_keyword is None:
         return None
     format_string = _get_format_arg(args, 3)
-    return _result_from_args((f"({timestamp_dt} + timedelta({timedelta_keyword}={interval})).strftime({format_string})"), args, extra_imports=_DATETIME_IMPORTS)
+    return _result_from_args(
+        (f"({timestamp_dt} + timedelta({timedelta_keyword}={interval})).strftime({format_string})"),
+        args,
+        extra_imports=_DATETIME_IMPORTS,
+    )
 
 
 def _handle_day_of_month(args: list[ExpressionResult]) -> ExpressionResult | None:
@@ -1115,7 +1131,9 @@ def _handle_day_of_year(args: list[ExpressionResult]) -> ExpressionResult | None
     """dayOfYear(ts) -> <datetime>.timetuple().tm_yday"""
     if len(args) != 1:
         return None
-    return _result_from_args(f"{_datetime_arg_code(args[0])}.timetuple().tm_yday", args, extra_imports=_DATETIME_IMPORTS)
+    return _result_from_args(
+        f"{_datetime_arg_code(args[0])}.timetuple().tm_yday", args, extra_imports=_DATETIME_IMPORTS
+    )
 
 
 def _handle_format_date_time(args: list[ExpressionResult]) -> ExpressionResult | None:
@@ -1167,7 +1185,11 @@ def _handle_start_of_day(args: list[ExpressionResult]) -> ExpressionResult | Non
         return None
     timestamp_dt = _datetime_arg_code(args[0])
     format_string = _get_format_arg(args, 1)
-    return _result_from_args((f"{timestamp_dt}.replace(hour=0, minute=0, second=0, microsecond=0).strftime({format_string})"), args, extra_imports=_DATETIME_IMPORTS)
+    return _result_from_args(
+        (f"{timestamp_dt}.replace(hour=0, minute=0, second=0, microsecond=0).strftime({format_string})"),
+        args,
+        extra_imports=_DATETIME_IMPORTS,
+    )
 
 
 def _handle_start_of_hour(args: list[ExpressionResult]) -> ExpressionResult | None:
@@ -1176,7 +1198,11 @@ def _handle_start_of_hour(args: list[ExpressionResult]) -> ExpressionResult | No
         return None
     timestamp_dt = _datetime_arg_code(args[0])
     format_string = _get_format_arg(args, 1)
-    return _result_from_args((f"{timestamp_dt}.replace(minute=0, second=0, microsecond=0).strftime({format_string})"), args, extra_imports=_DATETIME_IMPORTS)
+    return _result_from_args(
+        (f"{timestamp_dt}.replace(minute=0, second=0, microsecond=0).strftime({format_string})"),
+        args,
+        extra_imports=_DATETIME_IMPORTS,
+    )
 
 
 def _handle_start_of_month(args: list[ExpressionResult]) -> ExpressionResult | None:
@@ -1185,7 +1211,11 @@ def _handle_start_of_month(args: list[ExpressionResult]) -> ExpressionResult | N
         return None
     timestamp_dt = _datetime_arg_code(args[0])
     format_string = _get_format_arg(args, 1)
-    return _result_from_args((f"{timestamp_dt}.replace(day=1, hour=0, minute=0, second=0, microsecond=0).strftime({format_string})"), args, extra_imports=_DATETIME_IMPORTS)
+    return _result_from_args(
+        (f"{timestamp_dt}.replace(day=1, hour=0, minute=0, second=0, microsecond=0).strftime({format_string})"),
+        args,
+        extra_imports=_DATETIME_IMPORTS,
+    )
 
 
 def _handle_subtract_from_time(args: list[ExpressionResult]) -> ExpressionResult | None:
@@ -1201,7 +1231,11 @@ def _handle_subtract_from_time(args: list[ExpressionResult]) -> ExpressionResult
     if timedelta_keyword is None:
         return None
     format_string = _get_format_arg(args, 3)
-    return _result_from_args((f"({timestamp_dt} - timedelta({timedelta_keyword}={interval})).strftime({format_string})"), args, extra_imports=_DATETIME_IMPORTS)
+    return _result_from_args(
+        (f"({timestamp_dt} - timedelta({timedelta_keyword}={interval})).strftime({format_string})"),
+        args,
+        extra_imports=_DATETIME_IMPORTS,
+    )
 
 
 def _get_format_arg(args: list[ExpressionResult], idx: int) -> str:
@@ -1222,7 +1256,11 @@ def _handle_convert_from_utc(args: list[ExpressionResult]) -> ExpressionResult |
     src = _datetime_arg_code(args[0])
     dest_tz = _arg_to_code(args[1])
     fmt = _get_format_arg(args, 2)
-    return _result_from_args(f"{src}.replace(tzinfo=timezone.utc).astimezone(ZoneInfo({dest_tz})).strftime({fmt})", args, extra_imports=_ZONEINFO_IMPORTS)
+    return _result_from_args(
+        f"{src}.replace(tzinfo=timezone.utc).astimezone(ZoneInfo({dest_tz})).strftime({fmt})",
+        args,
+        extra_imports=_ZONEINFO_IMPORTS,
+    )
 
 
 def _handle_convert_to_utc(args: list[ExpressionResult]) -> ExpressionResult | None:
@@ -1232,7 +1270,11 @@ def _handle_convert_to_utc(args: list[ExpressionResult]) -> ExpressionResult | N
     src = _datetime_arg_code(args[0])
     src_tz = _arg_to_code(args[1])
     fmt = _get_format_arg(args, 2)
-    return _result_from_args(f"{src}.replace(tzinfo=ZoneInfo({src_tz})).astimezone(timezone.utc).strftime({fmt})", args, extra_imports=_ZONEINFO_IMPORTS)
+    return _result_from_args(
+        f"{src}.replace(tzinfo=ZoneInfo({src_tz})).astimezone(timezone.utc).strftime({fmt})",
+        args,
+        extra_imports=_ZONEINFO_IMPORTS,
+    )
 
 
 def _handle_convert_time_zone(args: list[ExpressionResult]) -> ExpressionResult | None:
@@ -1243,7 +1285,11 @@ def _handle_convert_time_zone(args: list[ExpressionResult]) -> ExpressionResult 
     src_tz = _arg_to_code(args[1])
     dst_tz = _arg_to_code(args[2])
     fmt = _get_format_arg(args, 3)
-    return _result_from_args((f"{src}.replace(tzinfo=ZoneInfo({src_tz})).astimezone(ZoneInfo({dst_tz})).strftime({fmt})"), args, extra_imports=_ZONEINFO_IMPORTS)
+    return _result_from_args(
+        (f"{src}.replace(tzinfo=ZoneInfo({src_tz})).astimezone(ZoneInfo({dst_tz})).strftime({fmt})"),
+        args,
+        extra_imports=_ZONEINFO_IMPORTS,
+    )
 
 
 def _handle_ticks(args: list[ExpressionResult]) -> ExpressionResult | None:
@@ -1251,7 +1297,11 @@ def _handle_ticks(args: list[ExpressionResult]) -> ExpressionResult | None:
     if len(args) != 1:
         return None
     src = _datetime_arg_code(args[0])
-    return _result_from_args((f"int(({src} - datetime(1, 1, 1, tzinfo=timezone.utc)).total_seconds() * 10_000_000)"), args, extra_imports=_DATETIME_IMPORTS)
+    return _result_from_args(
+        (f"int(({src} - datetime(1, 1, 1, tzinfo=timezone.utc)).total_seconds() * 10_000_000)"),
+        args,
+        extra_imports=_DATETIME_IMPORTS,
+    )
 
 
 _FUNCTION_HANDLERS: dict[str, Callable[[list[ExpressionResult]], ExpressionResult | None]] = {

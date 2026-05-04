@@ -31,7 +31,10 @@ def translate(
     job_name_raw = type_properties.get("jobName") or type_properties.get("jobId")
     job_name = resolve_field(job_name_raw, context) if job_name_raw else activity.name
     existing_job_id = type_properties.get("jobId")
-    job_parameters = resolve_dict_values(type_properties.get("jobParameters") or type_properties.get("baseParameters"), context) or None
+    job_parameters = (
+        resolve_dict_values(type_properties.get("jobParameters") or type_properties.get("baseParameters"), context)
+        or None
+    )
 
     return RunJobActivity(
         **base_kwargs,

@@ -205,7 +205,7 @@ class TestGenerateLookupNotebook:
             **_make_base("LookupDyn", "lookup_dyn"),
             source_type="AzureSqlSource",
             first_row_only=True,
-            source_query='"SELECT * FROM " + dbutils.widgets.get(\'table\')',
+            source_query="\"SELECT * FROM \" + dbutils.widgets.get('table')",
         )
         content = generate_lookup_notebook(activity, scope="s")
         _assert_valid_python(content, "lookup_dyn")

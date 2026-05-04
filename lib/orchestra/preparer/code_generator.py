@@ -720,9 +720,7 @@ def _resolve_dict_value(value: Any, context: TranslationContext) -> tuple[Any, b
     return value, False
 
 
-def _resolve_expression_value(
-    raw: Any, context: TranslationContext, *, fallback: Any
-) -> tuple[Any, bool]:
+def _resolve_expression_value(raw: Any, context: TranslationContext, *, fallback: Any) -> tuple[Any, bool]:
     """Resolves a string/dict expression to either an f-string or a literal."""
     result = resolve_expression(raw, context)
     if result is None:

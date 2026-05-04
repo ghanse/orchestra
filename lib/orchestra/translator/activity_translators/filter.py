@@ -37,9 +37,7 @@ def translate(
     # Preserve the original ADF expression text in ``condition_expression``
     # so the notebook can show it as a documentation comment.  The
     # *resolved* form lives separately in ``condition_code``.
-    condition_expression = (
-        condition_raw.get("value", "") if isinstance(condition_raw, dict) else str(condition_raw)
-    )
+    condition_expression = condition_raw.get("value", "") if isinstance(condition_raw, dict) else str(condition_raw)
 
     condition_result = resolve_expression(condition_raw, context)
     condition_code, condition_imports = _resolve_condition_code(condition_result)

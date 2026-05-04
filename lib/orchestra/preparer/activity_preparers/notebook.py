@@ -121,9 +121,8 @@ def prepare(
 
     placeholder_filename = notebook_filename(activity.task_key, activity.name)
     notebook_relative_path = f"notebooks/{placeholder_filename}"
-    content = (
-        download_notebook(resolved_path)
-        or _notebook_placeholder(resolved_path, activity.name, placeholder_filename)
+    content = download_notebook(resolved_path) or _notebook_placeholder(
+        resolved_path, activity.name, placeholder_filename
     )
 
     task["notebook_task"] = {"notebook_path": f"../src/{notebook_relative_path}"}

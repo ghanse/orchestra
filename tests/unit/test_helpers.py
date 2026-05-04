@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from orchestra.models.dab import DabNotebook
 from orchestra.models.ir import (
-    Activity,
     Dependency,
     SetVariableActivity,
 )
