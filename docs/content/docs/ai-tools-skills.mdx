@@ -1,0 +1,118 @@
+---
+title: AI Tools & Skills
+description: The agent skills shipped with Orchestra and how each agentic tool loads them.
+---
+
+import { Tabs, Tab } from 'fumadocs-ui/components/tabs';
+import { Callout } from 'fumadocs-ui/components/callout';
+
+Orchestra ships [Agent Skills](https://agentskills.io/) that teach AI assistants how to use the library correctly. Skills are short Markdown files with YAML frontmatter &mdash; the open format supported by [Databricks Genie Code](https://docs.databricks.com/aws/en/genie-code/skills), [Claude Code](https://docs.claude.com/en/docs/claude-code/plugins), and any other tool that follows the standard.
+
+The skills live in the [`skills/`](https://github.com/ghanse/orchestra/tree/main/skills) directory of the orchestra repo.
+
+## What's included
+
+| Skill | What it covers |
+|---|---|
+| `migrate` | End-to-end orchestration &mdash; runs ingest, translate, and prepare in sequence with confirmation gates between phases. |
+| `ingest` | Parses ADF JSON exports into a typed inventory; classifies every activity as deterministic, agentic, or unsupported. |
+| `translate` | Converts an inventory into the Databricks IR; deterministic translation for known types, agentic fallback for the rest. |
+| `prepare` | Generates a Databricks Asset Bundle (databricks.yml, job YAML, notebooks, setup scripts) from a translation report. |
+
+Each skill is a folder containing a single `SKILL.md` with the standard `name` + `description` frontmatter. Tools auto-load skills based on the description; users can also invoke them explicitly (`@migrate`, `/orchestra:migrate`, etc.) depending on the tool.
+
+## Installing orchestra skills
+
+<Tabs items={['Databricks Genie Code', 'Claude Code', 'Other AI tools']} groupId="agent-tool">
+
+<Tab value="Databricks Genie Code">
+
+Clone the orchestra repo into your workspace using a [Git folder](https://docs.databricks.com/aws/en/repos/git-operations-with-repos), then copy the `skills/` directory into a workspace-level or user-level skills directory:
+
+```bash
+# Option A — workspace-wide (all Genie Code users see these)
+databricks workspace import-dir skills /Workspace/.assistant/skills
+
+# Option B — current user only — substitute your workspace email
+databricks workspace import-dir skills /Users/<your-email>/.assistant/skills
+```
+
+Genie Code picks up skills from these directories automatically. Confirm with:
+
+> *"List the orchestra skills you can use."*
+
+Skills fire when their description matches your request. Use `@` to manually invoke (e.g. `@ingest classify the ADF export at /Volumes/main/default/adf_export`).
+
+See the [Databricks Genie Code Skills documentation](https://docs.databricks.com/aws/en/genie-code/skills) for more details.
+
+</Tab>
+
+<Tab value="Claude Code">
+
+The orchestra repo is a Claude Code plugin marketplace ([`.claude-plugin/marketplace.json`](https://github.com/ghanse/orchestra/blob/main/.claude-plugin/marketplace.json) at the repo root) containing the `orchestra` plugin under [`skills/`](https://github.com/ghanse/orchestra/tree/main/skills). Add the marketplace once, then install:
+
+```bash
+# Inside Claude Code
+/plugin marketplace add ghanse/orchestra
+/plugin install orchestra
+```
+
+Or drop the folder into your personal skills directory for a one-off install:
+
+```bash
+cp -R skills/{ingest,translate,prepare,migrate} ~/.claude/skills/
+```
+
+Each skill becomes available as `/orchestra:migrate` (plugin-installed) or as a regular skill (user-level). Claude auto-invokes on description match.
+
+See the [Claude Code Plugins documentation](https://docs.claude.com/en/docs/claude-code/plugins) for more details.
+
+</Tab>
+
+<Tab value="Other AI tools">
+
+Any tool that follows the [Agent Skills](https://agentskills.io/) open standard can install and load orchestra skills. To install:
+
+1. Copy the per-skill folder into the tool's configured skills directory.
+2. Make sure the path contains `SKILL.md` directly (not nested one level deeper).
+3. Restart the tool if it caches on startup.
+
+<Callout type="info" title="Flattening skill files">
+If your tool expects a single flat skills file instead of a directory, concatenate them:
+
+```bash
+cat skills/*/SKILL.md > orchestra-skills.md
+```
+</Callout>
+
+</Tab>
+
+</Tabs>
+
+## Using orchestra skills
+
+After installing, you can let your tool dispatch automatically or invoke skills by name. Typical prompts:
+
+```text
+Migrate the ADF pipelines at /Volumes/main/default/adf_export into a bundle at ./bundle/.
+Run only the ingest phase against ./adf-export and show me the strategy breakdown.
+Translate the inventory at ./inventory.json — confirm before any agentic calls.
+Prepare a Databricks Asset Bundle from ./translation_report.json.
+Re-run translation; the only thing I changed is one Switch activity.
+```
+
+The agent loads the relevant skill into context, follows its workflow, and links back to the canonical documentation for anything outside the skill's scope.
+
+## Extending orchestra skills
+
+Orchestra's skills are scoped to the `orchestra` Python library's public API. When extending them:
+
+- Skills should stay short. The full `SKILL.md` is loaded every time the skill fires, so every line costs tokens on every invocation.
+- Prefer linking to `/docs/...` over duplicating content. The skill's job is to tell the model **when** and **how** to call orchestra, not reprint the reference.
+- Always import from `orchestra.*` &mdash; never guess module paths.
+- Changes to the public orchestra API should be reflected in the matching skill in the same PR.
+
+## Source
+
+- Skills: [`skills/`](https://github.com/ghanse/orchestra/tree/main/skills)
+- Plugin manifest (Claude Code / generic): [`.claude-plugin/plugin.json`](https://github.com/ghanse/orchestra/blob/main/.claude-plugin/plugin.json)

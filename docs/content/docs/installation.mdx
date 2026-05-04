@@ -1,0 +1,98 @@
+---
+title: Installation
+description: Install the Orchestra agent skills in Databricks Genie Code, Claude Code, or any tool that follows the Agent Skills standard.
+---
+
+import { Tabs, Tab } from 'fumadocs-ui/components/tabs';
+import { Callout } from 'fumadocs-ui/components/callout';
+
+Orchestra ships as four [Agent Skills](https://agentskills.io/) &mdash; `ingest`, `translate`, `prepare`, and `migrate` &mdash; that teach an agentic tool how to drive the orchestra Python library correctly. The skills live in the [`skills/`](https://github.com/ghanse/orchestra/tree/main/skills) directory of the orchestra repo.
+
+You don't need to install the Python library separately. The skills resolve the orchestra package on first use; all you install is the skill set in your tool of choice.
+
+<Tabs items={['Databricks Genie Code', 'Claude Code', 'Other AI tools']}>
+
+<Tab value="Databricks Genie Code">
+
+Clone the orchestra repo into your workspace using a [Git folder](https://docs.databricks.com/aws/en/repos/git-operations-with-repos), then copy the `skills/` directory into a workspace-level or user-level skills folder:
+
+```bash
+# Option A — workspace-wide (visible to every Genie Code user)
+databricks workspace import-dir skills /Workspace/.assistant/skills
+
+# Option B — current user only — substitute your workspace email
+databricks workspace import-dir skills /Users/<your-email>/.assistant/skills
+```
+
+Genie Code picks up skills from these directories automatically. Confirm by asking, in Agent mode:
+
+> *"List the orchestra skills you can use."*
+
+Skills fire automatically when their description matches your request. To invoke a specific skill, use the `@` prefix (e.g. `@migrate translate the ADF pipelines I exported to /Volumes/main/default/adf_export`).
+
+See the [Databricks Genie Code Skills documentation](https://docs.databricks.com/aws/en/genie-code/skills) for more details.
+
+</Tab>
+
+<Tab value="Claude Code">
+
+The orchestra repo is a Claude Code plugin. The plugin manifest lives at [`.claude-plugin/plugin.json`](https://github.com/ghanse/orchestra/blob/main/.claude-plugin/plugin.json) and registers all four skills.
+
+The fastest install &mdash; from inside Claude Code, run:
+
+```text
+/plugin marketplace add ghanse/orchestra
+/plugin install orchestra
+```
+
+Or for a one-off install at user scope, copy the skill folders directly:
+
+```bash
+cp -R skills/{ingest,translate,prepare,migrate} ~/.claude/skills/
+```
+
+Once installed, the skills are available as `/orchestra:migrate`, `/orchestra:ingest`, etc., and Claude auto-invokes them when their description matches your prompt.
+
+See the [Claude Code Plugins documentation](https://docs.claude.com/en/docs/claude-code/plugins) for more details.
+
+</Tab>
+
+<Tab value="Other AI tools">
+
+Any tool that supports the [Agent Skills](https://agentskills.io/) open standard can install the orchestra skills. The general pattern:
+
+1. Copy each skill folder (`skills/ingest`, `skills/translate`, `skills/prepare`, `skills/migrate`) into the tool's configured skills directory.
+2. Make sure the path contains `SKILL.md` directly &mdash; do not nest one level deeper.
+3. Restart the tool if it caches skill metadata at startup.
+
+<Callout type="info" title="Flat-file tools">
+If your tool expects a single Markdown file instead of a directory tree, concatenate the skills:
+
+```bash
+cat skills/*/SKILL.md > orchestra-skills.md
+```
+</Callout>
+
+</Tab>
+
+</Tabs>
+
+## Prerequisites
+
+Whichever tool you use, the agent will need a working Python toolchain to actually run translations. The repo uses [`uv`](https://docs.astral.sh/uv/) for environment management:
+
+```bash
+git clone https://github.com/ghanse/orchestra
+cd orchestra
+make dev
+```
+
+The `migrate` skill assumes this layout (or an editable install of the `orchestra` package) is reachable when the agent shells out to run the library.
+
+## Verifying the install
+
+Open your agent and ask:
+
+> *"What orchestra skills do you have available?"*
+
+You should see all four skills listed with their descriptions. If only some appear, double-check the install path your tool watches for skills.

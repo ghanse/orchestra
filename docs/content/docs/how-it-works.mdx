@@ -1,0 +1,40 @@
+---
+title: How Orchestra Works
+description: The motivation behind Orchestra and the three-phase pipeline it uses to translate Azure Data Factory pipelines into Databricks Lakeflow Jobs.
+---
+
+## Why orchestration migration matters
+
+When organizations move analytical workloads to Databricks, orchestration deserves first-class attention. Orchestrators control how, when, and in what order pipelines run &mdash; their configuration directly shapes data freshness, cost, lineage, and on-call experience. Existing tooling does a reasonable job of converting code (notebooks, SQL, Spark jobs) and reconciling outputs, but the orchestration layer is typically migrated by hand. That is slow, error-prone, and exactly where the most operational risk lives.
+
+Orchestra closes that gap for Azure Data Factory. It interprets the existing pipeline definitions, generates a deterministic translation when the activity type is known, and produces a Databricks Asset Bundle that is ready to deploy.
+
+## How Orchestra works
+
+Orchestra is a Python library plus a set of agent skills. The library does the heavy lifting &mdash; parsing, translating, generating &mdash; and the skills tell an agentic tool (Databricks Genie Code, Claude Code, or any agent that supports the open [Agent Skills](https://agentskills.io/) format) **when** and **how** to call into the library. End users interact with the agent in plain English; the agent runs the right phases in the right order.
+
+The translator runs in three phases:
+
+1. **Ingest** &mdash; Parse ADF JSON exports (pipelines, datasets, linked services, triggers) into a typed AST and emit an `inventory.json` that classifies every activity as **deterministic**, **agentic**, or **unsupported**.
+2. **Translate** &mdash; Walk the inventory in topological order and convert each activity into the Databricks intermediate representation (IR). Deterministic activities (Copy, ForEach, IfCondition, Switch, etc.) are translated by a built-in handler; agentic activities are handed off to an LLM-assisted translator with the right context. Unsupported activities are flagged with explicit gaps.
+3. **Prepare** &mdash; Convert the IR into a Databricks Asset Bundle: per-pipeline `databricks.yml`, job YAML, generated notebooks, and setup scripts for UC volumes, secrets, and external connections.
+
+Each phase is independently runnable, has its own input/output contract, and produces artifacts you can inspect before moving on. The agent skill set enforces a confirm-before-continue pattern between phases so a human stays in the loop on anything ambiguous.
+
+## Common use cases
+
+Orchestra is built for three scenarios:
+
+1. **Migrating Azure Data Factory pipelines to Lakeflow Jobs.** The primary use case &mdash; turn a collection of ADF JSON exports into a deployable bundle.
+2. **Bulk modification of existing Lakeflow Jobs.** Once an ADF estate is in IR form, the same preparer can re-emit bundles with updated compute, runtime versions, secret scopes, or notebook paths.
+3. **Estimating migration scope.** Run only the ingest phase to get a strategy breakdown across an entire ADF export &mdash; how many activities are deterministic, how many need agentic translation, how many are unsupported &mdash; before committing to a migration.
+
+## Translation strategies
+
+Every activity in an ADF pipeline is classified into one of three strategies:
+
+- **Deterministic** &mdash; A built-in translator exists. Output is fully generated, byte-stable across runs, and exercised by unit and integration tests. Today's deterministic types: Copy, DatabricksNotebook, DatabricksSparkJar, DatabricksSparkPython, ForEach, IfCondition, Switch, SetVariable, AppendVariable, Lookup, WebActivity, Delete, ExecutePipeline, DatabricksJob, Wait, Filter.
+- **Agentic** &mdash; No built-in translator, but the activity type is well-understood and an LLM can produce a reasonable Databricks equivalent given the right context (the activity definition, the surrounding pipeline, the inventory). Today's agentic types: ExecuteDataFlow, SqlServerStoredProcedure, AzureFunction, WebHook, Custom, ExecuteSSISPackage, AzureMLExecutePipeline, GetMetadata, Validation, Fail, Script, Until.
+- **Unsupported** &mdash; No known translation path; surfaced as an explicit gap in the translation report so the user can plan manual work.
+
+The strategy split keeps the deterministic path fast, deterministic, and verifiable, while still giving you a guided, agent-assisted handle on the long tail.

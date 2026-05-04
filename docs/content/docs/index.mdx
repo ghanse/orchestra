@@ -1,0 +1,20 @@
+---
+title: Introduction
+description: What Orchestra is and where to start.
+---
+
+Orchestra translates Azure Data Factory (ADF) pipelines into Databricks Lakeflow Jobs packaged as [Declarative Automation Bundles](https://docs.databricks.com/aws/en/dev-tools/bundles/) (DABs). Known activity types are converted by deterministic translators; anything else falls back to an agentic translator that drafts the equivalent Databricks task with explicit TODO markers.
+
+## What you get
+
+- Per-pipeline `databricks.yml` and job YAML, ready for `databricks bundle deploy`.
+- Generated notebooks for activities that need executable code (Copy, Lookup, WebActivity, Wait, Filter, etc.).
+- Setup scripts for Unity Catalog volumes, secrets, and connections referenced by the original ADF pipelines.
+- A `translation_report.json` that records strategy (deterministic / agentic / unsupported), warnings, and gaps.
+
+## Where to go next
+
+- **[How Orchestra Works](/docs/how-it-works)** &mdash; the motivation behind the tool and the three-phase pipeline.
+- **[Installation](/docs/installation)** &mdash; install the orchestra plugin in your agentic tool of choice.
+- **[Usage Guide](/docs/usage-guide)** &mdash; an end-to-end walkthrough from raw ADF JSON to a deployable bundle.
+- **[AI Tools &amp; Skills](/docs/ai-tools-skills)** &mdash; the agent skills shipped with orchestra and how each tool loads them.

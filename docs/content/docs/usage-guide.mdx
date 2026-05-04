@@ -1,0 +1,150 @@
+---
+title: Usage Guide
+description: End-to-end walkthrough — install the orchestra skills in your agent, point it at your ADF JSON, and deploy a Databricks Asset Bundle.
+---
+
+import { Tabs, Tab } from 'fumadocs-ui/components/tabs';
+import { Callout } from 'fumadocs-ui/components/callout';
+import { Steps, Step } from 'fumadocs-ui/components/steps';
+
+This guide walks through a complete migration: install the orchestra skills in your agentic tool, hand it a directory of Azure Data Factory JSON exports, and end up with a Databricks Asset Bundle you can deploy.
+
+<Steps>
+
+<Step>
+
+## 1. Export your ADF pipelines
+
+In the Azure Data Factory portal, open **Manage &rarr; ARM template &rarr; Export ARM template**, or use the `Get-AzDataFactoryV2Pipeline` PowerShell cmdlet to dump each pipeline definition as JSON. You'll end up with a directory tree like:
+
+```text
+adf-export/
+├── pipeline/        # one JSON file per pipeline
+├── dataset/         # one JSON file per dataset
+├── linkedService/   # one JSON file per linked service
+└── trigger/         # one JSON file per trigger (optional)
+```
+
+Upload the directory to a Unity Catalog volume (recommended) or a local path the agent can read:
+
+```bash
+databricks fs cp -r ./adf-export dbfs:/Volumes/main/default/adf_export
+```
+
+</Step>
+
+<Step>
+
+## 2. Install the orchestra skills in your agent
+
+Pick the tab that matches the agentic tool you'll be driving the migration from.
+
+<Tabs items={['Databricks Genie Code', 'Claude Code', 'Other AI tools']}>
+
+<Tab value="Databricks Genie Code">
+
+Clone the orchestra repo as a Git folder in your Databricks workspace, then copy the skills into your assistant skills directory:
+
+```bash
+databricks workspace import-dir skills /Workspace/.assistant/skills
+```
+
+Genie Code is the recommended interface: it runs entirely in your Databricks workspace, has direct access to the UC volumes that hold your ADF exports, and can deploy the resulting bundle without leaving the browser.
+
+</Tab>
+
+<Tab value="Claude Code">
+
+```text
+/plugin marketplace add ghanse/orchestra
+/plugin install orchestra
+```
+
+Claude Code is a strong second choice when you want to drive the migration from your local machine, edit the generated bundle in your IDE, and version-control the result.
+
+</Tab>
+
+<Tab value="Other AI tools">
+
+Copy `skills/{ingest,translate,prepare,migrate}` into the directory your tool watches for [Agent Skills](https://agentskills.io/). Restart the tool if needed.
+
+</Tab>
+
+</Tabs>
+
+See the [Installation page](/docs/installation) for full details.
+
+</Step>
+
+<Step>
+
+## 3. Run the end-to-end migration
+
+In your agent, open a fresh conversation and prompt it with the path to your ADF export plus a target directory for the bundle:
+
+> *"Use orchestra to migrate the ADF pipelines at `/Volumes/main/default/adf_export` into a Databricks Asset Bundle at `./bundle/`."*
+
+The `migrate` skill chains the three phases:
+
+1. **Ingest** &mdash; parses every JSON file, builds an inventory, and prints a strategy breakdown (deterministic / agentic / unsupported counts).
+2. **Translate** &mdash; converts each activity to the Databricks IR. The agent confirms with you before running agentic translation against any non-deterministic activities.
+3. **Prepare** &mdash; emits the bundle: `databricks.yml`, per-pipeline job YAML, generated notebooks, and setup scripts.
+
+You can also drive each phase individually if you want to inspect intermediate output:
+
+> *"Run only the ingest phase and show me the inventory."* <br/>
+> *"Translate the inventory at `./inventory.json`."* <br/>
+> *"Prepare a bundle from the translation report at `./translation_report.json`."*
+
+</Step>
+
+<Step>
+
+## 4. Review the output
+
+The bundle directory will look roughly like:
+
+```text
+bundle/
+├── databricks.yml
+├── resources/
+│   └── jobs/
+│       ├── pipeline_one.job.yml
+│       └── pipeline_two.job.yml
+├── src/
+│   └── notebooks/         # generated notebooks for Copy, Lookup, etc.
+├── setup/
+│   └── 01_setup.py        # UC volumes, secrets, connections
+└── translation_report.json
+```
+
+Open `translation_report.json` first &mdash; it lists every activity, its translation strategy, any warnings, and the location of the generated artifact. Anything marked `unsupported` or carrying a `TODO` warning is where you'll need to make a judgement call.
+
+<Callout type="warn" title="Secrets are placeholders">
+Connection strings, JDBC URLs, and API tokens are emitted as `SecretInstruction` setup steps that point at empty Databricks secret keys. You must populate the secret values before deploying.
+</Callout>
+
+</Step>
+
+<Step>
+
+## 5. Deploy the bundle
+
+From the bundle directory:
+
+```bash
+databricks bundle validate
+databricks bundle deploy --target dev
+```
+
+Bundles created by orchestra are standard Databricks Asset Bundles &mdash; you can target multiple environments, integrate with CI/CD, or further customize the YAML before deploying. See the [Databricks Asset Bundles documentation](https://docs.databricks.com/aws/en/dev-tools/bundles/) for more.
+
+</Step>
+
+</Steps>
+
+## Tips
+
+- **Run ingest first.** When estimating effort on a large ADF estate, run only the ingest phase to get a strategy breakdown without spending time on translation.
+- **Bundle YAML is human-editable.** Treat the generated YAML as a starting point. You will sometimes want to merge multiple bundles, customize compute, or rewire dependencies.
+- **Re-run safely.** Re-running the migrate skill against the same source produces byte-identical output for deterministic activities, so you can iterate on agentic gaps without churning the rest of the bundle.
