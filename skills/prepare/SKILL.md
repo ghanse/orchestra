@@ -56,7 +56,7 @@ Ask the user for the following (provide defaults):
 Execute the DAB writer:
 
 ```bash
-python3 <plugin_dir>/lib/orchestra/bundler/dab_writer.py \
+python3 <plugin_dir>/src/orchestra/bundler/dab_writer.py \
   --report <translation_report_path> \
   --output-dir <output_dir> \
   --catalog <catalog> \

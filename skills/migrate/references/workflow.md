@@ -85,7 +85,7 @@ ADF JSON Exports
 **Key decisions:**
 - Deterministic translators run first because they are fast and reliable. Agentic skills are only invoked for gaps.
 - The IR is an intermediate format that decouples translation from DABs generation. This allows the prepare phase to target different output formats in the future.
-- Each deterministic translator is a standalone Python module in `lib/orchestra/translator/activity_translators/`. Adding support for a new activity type means adding a new module.
+- Each deterministic translator is a standalone Python module in `src/orchestra/translator/activity_translators/`. Adding support for a new activity type means adding a new module.
 - Agentic results are saved separately before merging, so they can be inspected, retried, or manually overridden.
 
 ## Phase 3: Prepare

@@ -78,13 +78,13 @@ Set the working source directory to the local temp path for subsequent steps.
 Execute the ADF loader to parse all JSON files and produce the inventory:
 
 ```bash
-python3 <plugin_dir>/lib/orchestra/parser/adf_loader.py \
+python3 <plugin_dir>/src/orchestra/parser/adf_loader.py \
   --source-dir <source_path> \
   --output-dir <output_path>
 ```
 
 Where:
-- `<plugin_dir>` is the root of the orchestra plugin (the directory containing `lib/`)
+- `<plugin_dir>` is the root of the orchestra plugin (the directory containing `src/`)
 - `<source_path>` is the local directory containing ADF JSON files
 - `<output_path>` is where to write the parsed output (default: `./orchestra_output/ingest/`)
 

@@ -43,7 +43,7 @@ Validate the file exists and is well-formed.
 Execute the translation engine on all deterministic activities:
 
 ```bash
-python3 <plugin_dir>/lib/orchestra/translator/engine.py \
+python3 <plugin_dir>/src/orchestra/translator/engine.py \
   --inventory <inventory_path> \
   --source-dir <adf_source_dir> \
   --output-dir <output_dir>
@@ -148,7 +148,7 @@ Each agentic skill invocation produces a translation result. Collect all results
 Run the merge step to combine deterministic and agentic translations:
 
 ```bash
-python3 <plugin_dir>/lib/orchestra/translator/engine.py \
+python3 <plugin_dir>/src/orchestra/translator/engine.py \
   --merge-agentic \
   --report <translation_report_path> \
   --agentic-results <agentic_results_dir>

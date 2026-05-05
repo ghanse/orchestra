@@ -79,10 +79,10 @@ ExecuteDataFlow, SqlServerStoredProcedure, AzureFunction, WebHook, Custom, Execu
 
 ## Adding a New Deterministic Translator
 
-1. Add IR dataclass to `lib/orchestra/models/ir.py`
-2. Create translator at `lib/orchestra/translator/activity_translators/<type>.py`
-3. Create preparer at `lib/orchestra/preparer/activity_preparers/<type>.py`
-4. Add notebook generator to `lib/orchestra/preparer/code_generator.py` if needed
+1. Add IR dataclass to `src/orchestra/models/ir.py`
+2. Create translator at `src/orchestra/translator/activity_translators/<type>.py`
+3. Create preparer at `src/orchestra/preparer/activity_preparers/<type>.py`
+4. Add notebook generator to `src/orchestra/preparer/code_generator.py` if needed
 5. Register in engine.py (TRANSLATOR_REGISTRY for leaf, match statement for control-flow)
 6. Move from AGENTIC_TYPES to DETERMINISTIC_TYPES in adf_loader.py
 7. Update activity-mapping.md reference

@@ -12,15 +12,15 @@ ci:
 	uv sync --frozen
 
 test:
-	PYTHONPATH=lib uv run pytest tests/unit -v
+	PYTHONPATH=src uv run pytest tests/unit -v
 
 integration:
-	PYTHONPATH=lib uv run pytest tests/integration -v -m "not slow"
+	PYTHONPATH=src uv run pytest tests/integration -v -m "not slow"
 
 fmt:
-	uv run ruff format lib/ tests/
-	uv run ruff check lib/ tests/ --fix
-	uv run mypy lib/orchestra/
+	uv run ruff format src/ tests/
+	uv run ruff check src/ tests/ --fix
+	uv run mypy src/orchestra/
 
 docs-install:
 	cd docs && npm install
