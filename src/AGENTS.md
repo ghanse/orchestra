@@ -1,7 +1,7 @@
-# Library Code Conventions
+# Source Code Conventions
 
  This file documents *code-style* expectations for everything under
-`lib/orchestra/`.  When in doubt, match the existing code in the
+`src/orchestra/`.  When in doubt, match the existing code in the
 neighbouring module. This is a companion to the top-level [AGENTS.md](../AGENTS.md)
  file which documents the plugin architecture. 
 
