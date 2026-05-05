@@ -23,16 +23,16 @@ fmt:
 	uv run mypy src/orchestra/
 
 docs-install:
-	cd docs && npm ci
+	cd docs && bun install --frozen-lockfile
 
 docs-clean:
 	rm -rf docs/.next docs/.source docs/out docs/site docs/node_modules
 
 docs-build: docs-install
-	cd docs && npm run build && rm -rf site && mv out site
+	cd docs && bun run build && rm -rf site && mv out site
 
 docs-serve: docs-build
-	cd docs && npm run dev
+	cd docs && bun run dev
 
 help:
 	@echo "Available targets:"
@@ -42,7 +42,7 @@ help:
 	@echo "  integration  Run integration tests"
 	@echo "  fmt          Format and lint code"
 	@echo "  clean        Remove build artifacts"
-	@echo "  docs-install Install docs dependencies (npm)"
+	@echo "  docs-install Install docs dependencies (bun)"
 	@echo "  docs-clean   Remove docs build artifacts"
 	@echo "  docs-build   Build the static docs site to docs/site"
 	@echo "  docs-serve   Run the docs dev server (next dev)"

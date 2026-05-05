@@ -7,7 +7,7 @@ Documentation site for [orchestra](https://github.com/ghanse/orchestra), built w
 From the repo root:
 
 ```bash
-make docs-install   # one-time: install npm deps
+make docs-install   # one-time: install bun deps
 make docs-serve     # next dev — http://localhost:3000
 ```
 
