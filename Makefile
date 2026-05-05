@@ -26,10 +26,10 @@ docs-install:
 	cd docs && npm install
 
 docs-clean:
-	rm -rf docs/.next docs/.source docs/out docs/node_modules
+	rm -rf docs/.next docs/.source docs/out docs/site docs/node_modules
 
 docs-build:
-	cd docs && npm run build
+	cd docs && npm run build && rm -rf site && mv out site
 
 docs-serve:
 	cd docs && npm run dev
@@ -44,5 +44,5 @@ help:
 	@echo "  clean        Remove build artifacts"
 	@echo "  docs-install Install docs dependencies (npm)"
 	@echo "  docs-clean   Remove docs build artifacts"
-	@echo "  docs-build   Build the static docs site to docs/out"
+	@echo "  docs-build   Build the static docs site to docs/site"
 	@echo "  docs-serve   Run the docs dev server (next dev)"

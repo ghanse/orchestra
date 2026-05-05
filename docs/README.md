@@ -14,10 +14,10 @@ make docs-serve     # next dev — http://localhost:3000
 ## Build
 
 ```bash
-make docs-build     # static export to docs/out
+make docs-build     # static export to docs/site
 ```
 
-The `docs-release.yml` workflow runs the same build and publishes `docs/out` to GitHub Pages on every push to `main` that touches `docs/**`.
+The `docs-release.yml` workflow runs the same build and publishes `docs/site` to GitHub Pages on every push to `main` that touches `docs/**`.
 
 ## Authoring
 
