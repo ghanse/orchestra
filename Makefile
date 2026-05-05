@@ -28,10 +28,10 @@ docs-install:
 docs-clean:
 	rm -rf docs/.next docs/.source docs/out docs/site docs/node_modules
 
-docs-build:
+docs-build: docs-install
 	cd docs && npm run build && rm -rf site && mv out site
 
-docs-serve:
+docs-serve: docs-build
 	cd docs && npm run dev
 
 help:

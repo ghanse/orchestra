@@ -143,7 +143,3 @@ make clean        # Remove build artifacts
 3. Follow the [adding a new translator](CLAUDE.md#adding-a-new-deterministic-translator) guide
 4. Run `make fmt && make test` before committing
 5. Open a pull request
-
-## License
-
-MIT

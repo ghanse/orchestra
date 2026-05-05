@@ -1,6 +1,6 @@
 ---
 title: Installation
-description: Install the Orchestra agent skills in Databricks Genie Code, Claude Code, or any tool that follows the Agent Skills standard.
+description: Install orchestra in Databricks Genie Code, Claude Code, or other agentic tools.
 ---
 
 import { Tabs, Tab } from 'fumadocs-ui/components/tabs';
@@ -10,52 +10,44 @@ Orchestra contains four [agent skills](https://github.com/ghanse/orchestra/tree/
 Installing orchestra also installs all required dependencies to run the Python modules.
 
 <Tabs items={['Databricks Genie Code', 'Claude Code', 'Other AI tools']}>
-
 <Tab value="Databricks Genie Code">
-
-Clone the orchestra repo into your workspace using a [Git folder](https://docs.databricks.com/aws/en/repos/git-operations-with-repos), then copy the `skills/` directory into a workspace-level or user-level skills folder:
+Clone the orchestra repo into your workspace using a [Git folder](https://docs.databricks.com/aws/en/repos/git-operations-with-repos), then copy the `skills/` directory into a user-level skills folder:
 
 ```bash
-# Option A — workspace-wide (visible to every Genie Code user)
-databricks workspace import-dir skills /Workspace/.assistant/skills
-
-# Option B — current user only — substitute your workspace email
 databricks workspace import-dir skills /Users/<your-email>/.assistant/skills
 ```
 
-Genie Code picks up skills from these directories automatically. Confirm by asking, in Agent mode:
+To make orchestra available for other workspace users, copy `skills/` into a workspace-level skills folder:
 
-> *"List the orchestra skills you can use."*
+```bash
+databricks workspace import-dir skills /Workspace/.assistant/skills
+```
 
-Skills fire automatically when their description matches your request. To invoke a specific skill, use the `@` prefix (e.g. `@migrate translate the ADF pipelines I exported to /Volumes/main/default/adf_export`).
+Genie Code picks up skills from these directories automatically. Skills fire automatically when their description matches your request. 
+To invoke a specific skill, use the `@` prefix (e.g. `@migrate translate the ADF pipelines I exported to /Volumes/main/default/adf_export`).
 
 See the [Databricks Genie Code Skills documentation](https://docs.databricks.com/aws/en/genie-code/skills) for more details.
-
 </Tab>
 
 <Tab value="Claude Code">
+Orchestra is packaged as a Claude Code plugin. The plugin manifest lives at [`.claude-plugin/plugin.json`](https://github.com/ghanse/orchestra/blob/main/.claude-plugin/plugin.json).  To install 
+orchestra, run the following command from a Claude Code session:
 
-The orchestra repo is a Claude Code plugin. The plugin manifest lives at [`.claude-plugin/plugin.json`](https://github.com/ghanse/orchestra/blob/main/.claude-plugin/plugin.json) and registers all four skills.
-
-To install orchestra as a plugin, run the following command from a Claude Code session:
-
-```text
+```bash
 /plugin marketplace add ghanse/orchestra
 /plugin install orchestra
 ```
 
-For a one-off install at user scope, copy the skill folders into your local `/.claude/skills` folder:
+You can also copy the skill folders into your local `/.claude/skills` folder:
 
 ```bash
 cp -R skills/{ingest,translate,prepare,migrate} ~/.claude/skills/
 ```
 
 Once installed, the skills are can be invoked using `/orchestra:migrate`, `/orchestra:ingest`, etc. Claude Code can also invoke the skills when prompted.  See the [Claude Code Plugins documentation](https://docs.claude.com/en/docs/claude-code/plugins) for more details.
-
 </Tab>
 
 <Tab value="Other AI tools">
-
 Any tool that supports the [Agent Skills](https://agentskills.io/) open standard can install the orchestra skills. The general pattern:
 
 1. Copy each skill folder (`skills/ingest`, `skills/translate`, `skills/prepare`, `skills/migrate`) into the tool's configured skills directory.
@@ -69,27 +61,13 @@ If your tool expects a single Markdown file instead of a directory tree, use the
 cat skills/*/SKILL.md > orchestra-skills.md
 ```
 </Callout>
-
 </Tab>
-
 </Tabs>
-
-## Prerequisites
-
-Your agent will need a working Python toolchain to actually run translations. The repo uses [`uv`](https://docs.astral.sh/uv/) for environment management:
-
-```bash
-git clone https://github.com/ghanse/orchestra
-cd orchestra
-make dev
-```
-
-The `migrate` skill assumes this layout (or an editable install of the `orchestra` package) is reachable when the agent shells out to run the library.
 
 ## Verifying the install
 
 Open your agent and ask:
 
-> *"What orchestra skills do you have available?"*
+> What orchestra skills do you have available?
 
 You should see all four skills listed with their descriptions. If only some appear, double-check the install path your tool watches for skills.
