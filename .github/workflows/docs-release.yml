@@ -27,9 +27,14 @@ jobs:
           fetch-depth: 0
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: latest
+
+      - name: Scrub internal proxy URLs from bun.lock
+        # The Databricks-internal npm proxy is unreachable from public runners;
+        # rewrite to the default npm registry. Hashes are unaffected by the URL.
+        run: sed -i 's|https://npm-proxy\.dev\.databricks\.com|https://registry.npmjs.org|g' docs/bun.lock
 
       - name: Install dependencies
         run: make docs-install
