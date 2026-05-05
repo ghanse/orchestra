@@ -23,7 +23,7 @@ fmt:
 	uv run mypy src/orchestra/
 
 docs-install:
-	cd docs && npm install
+	cd docs && npm ci
 
 docs-clean:
 	rm -rf docs/.next docs/.source docs/out docs/site docs/node_modules
