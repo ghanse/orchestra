@@ -2,7 +2,9 @@
   "title": "Orchestra",
   "pages": [
     "index",
+    "how-it-works",
     "installation",
-    "usage-guide"
+    "usage-guide",
+    "ai-tools-skills"
   ]
 }
