@@ -120,9 +120,7 @@ def prepare(
             # source notebook name; fall back to the activity-derived snake
             # case when the workspace path is unusable (empty trailing
             # segment, all special chars, etc.).
-            filename = workspace_notebook_filename(resolved_path) or notebook_filename(
-                activity.task_key, activity.name
-            )
+            filename = workspace_notebook_filename(resolved_path) or notebook_filename(activity.task_key, activity.name)
             notebook_relative_path = f"notebooks/{filename}"
             task["notebook_task"] = {"notebook_path": f"../src/{notebook_relative_path}"}
             if base_parameters is not None:
