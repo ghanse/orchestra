@@ -209,18 +209,14 @@ def resolve_expression(
     # ``<function_call>.<attribute>...`` chains like
     # ``json(pipeline().parameters.items).type`` by resolving the function
     # call first then chaining `.get('attr')` onto the resulting code.
-    result = _resolve_function_call_with_attribute(
-        expr, context, variable_task_keys=variable_task_keys
-    )
+    result = _resolve_function_call_with_attribute(expr, context, variable_task_keys=variable_task_keys)
     if result is not None:
         return result
 
     # C-33 (VAREX4-001): handle ``<function_call>[N]`` chains so e.g.
     # ``@split(pipeline().parameters.referenceDate,'/')[0]`` lowers to
     # notebook_code.
-    result = _resolve_function_call_with_index(
-        expr, context, variable_task_keys=variable_task_keys
-    )
+    result = _resolve_function_call_with_index(expr, context, variable_task_keys=variable_task_keys)
     if result is not None:
         return result
 
@@ -815,9 +811,7 @@ def _resolve_function_call_with_attribute(
     inner = match.group(2)
     attr_chain = match.group(3)
     func_expr = f"@{func_name}({inner})"
-    base_result = resolve_expression(
-        func_expr, context, variable_task_keys=variable_task_keys
-    )
+    base_result = resolve_expression(func_expr, context, variable_task_keys=variable_task_keys)
     if base_result is None:
         return None
     if base_result.kind == "literal":
@@ -876,9 +870,7 @@ def _resolve_function_call(
             # otherwise quoted ``'09'`` / ``'12'`` collapse to a bare
             # numeric and either raise a SyntaxError (leading zero) or
             # silently compare against the wrong value.
-            resolved_args.append(
-                ExpressionResult(kind="literal", value=raw_arg[1:-1], was_string_literal=True)
-            )
+            resolved_args.append(ExpressionResult(kind="literal", value=raw_arg[1:-1], was_string_literal=True))
         elif _is_numeric(raw_arg):
             resolved_args.append(ExpressionResult(kind="literal", value=raw_arg))
         elif raw_arg.lower() in ("true", "false"):

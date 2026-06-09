@@ -99,9 +99,7 @@ class TestNotebookPreparer:
         # SETUP.md SetupTask is emitted.
         kinds = [st.type for st in prepared.setup_tasks]
         assert "dynamic_notebook_dispatch" in kinds
-        config = next(
-            st.config for st in prepared.setup_tasks if st.type == "dynamic_notebook_dispatch"
-        )
+        config = next(st.config for st in prepared.setup_tasks if st.type == "dynamic_notebook_dispatch")
         assert config["task_key"] == "dispatch"
         assert "@trim" in config["expression"]
         # The notebook_path widget is registered with an empty default.
@@ -124,9 +122,7 @@ class TestNotebookPreparer:
         prepared = prepare_activity(activity)
         kinds = [st.type for st in prepared.setup_tasks]
         assert "unresolved_library" in kinds
-        config = next(
-            st.config for st in prepared.setup_tasks if st.type == "unresolved_library"
-        )
+        config = next(st.config for st in prepared.setup_tasks if st.type == "unresolved_library")
         assert config["task_key"] == "run_nb"
         assert config["library_type"] == "jar"
         assert "proj4jLibFileName" in config["missing"]
@@ -415,8 +411,7 @@ class TestWebActivityPreparer:
         )
         prepared = prepare_activity(activity)
         assert any(
-            s.scope == "lakeh_ls_keyvault" and s.key == "adapp-auccommonutilssp-secret"
-            for s in prepared.secrets
+            s.scope == "lakeh_ls_keyvault" and s.key == "adapp-auccommonutilssp-secret" for s in prepared.secrets
         )
         # The generic auth-credential placeholder is suppressed when a real
         # secret reference is available.
@@ -628,9 +623,7 @@ class TestForEachPreparer:
         # inputs now reference the bridge task value, not the @split string.
         assert prepared.task["for_each_task"]["inputs"] == "{{tasks.loop_inputs_bridge.values.items}}"
         # ForEach depends on the bridge so the value is materialised first.
-        assert any(
-            dep.get("task_key") == "loop_inputs_bridge" for dep in prepared.task.get("depends_on") or []
-        )
+        assert any(dep.get("task_key") == "loop_inputs_bridge" for dep in prepared.task.get("depends_on") or [])
 
     def test_for_each_with_inner_if_condition_carries_branches(self):
         """Change foreach-inner-extra-tasks (P0): CF-001.
@@ -794,9 +787,7 @@ class TestCrossForEachVariableReadDetection:
         )
         pipeline = Pipeline(name="cross_foreach_pipe", tasks=[loop, sibling])
         wf = prepare_workflow(pipeline)
-        rollups = [
-            st for st in wf.setup_tasks if st.type == "manual_variable_rollup"
-        ]
+        rollups = [st for st in wf.setup_tasks if st.type == "manual_variable_rollup"]
         assert len(rollups) == 1
         config = rollups[0].config
         assert config["variable_name"] == "continue"
@@ -833,9 +824,7 @@ class TestCrossForEachVariableReadDetection:
             tasks=[parent_setter, loop, sibling],
         )
         wf = prepare_workflow(pipeline)
-        rollups = [
-            st for st in wf.setup_tasks if st.type == "manual_variable_rollup"
-        ]
+        rollups = [st for st in wf.setup_tasks if st.type == "manual_variable_rollup"]
         assert rollups == []
 
 

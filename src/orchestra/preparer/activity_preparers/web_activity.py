@@ -119,9 +119,7 @@ def _extract_secrets_and_setup(
     return secrets, setup_tasks
 
 
-def _materialise_secret(
-    value: Any, *, default_scope: str, role: str
-) -> SecretInstruction | None:
+def _materialise_secret(value: Any, *, default_scope: str, role: str) -> SecretInstruction | None:
     """Builds a :class:`SecretInstruction` from an ADF secret payload.
 
     Handles the two common shapes:

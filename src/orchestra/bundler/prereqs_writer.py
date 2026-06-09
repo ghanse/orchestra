@@ -705,8 +705,7 @@ def render_setup_md(prereqs: Prereqs, *, bundle_name: str) -> str:
             auth = entry.get("authentication", "")
             note = entry.get(
                 "note",
-                "Swap `single_user_name` to the SP application ID or set "
-                "`run_as.service_principal_name` on the job.",
+                "Swap `single_user_name` to the SP application ID or set `run_as.service_principal_name` on the job.",
             )
             lines.append(f"| `{source}` | `{linked_service}` | `{auth}` | {note} |")
         lines.append("")
@@ -750,9 +749,7 @@ def render_setup_md(prereqs: Prereqs, *, bundle_name: str) -> str:
             var_name = rollup.get("variable_name", "")
             parent_key = rollup.get("parent_foreach", "")
             message = rollup.get("message", "")
-            lines.append(
-                f"| `{var_name}` | `{parent_key}` | {message} |"
-            )
+            lines.append(f"| `{var_name}` | `{parent_key}` | {message} |")
         lines.append("")
 
     if prereqs.network_endpoints:

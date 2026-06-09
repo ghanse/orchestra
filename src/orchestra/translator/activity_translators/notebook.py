@@ -129,15 +129,9 @@ def _raw_expression_text(value: Any) -> str:
 _LIBRARY_VALUE_KEYS: tuple[str, ...] = ("jar", "whl", "egg", "requirements")
 
 
-_GLOBAL_PARAM_REF_RE = re.compile(
-    r"pipeline\(\s*\)\.globalParameters\.(\w+)", re.IGNORECASE
-)
-_PIPELINE_PARAM_REF_RE = re.compile(
-    r"pipeline\(\s*\)\.parameters\.(\w+)", re.IGNORECASE
-)
-_VARIABLE_REF_RE = re.compile(
-    r"variables\(\s*'([^']+)'\s*\)", re.IGNORECASE
-)
+_GLOBAL_PARAM_REF_RE = re.compile(r"pipeline\(\s*\)\.globalParameters\.(\w+)", re.IGNORECASE)
+_PIPELINE_PARAM_REF_RE = re.compile(r"pipeline\(\s*\)\.parameters\.(\w+)", re.IGNORECASE)
+_VARIABLE_REF_RE = re.compile(r"variables\(\s*'([^']+)'\s*\)", re.IGNORECASE)
 
 
 def _extract_missing_identifiers(expression_text: str, context: TranslationContext) -> list[str]:

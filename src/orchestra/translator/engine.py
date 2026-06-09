@@ -465,9 +465,7 @@ def _trigger_references(trigger: Any, pipeline_name: str) -> bool:
     return False
 
 
-def _extract_trigger_parameter_overrides(
-    trigger: Any, pipeline_name: str
-) -> dict[str, Any]:
+def _extract_trigger_parameter_overrides(trigger: Any, pipeline_name: str) -> dict[str, Any]:
     """Returns the parameters block on the trigger's pipelineReference entry.
 
     SCHED3-003: ADF triggers attach per-pipeline parameter overrides at the
@@ -614,9 +612,7 @@ def _recurrence_to_periodic(recurrence: dict[str, Any]) -> dict[str, Any] | None
     schedule = recurrence.get("schedule") or {}
     if isinstance(schedule, dict):
         time_of_day = {
-            key: schedule.get(key)
-            for key in ("hours", "minutes", "weekDays", "monthDays")
-            if schedule.get(key)
+            key: schedule.get(key) for key in ("hours", "minutes", "weekDays", "monthDays") if schedule.get(key)
         }
         if time_of_day:
             spec["time_of_day_note"] = time_of_day

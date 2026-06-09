@@ -204,9 +204,7 @@ def _parse_condition(
     return "NOT_EQUAL", resolved, "0", None
 
 
-def _boolean_variable_bridge(
-    expr: str, resolved: str, context: TranslationContext
-) -> BridgeRequest | None:
+def _boolean_variable_bridge(expr: str, resolved: str, context: TranslationContext) -> BridgeRequest | None:
     """Builds a local-recompute BridgeRequest for a Boolean-variable operand.
 
     C-43 (CF5-001): the bridge re-derives the boolean inside whatever job
@@ -269,9 +267,7 @@ def _bridge_task_value_placeholder() -> str:
     return f"__BRIDGE__::{_BRIDGE_TASK_VALUE_KEY}"
 
 
-def _resolve_operand(
-    operand: str, context: TranslationContext
-) -> tuple[str, BridgeRequest | None]:
+def _resolve_operand(operand: str, context: TranslationContext) -> tuple[str, BridgeRequest | None]:
     """Converts an ADF expression operand to a Databricks task value reference
     or a :class:`BridgeRequest` when the operand requires a bridge task.
 

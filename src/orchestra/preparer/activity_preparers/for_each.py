@@ -214,9 +214,7 @@ def prepare(
                 *inner_prepared.extra_tasks,
             ]
             normalize_inner_task_params(inner_tasks)
-            parameters, job_parameters = collect_inner_job_params(
-                inner_tasks, variable_task_keys=variable_task_keys
-            )
+            parameters, job_parameters = collect_inner_job_params(inner_tasks, variable_task_keys=variable_task_keys)
 
             # LSC3-001: gather cluster hints from inner activities so the
             # inner-job default cluster lifts spark_env_vars / custom_tags /
@@ -276,9 +274,7 @@ def prepare(
 
         normalize_inner_task_params(inner_tasks)
 
-        parameters, job_parameters = collect_inner_job_params(
-            inner_tasks, variable_task_keys=variable_task_keys
-        )
+        parameters, job_parameters = collect_inner_job_params(inner_tasks, variable_task_keys=variable_task_keys)
 
         # LSC3-001: gather cluster hints from every nested inner activity
         # so the inner-job default cluster picks up LS-derived

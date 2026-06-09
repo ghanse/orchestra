@@ -126,7 +126,7 @@ def _dispatch_stub_notebook(activity: NotebookActivity, filename: str) -> str:
         f"target_notebook = dbutils.widgets.get('{_DISPATCH_STUB_WIDGET}')\n"
         "if not target_notebook:\n"
         "    raise ValueError(\n"
-        f"        \"Dispatch stub for activity {activity.name!r} requires a runtime \"\n"
+        f'        "Dispatch stub for activity {activity.name!r} requires a runtime "\n'
         f"        \"value for the '{_DISPATCH_STUB_WIDGET}' widget.  See SETUP.md.\"\n"
         "    )\n"
         "\n"

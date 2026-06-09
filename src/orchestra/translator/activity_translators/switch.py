@@ -17,9 +17,7 @@ from orchestra.translator.activity_translators.resolve import (
 _BRIDGE_PLACEHOLDER = "__BRIDGE__::result"
 
 
-def _resolve_on_expression(
-    on_expression: str, context: TranslationContext
-) -> tuple[str, BridgeRequest | None]:
+def _resolve_on_expression(on_expression: str, context: TranslationContext) -> tuple[str, BridgeRequest | None]:
     """Resolves the ``on`` expression to a DAB dynamic value ref or a bridge request.
 
     C-07 (CF-iter2-001 / CF-iter2-003): when the expression involves an

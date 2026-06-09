@@ -10,9 +10,7 @@ from orchestra.models.ir import Activity, LookupActivity, TranslationContext
 from orchestra.translator.activity_translators.resolve import resolve_field
 
 
-def _dataset_parameter_scope(
-    activity: AdfActivity, context: TranslationContext
-) -> dict[str, str]:
+def _dataset_parameter_scope(activity: AdfActivity, context: TranslationContext) -> dict[str, str]:
     """Resolve the Lookup dataset reference's ``parameters`` binding.
 
     C-47 (LSC5-001): a file-source dataset's ``folderPath`` / ``fileName``
@@ -54,8 +52,7 @@ def _substitute_dataset_refs(value: Any, scope: dict[str, str]) -> Any:
     for name, resolved in scope.items():
         # dataset().X and dataset()['X'] / dataset()["X"] forms.
         result = re.sub(
-            r"dataset\(\)\s*(?:\.\s*" + re.escape(name) + r"\b|\[\s*['\"]"
-            + re.escape(name) + r"['\"]\s*\])",
+            r"dataset\(\)\s*(?:\.\s*" + re.escape(name) + r"\b|\[\s*['\"]" + re.escape(name) + r"['\"]\s*\])",
             resolved,
             result,
         )
@@ -74,6 +71,7 @@ def _unwrap_expression(value: Any) -> Any:
     if isinstance(value, dict) and "value" in value and value.get("type") == "Expression":
         return value["value"]
     return value
+
 
 # File-source dataset types that a Lookup can read directly.  Keeping
 # this list local avoids tugging the broader copy translator in.

@@ -99,10 +99,7 @@ def _generate_secrets_setup_notebook(secrets: list[SecretInstruction]) -> DabNot
 
         for secret in scope_secrets:
             lines.append(f"# {secret.value_source}")
-            lines.append(
-                f'w.secrets.put_secret(scope="{scope_name}", key="{secret.key}", '
-                'string_value="PLACEHOLDER")'
-            )
+            lines.append(f'w.secrets.put_secret(scope="{scope_name}", key="{secret.key}", string_value="PLACEHOLDER")')
             lines.append(f'print("Created secret: {scope_name}/{secret.key}")')
             lines.append("")
 

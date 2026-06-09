@@ -260,46 +260,24 @@ def write_bundle(
     # VAREX3-003: manual_variable_rollup SetupTasks emitted by
     # workflow_preparer surface in SETUP.md so the user knows where to add
     # a roll-up notebook.
-    rollup_configs = [
-        st.config
-        for st in workflow.setup_tasks
-        if st.type == "manual_variable_rollup"
-    ]
+    rollup_configs = [st.config for st in workflow.setup_tasks if st.type == "manual_variable_rollup"]
     for inner in workflow.inner_workflows:
-        rollup_configs.extend(
-            st.config for st in inner.setup_tasks if st.type == "manual_variable_rollup"
-        )
-    dynamic_dispatch_configs = [
-        st.config for st in workflow.setup_tasks if st.type == "dynamic_notebook_dispatch"
-    ]
-    unresolved_library_configs = [
-        st.config for st in workflow.setup_tasks if st.type == "unresolved_library"
-    ]
-    manual_variable_init_configs = [
-        st.config for st in workflow.setup_tasks if st.type == "manual_variable_init"
-    ]
+        rollup_configs.extend(st.config for st in inner.setup_tasks if st.type == "manual_variable_rollup")
+    dynamic_dispatch_configs = [st.config for st in workflow.setup_tasks if st.type == "dynamic_notebook_dispatch"]
+    unresolved_library_configs = [st.config for st in workflow.setup_tasks if st.type == "unresolved_library"]
+    manual_variable_init_configs = [st.config for st in workflow.setup_tasks if st.type == "manual_variable_init"]
     manual_schedule_time_of_day_configs = [
         st.config for st in workflow.setup_tasks if st.type == "manual_schedule_time_of_day"
     ]
-    manual_credential_configs = [
-        st.config for st in workflow.setup_tasks if st.type == "manual_credential"
-    ]
+    manual_credential_configs = [st.config for st in workflow.setup_tasks if st.type == "manual_credential"]
     for inner in workflow.inner_workflows:
-        dynamic_dispatch_configs.extend(
-            st.config for st in inner.setup_tasks if st.type == "dynamic_notebook_dispatch"
-        )
-        unresolved_library_configs.extend(
-            st.config for st in inner.setup_tasks if st.type == "unresolved_library"
-        )
-        manual_variable_init_configs.extend(
-            st.config for st in inner.setup_tasks if st.type == "manual_variable_init"
-        )
+        dynamic_dispatch_configs.extend(st.config for st in inner.setup_tasks if st.type == "dynamic_notebook_dispatch")
+        unresolved_library_configs.extend(st.config for st in inner.setup_tasks if st.type == "unresolved_library")
+        manual_variable_init_configs.extend(st.config for st in inner.setup_tasks if st.type == "manual_variable_init")
         manual_schedule_time_of_day_configs.extend(
             st.config for st in inner.setup_tasks if st.type == "manual_schedule_time_of_day"
         )
-        manual_credential_configs.extend(
-            st.config for st in inner.setup_tasks if st.type == "manual_credential"
-        )
+        manual_credential_configs.extend(st.config for st in inner.setup_tasks if st.type == "manual_credential")
     # LSC3-006: union typed SecretInstructions from the workflow (and
     # inner workflows) with the notebook-scanned scopes so SETUP.md and
     # create_secrets.py reference the same set of (scope, key) pairs.
@@ -502,14 +480,10 @@ def _infer_bundle_cluster_defaults(workflow: PreparedWorkflow) -> tuple[str, str
     # (e.g. ``@if(equals(item()?.photon,true),...)``) don't land as the
     # bundle's default and break ``databricks bundle deploy``.
     spark_versions = [
-        hint["spark_version"]
-        for hint in workflow.cluster_hints
-        if _is_valid_spark_version(hint.get("spark_version"))
+        hint["spark_version"] for hint in workflow.cluster_hints if _is_valid_spark_version(hint.get("spark_version"))
     ]
     node_types = [
-        hint["node_type_id"]
-        for hint in workflow.cluster_hints
-        if _is_valid_node_type_id(hint.get("node_type_id"))
+        hint["node_type_id"] for hint in workflow.cluster_hints if _is_valid_node_type_id(hint.get("node_type_id"))
     ]
 
     spark_version = Counter(spark_versions).most_common(1)[0][0] if spark_versions else _DEFAULT_SPARK_VERSION

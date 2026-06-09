@@ -667,9 +667,7 @@ class TranslationContext:
             variable_cache=self.variable_cache,
             variable_value_cache=self.variable_value_cache,
             variable_types=MappingProxyType({**self.variable_types, **types}),
-            variable_default_literals=MappingProxyType(
-                {**self.variable_default_literals, **(default_literals or {})}
-            ),
+            variable_default_literals=MappingProxyType({**self.variable_default_literals, **(default_literals or {})}),
             global_parameters=self.global_parameters,
             linked_service_parameters=self.linked_service_parameters,
         )

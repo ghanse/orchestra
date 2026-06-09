@@ -414,9 +414,7 @@ def _detect_cross_foreach_variable_reads(activities: list[Activity]) -> list[Set
         if isinstance(activity, ForEachActivity):
             for inner in activity.inner_activities:
                 if isinstance(inner, SetVariableActivity):
-                    var_set_inside_foreach.setdefault(inner.variable_name, []).append(
-                        activity.task_key
-                    )
+                    var_set_inside_foreach.setdefault(inner.variable_name, []).append(activity.task_key)
 
     if not var_set_inside_foreach:
         return []
@@ -429,10 +427,7 @@ def _detect_cross_foreach_variable_reads(activities: list[Activity]) -> list[Set
         if isinstance(activity, SetVariableActivity):
             set_outside.add(activity.variable_name)
 
-    dangerous_vars = {
-        name: parents for name, parents in var_set_inside_foreach.items()
-        if name not in set_outside
-    }
+    dangerous_vars = {name: parents for name, parents in var_set_inside_foreach.items() if name not in set_outside}
     if not dangerous_vars:
         return []
 

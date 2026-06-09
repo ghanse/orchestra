@@ -74,9 +74,7 @@ def collect_inner_job_params(
     _scan_tasks(tasks, param_names, item_field_names=item_field_names, variable_names=variable_names)
 
     if raw_ir_tasks:
-        _scan_ir_tasks(
-            raw_ir_tasks, param_names, item_field_names=item_field_names, variable_names=variable_names
-        )
+        _scan_ir_tasks(raw_ir_tasks, param_names, item_field_names=item_field_names, variable_names=variable_names)
 
     var_task_keys = variable_task_keys or {}
 
