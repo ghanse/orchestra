@@ -48,6 +48,19 @@ The script will:
 2. Create `<plugin_dir>/.venv` if it does not already exist.
 3. Install dependencies listed in `requirements.txt` into that venv using `pip`.
 
+### Step 1b — Databricks serverless / cluster environments
+
+On Databricks serverless compute (Genie Code, notebook serverless, etc.), `ensurepip` is not
+bundled with the system Python. The bootstrap script **automatically handles this** by falling
+back to `python3 -m venv --without-pip` and then bootstrapping pip via `get-pip.py` from
+`https://bootstrap.pypa.io`. No manual intervention is required.
+
+Authentication for workspace downloads is also auto-configured: the runtime's notebook context
+provides host + token, which is written to `~/.databrickscfg` on first use.
+
+> **Note:** `databricks bundle validate` and other interactive CLI commands are **not available**
+> on serverless compute. Use the web terminal or a local machine for bundle deployment steps.
+
 ### Step 2 — Handle a missing Python or pip
 
 If Python, pip, or the `venv` module are **not** available, the script prints a `WARNING:` block

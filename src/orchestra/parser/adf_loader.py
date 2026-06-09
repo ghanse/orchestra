@@ -716,12 +716,38 @@ if __name__ == "__main__":
         default=Path("./orchestra_output/ingest"),
         help="Directory to write inventory.json into.",
     )
+    parser.add_argument(
+        "--pipeline",
+        type=str,
+        default=None,
+        help="Filter to a single pipeline by name. When omitted, all pipelines are included.",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
     definitions = load_adf_definitions(args.source_dir)
     logger.info("Loaded %d pipeline(s) from %s", len(definitions.pipelines), args.source_dir)
+
+    # Filter to a single pipeline when --pipeline is specified
+    if args.pipeline:
+        matched = [p for p in definitions.pipelines if p.name == args.pipeline]
+        if not matched:
+            available = [p.name for p in definitions.pipelines]
+            logger.error(
+                "Pipeline %r not found. Available pipelines: %s",
+                args.pipeline,
+                ", ".join(available) or "(none)",
+            )
+            raise SystemExit(1)
+        definitions = AdfDefinitions(
+            pipelines=matched,
+            datasets=definitions.datasets,
+            linked_services=definitions.linked_services,
+            triggers=definitions.triggers,
+            global_parameters=definitions.global_parameters,
+        )
+        logger.info("Filtered to pipeline: %s", args.pipeline)
 
     inventory = build_inventory(definitions)
 

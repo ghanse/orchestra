@@ -76,6 +76,13 @@ Ask the user for the following (provide defaults):
 
 ### Step 2.5 — Detect workspace artifacts and authenticate
 
+> **Databricks runtime (serverless / cluster):** Authentication is auto-configured
+> from the notebook runtime context. The `workspace_downloader` module detects
+> `DATABRICKS_RUNTIME_VERSION` in the environment and writes `~/.databrickscfg`
+> from `dbruntime.databricks_repl_context` automatically. You can skip the
+> interactive `databricks auth login` step — just pass `--profile DEFAULT` (or
+> omit `--profile` entirely) and notebook vendoring will work.
+
 Before running the bundle writer, check whether the report references
 absolute workspace paths (notebooks under `/Shared/`, SparkPython
 files, SparkJar libraries) or DBFS paths that the bundle should

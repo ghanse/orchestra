@@ -19,6 +19,18 @@ bash scripts/bootstrap.sh   # creates .venv and pip-installs requirements.txt
 PYTHONPATH=src .venv/bin/python -m orchestra.adapter inputs ingest
 ```
 
+### Databricks Serverless / Genie Code Compatibility
+
+All skills and the bootstrap script are designed to run on **Databricks serverless compute**
+(Genie Code, notebook serverless) as well as local machines. Key adaptations:
+
+- **venv:** `bootstrap.sh` falls back to `--without-pip` + `get-pip.py` when `ensurepip`
+  is unavailable (standard on serverless images).
+- **Auth:** `workspace_downloader.py` auto-detects `DATABRICKS_RUNTIME_VERSION` and writes
+  `~/.databrickscfg` from `dbruntime.databricks_repl_context` so the SDK can authenticate.
+- **CLI:** `databricks bundle validate/deploy` is NOT available on serverless — use the web
+  terminal or a local CLI session for those steps.
+
 ## Project Overview
 
 Orchestra is an agent plugin that translates Azure Data Factory (ADF) pipeline definitions into Databricks Lakeflow Jobs via Declarative Automation Bundles (DABs).

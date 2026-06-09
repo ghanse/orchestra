@@ -41,6 +41,19 @@ This creates `<plugin_dir>/.venv` and installs dependencies from `requirements.t
 pip is missing, the script prints a warning telling the user what to install — relay it and stop
 until they have installed Python 3.12+ and pip.
 
+### Databricks serverless / Genie Code environments
+
+When running on Databricks serverless compute, two differences apply automatically:
+
+1. **venv creation:** The bootstrap script falls back to `--without-pip` + `get-pip.py` since
+   `ensurepip` is not bundled. No manual workaround needed.
+2. **Workspace auth:** The `workspace_downloader` module detects the Databricks runtime and
+   auto-configures `~/.databrickscfg` from the notebook context token. Skip the
+   `databricks auth login` interactive step.
+3. **CLI unavailable:** `databricks bundle validate` / `deploy` cannot run on serverless.
+   Present the generated bundle for review and instruct the user to validate/deploy from
+   the web terminal, local CLI, or CI/CD.
+
 Run **every** Python command in this skill with the venv interpreter and `src/` on `PYTHONPATH` 
 (use it anywhere a command below shows `python3`):
 

@@ -12,6 +12,55 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+
+# ---------------------------------------------------------------------------
+# Databricks runtime detection and auto-configuration
+# ---------------------------------------------------------------------------
+
+
+def _is_databricks_runtime() -> bool:
+    """Returns True if running inside a Databricks cluster or serverless compute."""
+    return os.environ.get("DATABRICKS_RUNTIME_VERSION") is not None
+
+
+def _ensure_databricks_runtime_auth() -> bool:
+    """Auto-configures ~/.databrickscfg from the notebook runtime context.
+
+    On Databricks serverless (or classic cluster) compute, no CLI auth is
+    pre-configured but the runtime provides host + token via the REPL context.
+    This function detects that situation and writes a DEFAULT profile so the
+    Databricks SDK can authenticate transparently.
+    """
+    cfg_path = _get_databrickscfg_path()
+    if cfg_path.exists() and cfg_path.stat().st_size > 0:
+        return True
+
+    if os.environ.get("DATABRICKS_HOST") and os.environ.get("DATABRICKS_TOKEN"):
+        return True
+
+    try:
+        from dbruntime.databricks_repl_context import get_context  # type: ignore[import-not-found]
+
+        context = get_context()
+        host = f"https://{context.browserHostName}"
+        token = context.apiToken
+        if not host or not token:
+            logger.warning("Databricks runtime detected but host/token unavailable from context")
+            return False
+
+        cfg_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(cfg_path, "w") as f:
+            f.write(f"[DEFAULT]\nhost = {host}\ntoken = {token}\n")
+        logger.info("Auto-configured Databricks auth from runtime context -> %s", cfg_path)
+        return True
+    except ImportError:
+        logger.warning("dbruntime not available; cannot auto-configure auth")
+        return False
+    except Exception as exc:
+        logger.warning("Failed to auto-configure Databricks runtime auth: %s", exc)
+        return False
+
+
 # ---------------------------------------------------------------------------
 # Module-level state — resolved once per process, reused across calls
 # ---------------------------------------------------------------------------
@@ -26,7 +75,7 @@ _downloads_enabled: bool = False
 
 
 def _get_databrickscfg_path() -> Path:
-    """Return the path to the Databricks CLI config file."""
+    """Returns the path to the Databricks CLI config file."""
     override = os.environ.get("DATABRICKS_CONFIG_FILE")
     if override:
         return Path(override)
@@ -34,7 +83,7 @@ def _get_databrickscfg_path() -> Path:
 
 
 def _list_profiles() -> list[str]:
-    """Parses ``~/.databrickscfg`` and return available profile names.
+    """Parses ``~/.databrickscfg`` and returns available profile names.
 
     Returns:
         Sorted list of profile section names.  Empty list if the file
@@ -95,7 +144,7 @@ def _resolve_profile() -> str | None:
 
 
 def _prompt_for_profile(profiles: list[str]) -> str:
-    """Interactively prompt the user to select a profile.
+    """Interactively prompts the user to select a profile.
 
     Args:
         profiles: Available profile names.
@@ -139,7 +188,7 @@ def _prompt_for_profile(profiles: list[str]) -> str:
 
 
 def set_profile(profile: str | None) -> None:
-    """Explicitly set the profile to use, bypassing auto-resolution.
+    """Explicitly sets the profile to use, bypassing auto-resolution.
 
     Args:
         profile: Profile name, or ``None`` to reset to auto-resolution.
@@ -150,15 +199,16 @@ def set_profile(profile: str | None) -> None:
 
 
 def _get_workspace_client():
-    """Return a ``WorkspaceClient`` configured with the resolved profile.
+    """Returns a ``WorkspaceClient`` configured with the resolved profile.
 
-    Returns:
-        A ``WorkspaceClient`` instance.
-
-    Raises:
-        ImportError: If ``databricks-sdk`` is not installed.
+    On Databricks runtime, auto-configures auth from the notebook context
+    before constructing the client.
     """
     from databricks.sdk import WorkspaceClient  # type: ignore[import-not-found]
+
+    # Ensure auth is available when running on Databricks compute
+    if _is_databricks_runtime():
+        _ensure_databricks_runtime_auth()
 
     profile = _resolve_profile()
     if profile:
@@ -172,7 +222,7 @@ def _get_workspace_client():
 
 
 def download_notebook(workspace_path: str) -> str | None:
-    """Download a notebook from Databricks workspace.
+    """Downloads a notebook from Databricks workspace.
 
     Args:
         workspace_path: Workspace path (e.g., ``"/Shared/orchestra/transform"``).
@@ -195,7 +245,7 @@ def download_notebook(workspace_path: str) -> str | None:
 
 
 def download_dbfs_file(dbfs_path: str) -> bytes | None:
-    """Download a file from DBFS.
+    """Downloads a file from DBFS.
 
     Args:
         dbfs_path: DBFS path (e.g., ``"dbfs:/scripts/process.py"`` or
@@ -223,29 +273,38 @@ def download_dbfs_file(dbfs_path: str) -> bytes | None:
 
 
 def enable_workspace_downloads(enabled: bool = True) -> None:
-    """Globally enable or disable workspace artifact downloads."""
+    """Globally enables or disables workspace artifact downloads."""
     global _downloads_enabled  # noqa: PLW0603
     _downloads_enabled = bool(enabled)
 
 
 def workspace_downloads_enabled() -> bool:
-    """Return True iff preparers should attempt to download workspace artifacts."""
+    """Returns True iff preparers should attempt to download workspace artifacts."""
     return _downloads_enabled
 
 
 def auth_available() -> bool:
-    """Return True iff there is any usable Databricks authentication on this host.
+    """Returns True iff there is any usable Databricks authentication on this host.
 
     A resolvable ``.databrickscfg`` profile, ``DATABRICKS_CONFIG_PROFILE``, or
     the standard ``DATABRICKS_HOST`` + ``DATABRICKS_TOKEN`` env-var pair will
-    all satisfy this check.  This is a pre-flight signal — it does not validate
-    that the credentials actually authorize against any specific workspace.
+    all satisfy this check.  When running inside a Databricks cluster or
+    serverless compute, the runtime context is auto-configured into
+    ``~/.databrickscfg`` on first call.
+
+    This is a pre-flight signal — it does not validate that the credentials
+    actually authorize against any specific workspace.
     """
     if os.environ.get("DATABRICKS_CONFIG_PROFILE"):
         return True
     if os.environ.get("DATABRICKS_HOST") and os.environ.get("DATABRICKS_TOKEN"):
         return True
-    return bool(_list_profiles())
+    if _list_profiles():
+        return True
+    # Last resort: bootstrap auth from the Databricks runtime context
+    if _is_databricks_runtime():
+        return _ensure_databricks_runtime_auth()
+    return False
 
 
 def prompt_for_auth_if_missing(
@@ -253,7 +312,7 @@ def prompt_for_auth_if_missing(
     *,
     interactive: bool | None = None,
 ) -> bool:
-    """Warn the user when auth is missing and confirm how to proceed.
+    """Warns the user when auth is missing and confirms how to proceed.
 
     Args:
         sample_paths: Workspace paths the preparer is about to try to download.

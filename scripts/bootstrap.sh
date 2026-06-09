@@ -8,6 +8,9 @@
 # If python3, pip, or the venv module are unavailable, the script prints a clear
 # warning telling the user what to install and exits non-zero without making changes.
 #
+# On Databricks serverless compute (where ensurepip is unavailable), the script
+# falls back to --without-pip + get-pip.py automatically.
+#
 # After bootstrapping, run the plugin's Python code with the venv interpreter and
 # src/ on PYTHONPATH, e.g.:
 #
@@ -81,7 +84,20 @@ fi
 # Create the virtual environment
 if [ ! -x "$VENV_DIR/bin/python" ]; then
   echo "Creating virtual environment at $VENV_DIR ..."
-  "$PYTHON_BIN" -m venv "$VENV_DIR"
+  if "$PYTHON_BIN" -m venv "$VENV_DIR" 2>/dev/null; then
+    : # standard venv creation succeeded
+  else
+    # Fallback for environments where ensurepip is unavailable (e.g. Databricks
+    # serverless compute).  Create the venv without pip, then bootstrap pip
+    # via get-pip.py.
+    echo "Standard venv failed (ensurepip likely missing); trying --without-pip ..."
+    rm -rf "$VENV_DIR"
+    "$PYTHON_BIN" -m venv --without-pip "$VENV_DIR"
+    echo "Bootstrapping pip via get-pip.py ..."
+    curl -sSL https://bootstrap.pypa.io/get-pip.py -o /tmp/_orchestra_get_pip.py
+    "$VENV_DIR/bin/python" /tmp/_orchestra_get_pip.py --quiet
+    rm -f /tmp/_orchestra_get_pip.py
+  fi
 else
   echo "Using existing virtual environment at $VENV_DIR ..."
 fi
@@ -99,6 +115,36 @@ echo "Upgrading pip ..."
 
 echo "Installing dependencies from requirements.txt ..."
 "$VENV_PYTHON" -m pip install -r "$REQUIREMENTS"
+
+# ---------------------------------------------------------------------------
+# Databricks runtime: pre-configure workspace auth from the notebook context
+# ---------------------------------------------------------------------------
+# The venv Python does NOT have dbruntime (it's a system-only package), so
+# workspace_downloader.py can't auto-configure auth at runtime.  However, the
+# system Python ($PYTHON_BIN) DOES have it.  Extract host + token here once and
+# write ~/.databrickscfg so all subsequent venv invocations find it immediately.
+# ---------------------------------------------------------------------------
+if [ -n "${DATABRICKS_RUNTIME_VERSION:-}" ]; then
+  CFG_PATH="${HOME}/.databrickscfg"
+  if [ -s "$CFG_PATH" ]; then
+    echo "Databricks auth already configured at $CFG_PATH"
+  else
+    echo "Databricks runtime detected; extracting workspace auth ..."
+    "$PYTHON_BIN" -c "
+from dbruntime.databricks_repl_context import get_context
+c = get_context()
+host = 'https://' + c.browserHostName
+token = c.apiToken
+if not host or not token:
+    raise SystemExit('host/token unavailable from runtime context')
+import pathlib
+p = pathlib.Path('$CFG_PATH')
+p.parent.mkdir(parents=True, exist_ok=True)
+p.write_text(f'[DEFAULT]\nhost = {host}\ntoken = {token}\n')
+print(f'  -> {p} written (host={host})')
+" 2>/dev/null && true || echo "  -> skipped (runtime context unavailable)"
+  fi
+fi
 
 cat <<EOF
 
