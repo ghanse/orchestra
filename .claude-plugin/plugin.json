@@ -10,7 +10,7 @@
   "keywords": ["adf", "databricks", "migration", "dabs", "lakeflow", "orchestration", "azure-data-factory"],
   "skills": [
     "./skills/setup",
-    "./skills/ingest",
+    "./skills/profile",
     "./skills/translate",
     "./skills/prepare",
     "./skills/migrate"

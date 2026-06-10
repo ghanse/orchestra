@@ -1,12 +1,12 @@
 """Agent adapter that drives the ask-validate-resume loop.
 
 :class:`TranslationSession` is the entry point an agent uses to
-translate tool-call arguments into validated preferences.  When the IR
-raises questions the agent cannot answer from context alone, the
-session surfaces them as structured :class:`TranslationQuestion`
+translate tool-call arguments into validated configuration.  When the IR
+raises options the agent cannot answer from context alone, the
+session surfaces them as structured :class:`TranslationOption`
 objects (and, via :exc:`TranslationInputRequired`, as exceptions) so
 the agent can route them back to the user.  The pipeline modifier is
-invoked only once every question has an answer.
+invoked only once every option has an answer.
 """
 
 from __future__ import annotations
@@ -24,30 +24,30 @@ from orchestra.adapter.constants import (
     INPUT_OUTPUT_DIR,
     INPUT_SCHEMA,
     INPUT_TRANSLATION_REPORT_PATH,
-    PHASE_INGEST,
     PHASE_PREPARE,
+    PHASE_PROFILE,
     PHASE_TRANSLATE,
 )
 from orchestra.adapter.models import (
-    DEFAULT_PREFERENCES,
+    DEFAULT_CONFIGURATION,
     CopyActivityParadigm,
     LakeflowConnectorType,
     MetadataDrivenAccess,
     MetadataDrivenConsolidate,
     MetadataDrivenLookupTool,
     MetadataDrivenSize,
-    MigrationInputQuestion,
+    MigrationInputOption,
     MotifConsolidate,
     NonDatabricksTaskCompute,
     PendingMigrationInputs,
-    PendingQuestions,
-    TranslationPreferences,
-    TranslationQuestion,
+    PendingOptions,
+    TranslationConfiguration,
+    TranslationOption,
     UseLakeflowConnectors,
 )
 from orchestra.adapter.operations import (
-    apply_preferences,
-    gather_questions,
+    apply_configuration,
+    gather_options,
     validate_answer,
 )
 from orchestra.models.ir import Pipeline
@@ -58,19 +58,18 @@ class TranslationInputRequired(Exception):
     """Raised by :meth:`TranslationSession.run` when answers are still missing.
 
     Attributes:
-        pending: The outstanding questions the agent should route to the
+        pending: The outstanding options the agent should route to the
             user before retrying :meth:`TranslationSession.run`.
     """
 
-    def __init__(self, pending: PendingQuestions) -> None:
-        """Stores the pending questions on the exception.
+    def __init__(self, pending: PendingOptions) -> None:
+        """Stores the pending options on the exception.
 
         Args:
-            pending: Outstanding questions surfaced by the session.
+            pending: Outstanding options surfaced by the session.
         """
         super().__init__(
-            f"{len(pending.questions)} translation question(s) require user input "
-            f"for pipeline {pending.pipeline_name!r}"
+            f"{len(pending.options)} translation option(s) require user input for pipeline {pending.pipeline_name!r}"
         )
         self.pending = pending
 
@@ -81,58 +80,58 @@ class TranslationSession:
 
     A session is single-use: the caller drives it by either polling via
     :meth:`pending` and :meth:`answer`, or calling :meth:`run` and
-    handling :exc:`TranslationInputRequired`.  When every question is
+    handling :exc:`TranslationInputRequired`.  When every option is
     answered, :meth:`run` (or :meth:`resume`) returns the
-    preference-stamped pipeline.
+    configuration-stamped pipeline.
 
     Attributes:
         pipeline: Translated pipeline IR after motif collapsing.
         motifs: Detected motifs for the pipeline.  Optional; only used to
-            decide whether the Lakeflow Connect question applies.
-        defaults: Baseline preferences applied when the caller skips a
-            question.  Per-task overrides on this object are preserved
-            verbatim when :meth:`build_preferences` composes the final
+            decide whether the Lakeflow Connect option applies.
+        defaults: Baseline configuration applied when the caller skips a
+            option.  Per-task overrides on this object are preserved
+            verbatim when :meth:`build_configuration` composes the final
             snapshot.
     """
 
     pipeline: Pipeline
     motifs: list[DetectedMotif] = field(default_factory=list)
-    defaults: TranslationPreferences = DEFAULT_PREFERENCES
+    defaults: TranslationConfiguration = DEFAULT_CONFIGURATION
     _answers: dict[str, str] = field(default_factory=dict)
 
-    def pending(self) -> PendingQuestions:
-        """Returns the questions still awaiting an answer.
+    def pending(self) -> PendingOptions:
+        """Returns the options still awaiting an answer.
 
         Returns:
-            A :class:`PendingQuestions` instance containing only the
-            questions whose preconditions are met by the IR and whose
+            A :class:`PendingOptions` instance containing only the
+            options whose preconditions are met by the IR and whose
             IDs are not yet in the answer set.
         """
-        return gather_questions(
+        return gather_options(
             self.pipeline,
             self.motifs,
             answers=self._answers,
         )
 
-    def answer(self, question_id: str, value: str) -> None:
+    def answer(self, option_id: str, value: str) -> None:
         """Validates and records a single answer.
 
         Args:
-            question_id: Stable question identifier from
-                :class:`TranslationQuestion`.
+            option_id: Stable option identifier from
+                :class:`TranslationOption`.
             value: Caller-supplied answer string.
 
         Raises:
-            ValueError: When *question_id* is unknown or *value* is not
-                in the allowed set for the question.
+            ValueError: When *option_id* is unknown or *value* is not
+                in the allowed set for the option.
         """
-        self._answers[question_id] = validate_answer(question_id, value)
+        self._answers[option_id] = validate_answer(option_id, value)
 
     def answer_many(self, answers: dict[str, str]) -> None:
         """Validates and records multiple answers atomically.
 
         Args:
-            answers: Mapping of question_id to the caller-supplied answer.
+            answers: Mapping of option_id to the caller-supplied answer.
 
         Raises:
             ValueError: When any pair fails validation.  No answers from
@@ -141,30 +140,30 @@ class TranslationSession:
         validated = {qid: validate_answer(qid, value) for qid, value in answers.items()}
         self._answers.update(validated)
 
-    def find_question(self, question_id: str) -> TranslationQuestion | None:
-        """Looks up a pending question by its identifier.
+    def find_option(self, option_id: str) -> TranslationOption | None:
+        """Looks up a pending option by its identifier.
 
         Args:
-            question_id: Stable question identifier.
+            option_id: Stable option identifier.
 
         Returns:
-            The matching :class:`TranslationQuestion` if it is still
+            The matching :class:`TranslationOption` if it is still
             pending, otherwise ``None``.
         """
         return next(
-            (question for question in self.pending().questions if question.question_id == question_id),
+            (option for option in self.pending().options if option.option_id == option_id),
             None,
         )
 
-    def build_preferences(self) -> TranslationPreferences:
-        """Composes the validated preferences snapshot from collected answers.
+    def build_configuration(self) -> TranslationConfiguration:
+        """Composes the validated configuration snapshot from collected answers.
 
         Returns:
-            A :class:`TranslationPreferences` where every answered field
+            A :class:`TranslationConfiguration` where every answered field
             takes the caller-supplied value and every unanswered field
             falls back to the corresponding value on ``defaults``.
         """
-        return TranslationPreferences(
+        return TranslationConfiguration(
             copy_activity_paradigm=CopyActivityParadigm(
                 self._answers.get("copy_activity_paradigm", self.defaults.copy_activity_paradigm)
             ),
@@ -201,50 +200,50 @@ class TranslationSession:
             answer.  Motifs the user did not answer fall back to the
             value carried on ``self.defaults`` (default
             :data:`MotifConsolidate.KEEP`).  The dict is the union of
-            the defaults and any answers whose ``question_id`` starts
+            the defaults and any answers whose ``option_id`` starts
             with ``consolidate_motif:``.
         """
-        from orchestra.adapter.constants import MOTIF_CONSOLIDATE_QUESTION_PREFIX
+        from orchestra.adapter.constants import MOTIF_CONSOLIDATE_OPTION_PREFIX
 
         consolidations: dict[str, MotifConsolidate] = dict(self.defaults.motif_consolidations)
-        for question_id, answer in self._answers.items():
-            if not question_id.startswith(MOTIF_CONSOLIDATE_QUESTION_PREFIX):
+        for option_id, answer in self._answers.items():
+            if not option_id.startswith(MOTIF_CONSOLIDATE_OPTION_PREFIX):
                 continue
-            motif_id = question_id[len(MOTIF_CONSOLIDATE_QUESTION_PREFIX) :]
+            motif_id = option_id[len(MOTIF_CONSOLIDATE_OPTION_PREFIX) :]
             consolidations[motif_id] = MotifConsolidate(answer)
         return consolidations
 
     def resume(self) -> Pipeline:
-        """Returns the preference-stamped pipeline IR.
+        """Returns the configuration-stamped pipeline IR.
 
         Returns:
             A new :class:`Pipeline` produced by applying the composed
-            preferences to ``self.pipeline``.  The input pipeline is not
+            configuration to ``self.pipeline``.  The input pipeline is not
             mutated.
         """
-        return apply_preferences(self.pipeline, self.build_preferences())
+        return apply_configuration(self.pipeline, self.build_configuration())
 
     def run(self) -> Pipeline:
         """Returns the modified pipeline, raising when input is still required.
 
         Returns:
-            The preference-stamped pipeline IR when every applicable
-            question has an answer.
+            The configuration-stamped pipeline IR when every applicable
+            option has an answer.
 
         Raises:
-            TranslationInputRequired: When one or more questions are
+            TranslationInputRequired: When one or more options are
                 still outstanding.  The exception carries the pending
-                questions so the agent can route them to the user.
+                options so the agent can route them to the user.
         """
         pending = self.pending()
-        if pending.questions:
+        if pending.options:
             raise TranslationInputRequired(pending)
         return self.resume()
 
 
-_INGEST_QUESTIONS: tuple[MigrationInputQuestion, ...] = (
-    MigrationInputQuestion(
-        question_id=INPUT_ADF_SOURCE_PATH,
+_PROFILE_OPTIONS: tuple[MigrationInputOption, ...] = (
+    MigrationInputOption(
+        option_id=INPUT_ADF_SOURCE_PATH,
         prompt="Where are the ADF JSON exports?",
         description=(
             "Unity Catalog volume path (``/Volumes/<catalog>/<schema>/<volume>``) "
@@ -252,8 +251,8 @@ _INGEST_QUESTIONS: tuple[MigrationInputQuestion, ...] = (
         ),
         required=True,
     ),
-    MigrationInputQuestion(
-        question_id=INPUT_ADF_RESOURCE_URL,
+    MigrationInputOption(
+        option_id=INPUT_ADF_RESOURCE_URL,
         prompt="ADF resource URL?",
         description=(
             "Azure portal URL of the source Data Factory.  Captured for "
@@ -263,31 +262,31 @@ _INGEST_QUESTIONS: tuple[MigrationInputQuestion, ...] = (
         default="",
         required=False,
     ),
-    MigrationInputQuestion(
-        question_id=INPUT_OUTPUT_DIR,
-        prompt="Where should orchestra write the ingest output?",
-        description="Directory the ingest phase writes ``inventory.json`` and ``ast/`` into.",
-        default="./orchestra_output/ingest",
+    MigrationInputOption(
+        option_id=INPUT_OUTPUT_DIR,
+        prompt="Where should orchestra write the profile output?",
+        description="Directory the profile phase writes ``inventory.json`` and ``ast/`` into.",
+        default="./orchestra_output/profile",
         required=False,
     ),
 )
 
-_TRANSLATE_QUESTIONS: tuple[MigrationInputQuestion, ...] = (
-    MigrationInputQuestion(
-        question_id=INPUT_INVENTORY_PATH,
-        prompt="Path to the inventory.json from the ingest phase?",
-        description="Inventory produced by the ingest phase that the translator consumes.",
-        default="./orchestra_output/ingest/inventory.json",
+_TRANSLATE_OPTIONS: tuple[MigrationInputOption, ...] = (
+    MigrationInputOption(
+        option_id=INPUT_INVENTORY_PATH,
+        prompt="Path to the inventory.json from the profile phase?",
+        description="Inventory produced by the profile phase that the translator consumes.",
+        default="./orchestra_output/profile/inventory.json",
         required=False,
     ),
-    MigrationInputQuestion(
-        question_id=INPUT_ADF_SOURCE_PATH,
+    MigrationInputOption(
+        option_id=INPUT_ADF_SOURCE_PATH,
         prompt="Path to the ADF JSON exports?",
-        description="Same source directory the ingest phase consumed; needed for cross-references.",
+        description="Same source directory the profile phase consumed; needed for cross-references.",
         required=True,
     ),
-    MigrationInputQuestion(
-        question_id=INPUT_OUTPUT_DIR,
+    MigrationInputOption(
+        option_id=INPUT_OUTPUT_DIR,
         prompt="Where should orchestra write the translate output?",
         description="Directory the translate phase writes the report and IR into.",
         default="./orchestra_output/translate",
@@ -295,47 +294,47 @@ _TRANSLATE_QUESTIONS: tuple[MigrationInputQuestion, ...] = (
     ),
 )
 
-_PREPARE_QUESTIONS: tuple[MigrationInputQuestion, ...] = (
-    MigrationInputQuestion(
-        question_id=INPUT_TRANSLATION_REPORT_PATH,
+_PREPARE_OPTIONS: tuple[MigrationInputOption, ...] = (
+    MigrationInputOption(
+        option_id=INPUT_TRANSLATION_REPORT_PATH,
         prompt="Path to the translation report?",
         description=(
-            "Preference-stamped report from `python -m orchestra.adapter modify`, "
-            "or the raw translate-phase report when no preferences were applied."
+            "Configuration-stamped report from `python -m orchestra.adapter modify`, "
+            "or the raw translate-phase report when no configuration were applied."
         ),
         default="./orchestra_output/translate/translation_report.stamped.json",
         required=False,
     ),
-    MigrationInputQuestion(
-        question_id=INPUT_OUTPUT_BUNDLE_PATH,
+    MigrationInputOption(
+        option_id=INPUT_OUTPUT_BUNDLE_PATH,
         prompt="Where should the generated DAB bundle be written?",
         description="Root directory for the emitted Databricks Declarative Automation Bundle.",
         default="./dab_output",
         required=False,
     ),
-    MigrationInputQuestion(
-        question_id=INPUT_CATALOG,
+    MigrationInputOption(
+        option_id=INPUT_CATALOG,
         prompt="Target Unity Catalog catalog?",
         description="Default ``catalog`` bundle variable used by emitted notebooks and pipelines.",
         default="main",
         required=False,
     ),
-    MigrationInputQuestion(
-        question_id=INPUT_SCHEMA,
+    MigrationInputOption(
+        option_id=INPUT_SCHEMA,
         prompt="Target Unity Catalog schema?",
         description="Default ``schema`` bundle variable used by emitted notebooks and pipelines.",
         default="default",
         required=False,
     ),
-    MigrationInputQuestion(
-        question_id=INPUT_BUNDLE_NAME,
+    MigrationInputOption(
+        option_id=INPUT_BUNDLE_NAME,
         prompt="Bundle name override?",
         description="Defaults to the first translated pipeline's resource key when blank.",
         default="",
         required=False,
     ),
-    MigrationInputQuestion(
-        question_id=INPUT_DATABRICKS_PROFILE,
+    MigrationInputOption(
+        option_id=INPUT_DATABRICKS_PROFILE,
         prompt="Databricks CLI profile?",
         description=(
             "Profile used to download workspace-resident notebooks during the "
@@ -347,10 +346,10 @@ _PREPARE_QUESTIONS: tuple[MigrationInputQuestion, ...] = (
     ),
 )
 
-_QUESTIONS_BY_PHASE: dict[str, tuple[MigrationInputQuestion, ...]] = {
-    PHASE_INGEST: _INGEST_QUESTIONS,
-    PHASE_TRANSLATE: _TRANSLATE_QUESTIONS,
-    PHASE_PREPARE: _PREPARE_QUESTIONS,
+_OPTIONS_BY_PHASE: dict[str, tuple[MigrationInputOption, ...]] = {
+    PHASE_PROFILE: _PROFILE_OPTIONS,
+    PHASE_TRANSLATE: _TRANSLATE_OPTIONS,
+    PHASE_PREPARE: _PREPARE_OPTIONS,
 }
 
 
@@ -370,7 +369,7 @@ class MigrationInputSession:
     free-text paths and identifiers rather than enum-backed choices.
 
     Attributes:
-        phase: One of ``"ingest"``, ``"translate"``, ``"prepare"``.
+        phase: One of ``"profile"``, ``"translate"``, ``"prepare"``.
     """
 
     phase: str
@@ -381,70 +380,68 @@ class MigrationInputSession:
 
         Raises:
             UnknownMigrationPhaseError: When *phase* is not registered in
-                :data:`_QUESTIONS_BY_PHASE`.
+                :data:`_OPTIONS_BY_PHASE`.
         """
-        if self.phase not in _QUESTIONS_BY_PHASE:
+        if self.phase not in _OPTIONS_BY_PHASE:
             raise UnknownMigrationPhaseError(
-                f"Unknown migration phase {self.phase!r}; expected one of {sorted(_QUESTIONS_BY_PHASE)}"
+                f"Unknown migration phase {self.phase!r}; expected one of {sorted(_OPTIONS_BY_PHASE)}"
             )
 
     def pending(self) -> PendingMigrationInputs:
-        """Returns the input questions still awaiting an answer.
+        """Returns the input options still awaiting an answer.
 
         Returns:
             A :class:`PendingMigrationInputs` with the unanswered
-            questions for ``self.phase`` in registration order.
+            options for ``self.phase`` in registration order.
         """
-        questions = [
-            question for question in _QUESTIONS_BY_PHASE[self.phase] if question.question_id not in self._answers
-        ]
-        return PendingMigrationInputs(phase=self.phase, questions=questions)
+        options = [option for option in _OPTIONS_BY_PHASE[self.phase] if option.option_id not in self._answers]
+        return PendingMigrationInputs(phase=self.phase, options=options)
 
-    def answer(self, question_id: str, value: str) -> None:
-        """Records an answer to one input question.
+    def answer(self, option_id: str, value: str) -> None:
+        """Records an answer to one input option.
 
         Args:
-            question_id: Stable identifier of the question.
+            option_id: Stable identifier of the option.
             value: Caller-supplied string value.
 
         Raises:
-            ValueError: When *question_id* is not a known input for the
+            ValueError: When *option_id* is not a known input for the
                 session's phase.
         """
-        if not any(question.question_id == question_id for question in _QUESTIONS_BY_PHASE[self.phase]):
-            raise ValueError(f"Unknown input question {question_id!r} for phase {self.phase!r}")
-        self._answers[question_id] = value
+        if not any(option.option_id == option_id for option in _OPTIONS_BY_PHASE[self.phase]):
+            raise ValueError(f"Unknown input option {option_id!r} for phase {self.phase!r}")
+        self._answers[option_id] = value
 
     def answer_many(self, answers: dict[str, str]) -> None:
         """Records multiple input answers atomically.
 
         Args:
-            answers: Mapping of question_id to the caller-supplied value.
+            answers: Mapping of option_id to the caller-supplied value.
 
         Raises:
-            ValueError: When any pair references an unknown question.
+            ValueError: When any pair references an unknown option.
                 No answers are recorded when the call raises.
         """
-        known_ids = {question.question_id for question in _QUESTIONS_BY_PHASE[self.phase]}
+        known_ids = {option.option_id for option in _OPTIONS_BY_PHASE[self.phase]}
         unknown = set(answers) - known_ids
         if unknown:
-            raise ValueError(f"Unknown input questions for phase {self.phase!r}: {sorted(unknown)}")
+            raise ValueError(f"Unknown input options for phase {self.phase!r}: {sorted(unknown)}")
         self._answers.update(answers)
 
     def collected(self) -> dict[str, str]:
-        """Returns the collected answers merged with each question's default.
+        """Returns the collected answers merged with each option's default.
 
         Returns:
-            A dict keyed by question_id covering every question for the
+            A dict keyed by option_id covering every option for the
             phase: caller-supplied answers take precedence; otherwise
-            the question's ``default`` value (which may be the empty
-            string) is used.  Required questions whose answers are
+            the option's ``default`` value (which may be the empty
+            string) is used.  Required options whose answers are
             missing are omitted so the caller can detect them.
         """
         collected: dict[str, str] = {}
-        for question in _QUESTIONS_BY_PHASE[self.phase]:
-            if question.question_id in self._answers:
-                collected[question.question_id] = self._answers[question.question_id]
-            elif question.default is not None:
-                collected[question.question_id] = question.default
+        for option in _OPTIONS_BY_PHASE[self.phase]:
+            if option.option_id in self._answers:
+                collected[option.option_id] = self._answers[option.option_id]
+            elif option.default is not None:
+                collected[option.option_id] = option.default
         return collected

@@ -392,6 +392,7 @@ def parse_activity(data: dict[str, Any]) -> AdfActivity:
         if_true_activities=if_true_activities,
         if_false_activities=if_false_activities,
         activities=child_activities,
+        raw=data,
     )
 
 
@@ -713,7 +714,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=Path("./orchestra_output/ingest"),
+        default=Path("./orchestra_output/profile"),
         help="Directory to write inventory.json into.",
     )
     parser.add_argument(

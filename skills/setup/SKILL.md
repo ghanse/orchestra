@@ -16,7 +16,7 @@ triggers:
 # Create the Python Environment
 
 Create a virtual environment (`.venv`) for the plugin and install its Python dependencies. This 
-is the prerequisite for the `ingest`, `translate`, `prepare`, and `migrate` skills which run Python 
+is the prerequisite for the `profile`, `translate`, `prepare`, and `migrate` skills which run Python 
 from this environment.
 
 ## Context
@@ -86,7 +86,7 @@ on `PYTHONPATH`:
 
 ```bash
 export PYTHONPATH="<plugin_dir>/src"
-"<plugin_dir>/.venv/bin/python" -m orchestra.adapter inputs ingest
+"<plugin_dir>/.venv/bin/python" -m orchestra.adapter inputs profile
 ```
 
 (On Windows the interpreter is `<plugin_dir>\.venv\Scripts\python.exe`.)
@@ -104,4 +104,4 @@ Use `<plugin_dir>/.venv/bin/python` anywhere the other skills show `python3`.
 
 - "Set up the orchestra environment"
 - "Bootstrap orchestra so I can run a migration"
-- "I got a ModuleNotFoundError running ingest — fix the environment"
+- "I got a ModuleNotFoundError running profile — fix the environment"

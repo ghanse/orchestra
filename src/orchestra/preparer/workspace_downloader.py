@@ -401,7 +401,7 @@ def prompt_for_auth_if_missing(
     if paths:
         preview = ", ".join(paths[:3])
         suffix = ", …" if len(paths) > 3 else ""
-        print(f"  Artifacts to vendor: {preview}{suffix}", file=sys.stderr)
+        print(f"  Artifacts to download: {preview}{suffix}", file=sys.stderr)
     print(
         "\nTo authenticate, run one of:\n"
         "  databricks auth login --host https://<your-workspace>.cloud.databricks.com\n"

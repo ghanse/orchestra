@@ -2,7 +2,7 @@
 name: migrate
 description: >
   End-to-end migration of Azure Data Factory pipelines to Databricks Lakeflow Jobs.
-  Orchestrates ingest, translate, and prepare phases in sequence.
+  Orchestrates profile, translate, and prepare phases in sequence.
 triggers:
   - "migrate ADF"
   - "migrate pipelines"
@@ -15,13 +15,13 @@ triggers:
 
 # End-to-End ADF to Databricks Migration
 
-Orchestrate the complete migration of Azure Data Factory pipelines to Databricks Lakeflow Jobs via Declarative Automation Bundles. This skill runs all three phases in sequence: ingest, translate, prepare.
+Orchestrate the complete migration of Azure Data Factory pipelines to Databricks Lakeflow Jobs via Declarative Automation Bundles. This skill runs all three phases in sequence: profile, translate, prepare.
 
 ## Context
 
 This is the top-level orchestration skill. It runs the full migration pipeline:
 
-1. **Ingest** — Parse ADF JSON exports into a typed inventory
+1. **Profile** — Parse ADF JSON exports into a typed inventory
 2. **Translate** — Convert ADF activities to Databricks IR (deterministic + agentic)
 3. **Prepare** — Generate Databricks Declarative Automation Bundles for deployment
 
@@ -68,16 +68,16 @@ Follow these steps in order:
 
 ### Step 0 — Gather phase inputs via the adapter
 
-Before invoking ingest, run the adapter inputs subcommand once per
+Before invoking profile, run the adapter inputs subcommand once per
 phase so the agent surfaces the matching free-text prompts:
 
 ```bash
-python3 -m orchestra.adapter inputs ingest
+python3 -m orchestra.adapter inputs profile
 python3 -m orchestra.adapter inputs translate
 python3 -m orchestra.adapter inputs prepare
 ```
 
-Each response carries the questions for that phase plus their
+Each response carries the options for that phase plus their
 descriptions and defaults.  Collect answers from the user (or accept
 the defaults), persist them to `<output_dir>/<phase>/inputs.json`, and
 thread the values into the downstream CLI calls.
@@ -101,14 +101,14 @@ Example prompt:
 > 2. Where should I write the output? (default: `./orchestra_output/`)
 > 3. What target catalog and schema? (default: `main.default`)
 
-### Step 2 — Phase 1: Ingest
+### Step 2 — Phase 1: Profile
 
-Invoke the `orchestra:ingest` skill with the ADF source path and output directory set to `<output_dir>/ingest/`.
+Invoke the `orchestra:profile` skill with the ADF source path and output directory set to `<output_dir>/profile/`.
 
-Wait for the ingest to complete and present the inventory summary:
+Wait for the profile to complete and present the inventory summary:
 
 ```
-Phase 1: Ingest — Complete
+Phase 1: Profile — Complete
 ==========================
 Pipelines parsed:     12
 Total activities:     47
@@ -122,12 +122,12 @@ Coverage:             95.7%
 
 Ask the user to review the inventory and confirm before continuing:
 
-> The ingest phase found 47 activities across 12 pipelines. 95.7% have a translation path (74.5% deterministic, 21.3% agentic). 2 activities are unsupported and will need manual handling.
+> The profile phase found 47 activities across 12 pipelines. 95.7% have a translation path (74.5% deterministic, 21.3% agentic). 2 activities are unsupported and will need manual handling.
 >
 > Proceed to the translation phase? (yes/no)
 
 If the user says no, explain the options:
-- Re-run ingest with a different source directory
+- Re-run profile with a different source directory
 - Review the `inventory.json` to understand unsupported activities
 - Manually classify activities before proceeding
 
@@ -136,7 +136,7 @@ If the user says yes, proceed to step 4.
 ### Step 4 — Phase 2: Translate
 
 Invoke the `orchestra:translate` skill with:
-- Inventory path: `<output_dir>/ingest/inventory.json`
+- Inventory path: `<output_dir>/profile/inventory.json`
 - ADF source dir: the original ADF source path
 - Output dir: `<output_dir>/translate/`
 
@@ -163,7 +163,7 @@ For failures, suggest:
 - Retry with additional context
 - Skip and add placeholder
 
-### Step 5.1 — Gather just-in-time translation preferences
+### Step 5.1 — Gather just-in-time translation configuration
 
 Drive the loop multi-pass: re-run `inspect --answers <answers.json>`
 after each batch of answers so the adapter can surface chained
@@ -183,15 +183,15 @@ Pass `--lookup-values` to the modify call when the file exists.
 #### Legacy flow details
 
 Before bundle generation, run the adapter inspect CLI on the translation
-report to surface any pipeline-modifier questions the IR raises:
+report to surface any pipeline-modifier options the IR raises:
 
 ```bash
 python3 -m orchestra.adapter inspect <output_dir>/translate/translation_report.json
 ```
 
-For each question in the JSON output, prompt the user with the rationale,
+For each option in the JSON output, prompt the user with the rationale,
 options, and the affected task keys.  Collect answers into
-`<output_dir>/translate/answers.json` keyed by `question_id`, then apply
+`<output_dir>/translate/answers.json` keyed by `option_id`, then apply
 them to a stamped report:
 
 ```bash
@@ -202,12 +202,12 @@ python3 -m orchestra.adapter modify \
 ```
 
 Use the stamped report (when produced) as the input to the prepare phase.
-When inspect emits no questions for any pipeline, skip modify and use the
+When inspect emits no options for any pipeline, skip modify and use the
 original report.
 
-The questions the adapter raises:
+The options the adapter raises:
 
-| `question_id` | Allowed values | Default |
+| `option_id` | Allowed values | Default |
 |---|---|---|
 | `copy_activity_paradigm` | `notebook`, `sdp` | `notebook` |
 | `non_databricks_task_compute` | `serverless`, `classic` | `serverless` |
@@ -219,7 +219,7 @@ their source linked service.
 
 For each multi-activity motif the detector matches (rest_api_pagination,
 incremental_load_watermark, metadata_driven_bulk_copy, ...) the adapter emits one
-`consolidate_motif:<motif_id>` question. The user must explicitly opt in to `consolidate` 
+`consolidate_motif:<motif_id>` option. The user must explicitly opt in to `consolidate` 
 for each detected pattern.
 
 ### Step 6 — Checkpoint: confirm proceed to bundle generation
@@ -236,7 +236,7 @@ for each detected pattern.
 
 Before invoking the prepare phase, run the adapter's
 `workspace-paths` subcommand to detect any absolute workspace paths
-the bundle would need to vendor:
+the bundle would need to download:
 
 ```bash
 python3 -m orchestra.adapter workspace-paths \
@@ -252,7 +252,7 @@ When the response carries `needs_auth: true`:
 2. Run `databricks auth login --host <host>` interactively to set up
    a local profile.
 3. Pass `--profile <name>` to the prepare invocation in Step 7 so
-   orchestra downloads the referenced notebooks and vendors them under
+   orchestra downloads the referenced notebooks and downloads them under
    `bundle/src/notebooks/` with the task references rewritten to the
    relative `../src/notebooks/...` paths.
 
@@ -332,6 +332,6 @@ All artifacts from all three phases are produced under the output directory:
 
 | Directory | Phase | Contents |
 |---|---|---|
-| `ingest/` | Ingest | `inventory.json`, `ast/`, `parse_errors.json` |
+| `profile/` | Profile | `inventory.json`, `ast/`, `parse_errors.json` |
 | `translate/` | Translate | `translation_report.json`, `ir/`, `notebooks/`, `agentic_results/` |
 | `dab_output/` | Prepare | `databricks.yml`, `resources/`, `src/`, `setup/`, `tests/` |

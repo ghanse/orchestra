@@ -212,9 +212,13 @@ def _prepare_placeholder(activity: Activity) -> PreparedActivity:
     """Returns a PreparedActivity with a stub notebook for an unsupported activity."""
     task = build_common_task_fields(activity)
 
+    agentic_skill: str | None = None
+    raw_definition: dict[str, Any] | None = None
     if isinstance(activity, PlaceholderActivity):
         comment = activity.comment or "This activity requires manual implementation."
         original_type = activity.original_type
+        agentic_skill = activity.agentic_skill
+        raw_definition = activity.raw_definition
     elif isinstance(activity, UnsupportedActivity):
         comment = activity.reason or "This activity type is not supported."
         original_type = activity.original_type
@@ -225,6 +229,22 @@ def _prepare_placeholder(activity: Activity) -> PreparedActivity:
     notebook_name = f"{activity.task_key}.py"
     notebook_path = f"notebooks/{notebook_name}"
 
+    # When the activity is an agentic gap (e.g. Until), embed its full ADF/ARM
+    # JSON so the agentic handler can translate it directly from source.
+    arm_block = ""
+    if raw_definition is not None:
+        import json as _json
+
+        skill_hint = f" using `{agentic_skill}`" if agentic_skill else ""
+        arm_lines = _json.dumps(raw_definition, indent=2).splitlines()
+        arm_block = (
+            "# MAGIC\n"
+            f"# MAGIC An agent should translate this activity{skill_hint} from the ADF/ARM JSON below,\n"
+            "# MAGIC then replace the `raise NotImplementedError` cell with the generated code.\n"
+            "# MAGIC\n"
+            "# MAGIC ```json\n" + "".join(f"# MAGIC {line}\n" for line in arm_lines) + "# MAGIC ```\n"
+        )
+
     content = (
         "# Databricks notebook source\n"
         "# MAGIC %md\n"
@@ -232,9 +252,8 @@ def _prepare_placeholder(activity: Activity) -> PreparedActivity:
         "# MAGIC\n"
         f"# MAGIC Original ADF activity type: **{original_type}**\n"
         "# MAGIC\n"
-        f"# MAGIC {comment}\n"
-        "\n# COMMAND ----------\n\n"
-        f"raise NotImplementedError(\"Activity '{activity.name}' ({original_type}) requires manual implementation.\")\n"
+        f"# MAGIC {comment}\n" + arm_block + "\n# COMMAND ----------\n\n"
+        f"raise NotImplementedError(\"Activity '{activity.name}' ({original_type}) needs agentic translation.\")\n"
     )
 
     task["notebook_task"] = {
@@ -382,6 +401,7 @@ def prepare_workflow(pipeline: Pipeline) -> PreparedWorkflow:
     return PreparedWorkflow(
         name=pipeline.name,
         tasks=all_tasks,
+        parameters=list(pipeline.parameters or []),
         notebooks=list(artifacts.notebooks),
         secrets=unique_secrets,
         setup_tasks=setup_tasks_out,

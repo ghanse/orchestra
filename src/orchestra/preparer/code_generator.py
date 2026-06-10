@@ -361,12 +361,18 @@ def generate_web_activity_notebook(
             """)
 
     body_block = ""
+    extra_imports: list[str] = []
     request_call = ""
     if activity.method in ("POST", "PUT", "PATCH"):
         raw_body = activity.body
-        # If the body was pre-resolved to Python code by the translator
-        # (contains function calls like __import__ or json.loads), embed directly.
-        if isinstance(raw_body, str) and ("__import__" in raw_body or "json.loads" in raw_body):
+        # Prefer the body the translator pre-resolved to Python code while the
+        # real TranslationContext was available (lowers @concat / @variables /
+        # @{...} that an empty context here could not resolve).
+        if activity.body_code is not None:
+            extra_imports = list(activity.body_imports)
+            body_block = f"body = {activity.body_code}\n"
+        # Legacy: top-level Expression bodies stored directly on ``body``.
+        elif isinstance(raw_body, str) and ("__import__" in raw_body or "json.loads" in raw_body):
             body_block = f"body = {raw_body}\n"
         else:
             body_str = _resolve_body(raw_body)
@@ -409,9 +415,13 @@ def generate_web_activity_notebook(
     else:
         method_line = f'method = dbutils.widgets.get("method") or "{activity.method}"'
 
-    body = textwrap.dedent(f"""\
+    body = textwrap.dedent("""\
         import json
         import requests
+    """)
+    for imp in dict.fromkeys(extra_imports):
+        body += f"{imp}\n"
+    body += textwrap.dedent(f"""\
 
         # Parameters
         {url_line}

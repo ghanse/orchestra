@@ -2,7 +2,7 @@
 
 This package draws a deliberate line between two roles:
 
-* **Agent adapter** -- :mod:`orchestra.adapter.session` plus the question
+* **Agent adapter** -- :mod:`orchestra.adapter.session` plus the option
   shapes in :mod:`orchestra.adapter.models`.  This is the layer an agent
   calls.  It converts tool-call arguments into deterministic service calls
   and maps "need more input" signals into structured objects (and the
@@ -11,7 +11,7 @@ This package draws a deliberate line between two roles:
 
 * **Pipeline modifier** -- :mod:`orchestra.adapter.operations`.  The
   deterministic transformation that consumes a validated
-  :class:`TranslationPreferences` snapshot and stamps concrete decisions
+  :class:`TranslationConfiguration` snapshot and stamps concrete decisions
   onto a Pipeline IR.  It has no awareness of agents or user prompts and
   is safely importable from non-agent contexts (CLI, tests, batch jobs).
 
@@ -20,9 +20,9 @@ and session helpers:
 
 * :mod:`~orchestra.adapter.models` -- StrEnums and dataclasses.
 * :mod:`~orchestra.adapter.operations` -- Free functions
-  (``gather_questions``, ``apply_preferences``, ``validate_answer``,
+  (``gather_options``, ``apply_configuration``, ``validate_answer``,
   ``allowed_values_for``).
-* :mod:`~orchestra.adapter.constants` -- Question IDs, compute-mode
+* :mod:`~orchestra.adapter.constants` -- Option IDs, compute-mode
   strings, replacement names, and other shared constants.
 * :mod:`~orchestra.adapter.predicates` -- Pure IR predicates used by
   both ``operations`` and the bundler.
@@ -32,30 +32,30 @@ and session helpers:
 from __future__ import annotations
 
 from orchestra.adapter.models import (
-    DEFAULT_PREFERENCES,
+    DEFAULT_CONFIGURATION,
     CopyActivityParadigm,
     LakeflowConnectorType,
     MetadataDrivenAccess,
     MetadataDrivenConsolidate,
     MetadataDrivenLookupTool,
     MetadataDrivenSize,
-    MigrationInputQuestion,
+    MigrationInputOption,
     MotifConsolidate,
     NonDatabricksTaskCompute,
+    OptionChoice,
     PendingMigrationInputs,
-    PendingQuestions,
-    QuestionOption,
-    TranslationPreferences,
-    TranslationQuestion,
+    PendingOptions,
+    TranslationConfiguration,
+    TranslationOption,
     UseLakeflowConnectors,
 )
 from orchestra.adapter.operations import (
     allowed_values_for,
-    apply_preferences,
+    apply_configuration,
     collect_workspace_artifact_paths,
     detect_databricks_hosts,
     enum_for,
-    gather_questions,
+    gather_options,
     validate_answer,
 )
 from orchestra.adapter.session import (
@@ -66,31 +66,31 @@ from orchestra.adapter.session import (
 )
 
 __all__ = [
-    "DEFAULT_PREFERENCES",
+    "DEFAULT_CONFIGURATION",
     "CopyActivityParadigm",
     "LakeflowConnectorType",
     "MetadataDrivenAccess",
     "MetadataDrivenConsolidate",
     "MetadataDrivenLookupTool",
     "MetadataDrivenSize",
-    "MigrationInputQuestion",
+    "MigrationInputOption",
     "MigrationInputSession",
     "MotifConsolidate",
     "NonDatabricksTaskCompute",
     "PendingMigrationInputs",
-    "PendingQuestions",
-    "QuestionOption",
+    "PendingOptions",
+    "OptionChoice",
     "TranslationInputRequired",
-    "TranslationPreferences",
-    "TranslationQuestion",
+    "TranslationConfiguration",
+    "TranslationOption",
     "TranslationSession",
     "UnknownMigrationPhaseError",
     "UseLakeflowConnectors",
     "allowed_values_for",
-    "apply_preferences",
+    "apply_configuration",
     "collect_workspace_artifact_paths",
     "detect_databricks_hosts",
     "enum_for",
-    "gather_questions",
+    "gather_options",
     "validate_answer",
 ]

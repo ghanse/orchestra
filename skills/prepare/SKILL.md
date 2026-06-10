@@ -81,7 +81,7 @@ Ask the user for the following (provide defaults):
 > `DATABRICKS_RUNTIME_VERSION` in the environment and writes `~/.databrickscfg`
 > from `dbruntime.databricks_repl_context` automatically. You can skip the
 > interactive `databricks auth login` step — just pass `--profile DEFAULT` (or
-> omit `--profile` entirely) and notebook vendoring will work.
+> omit `--profile` entirely) and notebook downloading will work.
 
 Before running the bundle writer, check whether the report references
 absolute workspace paths (notebooks under `/Shared/`, SparkPython
@@ -106,7 +106,7 @@ The command emits:
 
 When `needs_auth` is `true`:
 
-1. Surface the suggested hosts to the user with `AskUserQuestion`.  Use
+1. Surface the suggested hosts to the user with `AskUserOption`.  Use
    the first `suggested_hosts` value as the default; allow the user to
    override.  When no host is suggested (no Databricks linked service
    in the export), prompt for the host with no default.
@@ -126,7 +126,7 @@ When `needs_auth` is `true`:
    1–2 and omit `--profile` from step 3.
 
 The `paths` list is informational; you can echo it to the user so they
-know which notebooks the bundle will vendor.
+know which notebooks the bundle will download.
 
 ### Step 3 — Run bundle generation
 
@@ -140,7 +140,7 @@ python3 <plugin_dir>/src/orchestra/bundler/dab_writer.py \
   --schema <schema> \
   --bundle-name <bundle_name> \
   [--profile <databricks-cli-profile>] \
-  [--no-vendor-workspace-files]
+  [--no-download-workspace-files]
 ```
 
 Where:
@@ -148,14 +148,14 @@ Where:
 - `<translation_report_path>` is the path to `translation_report.json`
 - Other parameters are from step 2
 
-**Workspace artifact vendoring (default: enabled).** When the report references workspace-resident notebooks (`/Shared/...`), DBFS Spark JARs (`dbfs:/...`), or Spark Python files, the preparer downloads them via the Databricks CLI auth so the resulting bundle is self-contained and deployable across environments. Downloaded notebooks are vendored under `src/notebooks/` and bound to the default `job_cluster` (since they may rely on classic-compute features). The original `notebook_path` in the resource YAML is rewritten to the bundle-relative path `../src/notebooks/<file>.py`.
+**Workspace artifact downloading (default: enabled).** When the report references workspace-resident notebooks (`/Shared/...`), DBFS Spark JARs (`dbfs:/...`), or Spark Python files, the preparer downloads them via the Databricks CLI auth so the resulting bundle is self-contained and deployable across environments. Downloaded notebooks are downloaded under `src/notebooks/` and bound to the default `job_cluster` (since they may rely on classic-compute features). The original `notebook_path` in the resource YAML is rewritten to the bundle-relative path `../src/notebooks/<file>.py`.
 
 If no Databricks CLI auth is detected on the host (`~/.databrickscfg` empty AND no `DATABRICKS_CONFIG_PROFILE` / `DATABRICKS_HOST`+`DATABRICKS_TOKEN` env vars), the CLI prints the workspace paths it was about to download and prompts:
 
 ```
 Workspace downloads are enabled but no Databricks CLI auth was found.
   Looked for profiles in: /Users/<you>/.databrickscfg
-  Artifacts to vendor: /Shared/ETL/transform, …
+  Artifacts to download: /Shared/ETL/transform, …
 
 To authenticate, run one of:
   databricks auth login --host https://<your-workspace>.cloud.databricks.com
@@ -166,7 +166,7 @@ Continue with placeholders (downloads will be skipped)? [y/N]:
 
 Answering `n` aborts with exit code 2 so the user can authenticate and re-run. Answering `y` continues with placeholder notebooks (legacy in-place workspace paths). In non-interactive sessions the prompt defaults to placeholders.
 
-Use `--no-vendor-workspace-files` to opt out entirely; the bundle then keeps original workspace paths exactly as in the IR.
+Use `--no-download-workspace-files` to opt out entirely; the bundle then keeps original workspace paths exactly as in the IR.
 
 ### Step 4 — Present the generated file tree
 

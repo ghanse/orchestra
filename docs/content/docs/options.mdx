@@ -6,7 +6,7 @@ description: Control orchestra's translation behavior and outputs
 import { Callout } from 'fumadocs-ui/components/callout';
 
 Orchestra defers some architectural choices to allow users to specify properties of the output jobs. When options are available for controlling
-translation, the agent session prompts the user for their preferences.
+translation, the agent session prompts the user for their configuration.
 
 ## copy_activity_paradigm
 
@@ -53,7 +53,7 @@ must use a [query-based connector](https://docs.databricks.com/aws/en/ingestion/
 
 For every multi-activity motif the detector matches in a pipeline (`incremental_load_watermark`,
 `rest_api_pagination`, `metadata_driven_bulk_copy`, ...), orchestra raises a per-motif
-question with id `consolidate_motif:<motif_id>` so each detected pattern can be approved
+option with id `consolidate_motif:<motif_id>` so each detected pattern can be approved
 or rejected independently.
 
 | Value         | Default | Behavior                                                                                                                                 |

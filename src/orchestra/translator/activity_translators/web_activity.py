@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from orchestra.models.adf_ast import AdfActivity, AdfDefinitions
 from orchestra.models.ir import Activity, TranslationContext
 from orchestra.models.ir import WebActivity as WebActivityIR
-from orchestra.parser.expression_parser import resolve_expression
+from orchestra.parser.expression_parser import (
+    resolve_expression,
+    resolve_interpolated_string_for_notebook,
+)
 from orchestra.translator.activity_translators.resolve import resolve_dict_values, resolve_field
 
 
@@ -33,7 +37,8 @@ def translate(
     url = resolve_field(type_properties.get("url", ""), context)
     method = type_properties.get("method", "GET")
     headers = resolve_dict_values(type_properties.get("headers"), context) or None
-    body = _resolve_body(type_properties.get("body"), context)
+    body = type_properties.get("body")
+    body_code, body_imports, body_required = _resolve_body_to_code(body, context)
     authentication = type_properties.get("authentication")
     disable_cert_validation = type_properties.get("disableCertValidation", False)
     http_request_timeout = type_properties.get("httpRequestTimeout")
@@ -51,31 +56,85 @@ def translate(
         authentication=authentication,
         disable_cert_validation=disable_cert_validation,
         http_request_timeout_seconds=timeout_seconds,
+        body_code=body_code,
+        body_imports=body_imports,
+        body_required_parameters=body_required,
     )
 
 
-def _resolve_body(body: Any, context: TranslationContext) -> Any:
-    """Pre-resolve ADF expressions in the request body at translate time.
+def _py_literal(value: Any) -> str:
+    """Renders a resolved literal as a Python expression."""
+    if isinstance(value, str):
+        return json.dumps(value)
+    if isinstance(value, bool) or value is None:
+        return repr(value)
+    return json.dumps(value)
 
-    Args:
-        body: Raw body from the ADF typeProperties.
-        context: Current translation context with variable caches.
 
-    Returns:
-        Resolved body — either a Python code string (for notebook_code),
-        the original body dict, or ``None``.
+def _value_to_code(value: Any, context: TranslationContext) -> tuple[str | None, list[str], dict[str, str]]:
+    """Lowers a single body value to a Python expression string.
+
+    Returns ``(code, imports, required_parameters)`` where ``code`` is
+    ``None`` when the value is a plain literal the code generator can render
+    directly (no ``@``-expression present).
+    """
+    if isinstance(value, str):
+        if "@{" in value:
+            resolved = resolve_interpolated_string_for_notebook(value, context)
+            return f"f{json.dumps(resolved)}", [], {}
+        if value.startswith("@"):
+            result = resolve_expression(value, context)
+            if result is None:
+                return None, [], {}
+            if result.kind == "notebook_code":
+                return result.value, list(result.imports), dict(result.required_parameters)
+            if result.kind == "dab_ref":
+                # A bare variable / pipeline ref must be read from a widget at
+                # runtime; bind the DAB ref into base_parameters via the
+                # returned required_parameters mapping.
+                widget = result.value.strip("{}").split(".")[-1]
+                return f"dbutils.widgets.get({json.dumps(widget)})", [], {widget: result.value}
+            return _py_literal(result.value), [], dict(result.required_parameters)
+        return None, [], {}
+    if isinstance(value, dict):
+        if value.get("type") == "Expression" and "value" in value:
+            return _value_to_code(value["value"], context)
+        # Nested dict body (e.g. {"text": {"value": "@concat(...)"}}).
+        parts: list[str] = []
+        imports: list[str] = []
+        required: dict[str, str] = {}
+        any_code = False
+        for key, inner in value.items():
+            code, imps, req = _value_to_code(inner, context)
+            if code is None:
+                parts.append(f"{json.dumps(key)}: {_py_literal(inner)}")
+            else:
+                any_code = True
+                parts.append(f"{json.dumps(key)}: {code}")
+                imports.extend(imps)
+                required.update(req)
+        if not any_code:
+            return None, [], {}
+        return "{" + ", ".join(parts) + "}", imports, required
+    return None, [], {}
+
+
+def _resolve_body_to_code(body: Any, context: TranslationContext) -> tuple[str | None, list[str], dict[str, str]]:
+    """Pre-resolves an ADF request body to Python code at translate time.
+
+    ADF web-activity bodies frequently embed ``@concat`` / ``@variables`` /
+    ``@{...}`` expressions, either at the top level or nested inside a dict
+    (``{"text": {"value": "@concat(...)"}}``).  Resolving them here -- while
+    the real :class:`TranslationContext` (and its variable cache) is
+    available -- lets the code generator emit parsed Python instead of the
+    raw ADF token.
+
+    Returns ``(body_code, imports, required_parameters)``.  ``body_code`` is
+    ``None`` for a plain-literal body (the generator renders it directly).
     """
     if body is None:
-        return None
-
-    if isinstance(body, dict) and body.get("type") == "Expression" and "value" in body:
-        result = resolve_expression(body, context)
-        if result is not None and result.kind == "notebook_code":
-            return result.value
-        if result is not None and result.kind == "literal":
-            return result.value
-
-    return body
+        return None, [], {}
+    return _value_to_code(body, context)
 
 
 def _parse_timeout_to_seconds(timeout_str: str) -> int | None:

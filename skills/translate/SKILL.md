@@ -18,7 +18,7 @@ Convert the parsed ADF inventory into Databricks intermediate representation (IR
 
 ## Context
 
-This is phase 2 of the orchestra migration workflow. It consumes the `inventory.json` produced by the `ingest` skill and produces a `translation_report.json` that the `prepare` skill uses to generate Databricks Declarative Automation Bundles.
+This is phase 2 of the orchestra migration workflow. It consumes the `inventory.json` produced by the `profile` skill and produces a `translation_report.json` that the `prepare` skill uses to generate Databricks Declarative Automation Bundles.
 
 The translation follows a **deterministic-first** strategy:
 1. Activities with known, well-defined mappings are translated by built-in Python translators
@@ -53,7 +53,7 @@ Follow these steps in order:
 ### Step 0 — Gather phase inputs
 
 Run the adapter inputs subcommand so the agent surfaces the free-text
-questions the phase needs (inventory path, ADF source dir, output
+options the phase needs (inventory path, ADF source dir, output
 directory):
 
 ```bash
@@ -67,9 +67,9 @@ phases can read the same values.
 
 ### Step 1 — Locate the inventory
 
-Read `inventory.json` from the ingest phase. If the path is not already in conversation context, ask the user:
+Read `inventory.json` from the profile phase. If the path is not already in conversation context, ask the user:
 
-> Where is the inventory.json from the ingest phase? (default: `./orchestra_output/ingest/inventory.json`)
+> Where is the inventory.json from the profile phase? (default: `./orchestra_output/profile/inventory.json`)
 
 Validate the file exists and is well-formed.
 
@@ -86,9 +86,9 @@ python3 <plugin_dir>/src/orchestra/translator/engine.py \
 
 Where:
 - `<plugin_dir>` is the root of the orchestra plugin
-- `<adf_source_dir>` is the original ADF JSON directory (from the ingest phase)
+- `<adf_source_dir>` is the original ADF JSON directory (from the profile phase)
 - `<output_dir>` is the translation output path (default: `./orchestra_output/translate/`)
-- `<pipeline_name>` (optional) — when provided, translates only the named pipeline. **Always pass `--pipeline` when the user has specified a specific pipeline to migrate**, matching the value passed to the ingest phase.
+- `<pipeline_name>` (optional) — when provided, translates only the named pipeline. **Always pass `--pipeline` when the user has specified a specific pipeline to migrate**, matching the value passed to the profile phase.
 
 This produces:
 - `<pipeline_name>.json` — the pipeline IR (one file per translated pipeline)
@@ -138,7 +138,16 @@ Read `translation_report.json`. It has this structure:
 
 ### Step 4 — Handle agentic gaps
 
-For each translation with `"status": "pending"` and `"strategy": "agentic"`, invoke the appropriate skill from the `adf-to-databricks-plugin`. Route by activity type:
+For each translation with `"status": "pending"` and `"strategy": "agentic"`, invoke the appropriate skill from the `adf-to-databricks-plugin`. Route by activity type.
+
+Every agentic gap in the translation report carries the activity's **full ADF/ARM JSON** under `raw_activity_json` (engine field `raw_definition`), and the generated placeholder notebook embeds the same JSON in a fenced `json` block. This holds for nested activities too — an `Until` inside an `IfCondition` / `Switch` / `ForEach` is reported as its own gap. Always translate from this ARM JSON.
+
+**Until activities (agent-based handler):**
+Databricks Lakeflow Jobs have no native repeat-until loop, so translate the `Until` from its ARM JSON into a single Python notebook task implementing a bounded polling loop. From the embedded JSON, read:
+- `typeProperties.expression` — the ADF exit condition (e.g. `@or(equals(variables('jobStatus'),'succeeded'), equals(variables('jobStatus'),'failed'))`); convert it into the Python `while not (<condition>):` guard.
+- `typeProperties.timeout` — wrap the loop in a wall-clock deadline (`time.monotonic()`), raising on timeout.
+- `typeProperties.activities` — the loop body (e.g. a `Wait`, a polling `WebActivity`, a `SetVariable` that captures the next status); translate each child inline so the whole loop runs in one notebook.
+Read the loop variables from `dbutils.widgets`, surface the final state as a task value, and write the result over the placeholder notebook's `raise NotImplementedError` cell. If the external `adf-to-databricks:adf-pipeline-converter` skill is installed you may delegate to it with the same ARM JSON; otherwise perform the translation directly.
 
 **ExecuteDataFlow activities:**
 Invoke `adf-to-databricks:adf-dataflow-converter` with the raw activity JSON and associated data flow definition. Provide context:
@@ -191,10 +200,10 @@ python3 <plugin_dir>/src/orchestra/translator/engine.py \
 
 This updates `translation_report.json` with the agentic results merged in, changing their status from `pending` to `translated` (or `failed` if the agentic skill could not produce a result).
 
-### Step 6.1 — Gather just-in-time translation preferences
+### Step 6.1 — Gather just-in-time translation configuration
 
-The adapter raises several preference questions plus a chained set for
-metadata-driven motifs. Every time the user answers a question whose value 
+The adapter raises several configuration options plus a chained set for
+metadata-driven motifs. Every time the user answers a option whose value 
 gates further prompts, re-run `inspect --answers <answers.json>` to surface 
 the next batch.
 
@@ -223,7 +232,7 @@ When no metadata-driven motif is consolidated, `--lookup-values` is omitted.
 
 #### Legacy flow details
 
-Before writing the final report, surface any pipeline-modifier questions the
+Before writing the final report, surface any pipeline-modifier options the
 IR raises (Copy Data paradigm, non-Databricks task compute, Lakeflow Connect
 opt-in, Databricks task compute). Use the adapter CLI bridge:
 
@@ -238,9 +247,9 @@ The command emits JSON:
   "pipelines": [
     {
       "pipeline_name": "ETL_Main",
-      "questions": [
+      "options": [
         {
-          "question_id": "copy_activity_paradigm",
+          "option_id": "copy_activity_paradigm",
           "prompt": "How should Copy Data activities targeting Delta be implemented?",
           "rationale": "...",
           "options": [{"value": "notebook", "label": "...", "description": "..."}, ...],
@@ -254,7 +263,7 @@ The command emits JSON:
 }
 ```
 
-For each question, prompt the user with the rationale, options, and the
+For each option, prompt the user with the rationale, options, and the
 task keys it affects. Use the default when the user defers. Collect the
 answers into a JSON file (`<output_dir>/answers.json`) shaped like:
 
@@ -276,7 +285,7 @@ python3 -m orchestra.adapter modify \
 ```
 
 The prepare phase (next skill) must be pointed at the stamped report.
-When no questions are raised, the inspect output is `{"pipelines": [{"pipeline_name": "...", "questions": []},...]}` — skip the modify step and pass the original report straight through.
+When no options are raised, the inspect output is `{"pipelines": [{"pipeline_name": "...", "options": []},...]}` — skip the modify step and pass the original report straight through.
 
 ### Step 7 — Present translation summary
 
@@ -316,7 +325,7 @@ See `references/activity-mapping.md` for the complete mapping between ADF activi
 
 - "Translate the ADF pipelines"
 - "Convert ADF to Databricks"
-- "Run the translation on the inventory from the ingest step"
+- "Run the translation on the inventory from the profile step"
 - "Translate the parsed pipelines using deterministic + agentic"
 - "Translate only the pl_demo_01 pipeline"
 

@@ -10,13 +10,13 @@ make fmt          # Format + lint (ruff + mypy)
 make clean        # Remove build artifacts
 ```
 
-To run the **plugin skills** (ingest/translate/prepare/migrate) without a uv-based dev setup,
+To run the **plugin skills** (profile/translate/prepare/migrate) without a uv-based dev setup,
 bootstrap a self-contained virtual environment with pip via the `setup` skill or directly:
 
 ```bash
 bash scripts/bootstrap.sh   # creates .venv and pip-installs requirements.txt
 # then run plugin code with src/ on PYTHONPATH:
-PYTHONPATH=src .venv/bin/python -m orchestra.adapter inputs ingest
+PYTHONPATH=src .venv/bin/python -m orchestra.adapter inputs profile
 ```
 
 ### Databricks Serverless / Genie Code Compatibility
@@ -44,7 +44,7 @@ ADF JSON -> Parse (AST) -> Classify (Inventory) -> Translate (IR) -> Prepare (Ta
 ## Architecture
 
 ### Three-Phase Pipeline
-1. **Ingest** -- Parse ADF JSON from UC volumes -> typed AST -> inventory.json
+1. **Profile** -- Parse ADF JSON from UC volumes -> typed AST -> inventory.json
 2. **Translate** -- Registry dispatch + topological sort -> Pipeline IR (deterministic + agentic gaps)
 3. **Prepare** -- IR -> DAB YAML + generated notebooks + setup scripts
 

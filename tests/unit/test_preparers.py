@@ -138,9 +138,9 @@ class TestNotebookPreparer:
         # No placeholder for an absolute workspace path.
         assert prepared.notebooks == []
 
-    def test_prepare_notebook_vendors_downloaded_workspace_notebook(self, monkeypatch):
+    def test_prepare_notebook_downloads_downloaded_workspace_notebook(self, monkeypatch):
         """When downloads are enabled and the SDK returns content, the workspace notebook
-        is vendored into src/notebooks/ under the workspace basename, and the task is
+        is downloaded into src/notebooks/ under the workspace basename, and the task is
         bound to the default cluster."""
         monkeypatch.setattr(workspace_downloader, "_downloads_enabled", True)
         monkeypatch.setattr(
@@ -160,7 +160,7 @@ class TestNotebookPreparer:
         # skips ../src/ paths because orchestra-generated notebooks are
         # serverless-only; downloaded notebooks need classic compute).
         assert prepared.task["job_cluster_key"] == "default_cluster"
-        # Notebook vendored under the workspace basename
+        # Notebook downloaded under the workspace basename
         assert len(prepared.notebooks) == 1
         assert prepared.notebooks[0].relative_path == "notebooks/transform.py"
         assert "from /Shared/ETL/transform" in prepared.notebooks[0].content
@@ -184,7 +184,7 @@ class TestNotebookPreparer:
 
     def test_prepare_notebook_falls_back_to_in_place_when_download_fails(self, monkeypatch):
         """If downloads are enabled but the SDK returns None, behavior matches the
-        legacy in-place reference (no vendor, no cluster bind in the preparer)."""
+        legacy in-place reference (no download, no cluster bind in the preparer)."""
         monkeypatch.setattr(workspace_downloader, "_downloads_enabled", True)
         monkeypatch.setattr(
             "orchestra.preparer.activity_preparers.notebook.download_notebook",

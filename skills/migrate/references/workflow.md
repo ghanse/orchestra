@@ -10,7 +10,7 @@ Orchestra follows a three-phase pipeline architecture. Each phase is independent
 ADF JSON Exports
       |
       v
-  Phase 1: INGEST
+  Phase 1: PROFILE
   (parse + classify)
       |
       v
@@ -35,9 +35,9 @@ ADF JSON Exports
   databricks bundle deploy
 ```
 
-## Phase 1: Ingest
+## Phase 1: Profile
 
-**Skill:** `orchestra:ingest`
+**Skill:** `orchestra:profile`
 
 **Input:** Directory of ADF JSON export files (from ARM template export, Azure DevOps, or manual export)
 
@@ -164,4 +164,4 @@ This means the prepare phase could target different output formats (Terraform, r
 - **Parse errors** — logged to `parse_errors.json`, skipped in inventory
 - **Translation failures** — marked as `failed` in translation report, get placeholder tasks in DABs
 - **Agentic failures** — saved with error details, can be retried with additional context
-- **Unsupported activities** — warned at ingest, get placeholder tasks with TODO comments in DABs
+- **Unsupported activities** — warned at profile, get placeholder tasks with TODO comments in DABs

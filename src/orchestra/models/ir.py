@@ -7,7 +7,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, TypeAlias
 
 if TYPE_CHECKING:
-    from orchestra.adapter.models import TranslationPreferences
+    from orchestra.adapter.models import TranslationConfiguration
 
 
 @dataclass(slots=True, kw_only=True)
@@ -93,8 +93,8 @@ class Activity:
     parameter_approximations: list[dict[str, str]] = field(default_factory=list)
     required_parameters: dict[str, str] = field(default_factory=dict)
     # Compute mode stamped by the pipeline modifier in response to user
-    # preferences.  One of "serverless", "classic_single_node",
-    # "classic_multi_node", "inherit", or None when no preferences were applied.
+    # configuration.  One of "serverless", "classic_single_node",
+    # "classic_multi_node", "inherit", or None when no configuration were applied.
     compute_mode: str | None = None
 
 
@@ -294,6 +294,13 @@ class WebActivity(Activity):
     authentication: dict[str, Any] | None = None
     disable_cert_validation: bool = False
     http_request_timeout_seconds: int | None = None
+    # Pre-resolved request body, lowered to a Python expression at translate
+    # time when the original ADF body contained ``@``-expressions
+    # (``@concat`` / ``@variables`` / ``@{...}``).  The code generator emits
+    # this verbatim instead of re-resolving against an empty context.
+    body_code: str | None = None
+    body_imports: list[str] = field(default_factory=list)
+    body_required_parameters: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(slots=True, kw_only=True)
@@ -483,6 +490,10 @@ class PlaceholderActivity(Activity):
     original_type: str
     notebook_path: str = "/UNSUPPORTED_ADF_ACTIVITY"
     comment: str | None = None
+    # Set when the activity is an agentic gap (e.g. Until): the recommended
+    # skill and the full ADF/ARM JSON the agent should translate from.
+    agentic_skill: str | None = None
+    raw_definition: dict[str, Any] | None = None
 
 
 @dataclass(slots=True, kw_only=True)
@@ -549,7 +560,7 @@ class Pipeline:
     tasks: list[Activity] = field(default_factory=list)
     tags: dict[str, str] = field(default_factory=dict)
     not_translatable: list[dict[str, Any]] = field(default_factory=list)
-    translation_preferences: TranslationPreferences | None = None
+    translation_configuration: TranslationConfiguration | None = None
 
 
 @dataclass(frozen=True, slots=True)

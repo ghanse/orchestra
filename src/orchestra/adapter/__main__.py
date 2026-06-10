@@ -4,10 +4,10 @@ The skills (`/orchestra:translate`, `/orchestra:migrate`) cannot keep a
 Python session alive across user prompts, so this module exposes two
 stateless subcommands:
 
-* ``inspect`` reads a translation report and emits the pending questions
+* ``inspect`` reads a translation report and emits the pending options
   as JSON for the agent to surface to the user.
 * ``modify`` reads the same report plus a JSON file of answers and writes
-  a preference-stamped report the prepare phase consumes verbatim.
+  a configuration-stamped report the prepare phase consumes verbatim.
 """
 
 from __future__ import annotations
@@ -19,9 +19,9 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from orchestra.adapter.constants import MOTIF_CONSOLIDATE_QUESTION_PREFIX
+from orchestra.adapter.constants import MOTIF_CONSOLIDATE_OPTION_PREFIX
 from orchestra.adapter.models import (
-    DEFAULT_PREFERENCES,
+    DEFAULT_CONFIGURATION,
     CopyActivityParadigm,
     LakeflowConnectorType,
     MetadataDrivenAccess,
@@ -30,16 +30,16 @@ from orchestra.adapter.models import (
     MetadataDrivenSize,
     MotifConsolidate,
     NonDatabricksTaskCompute,
-    PendingQuestions,
-    TranslationPreferences,
-    TranslationQuestion,
+    PendingOptions,
+    TranslationConfiguration,
+    TranslationOption,
     UseLakeflowConnectors,
 )
 from orchestra.adapter.operations import (
-    apply_preferences,
+    apply_configuration,
     collect_workspace_artifact_paths,
     detect_databricks_hosts,
-    gather_questions,
+    gather_options,
     validate_answer,
 )
 from orchestra.bundler.dab_writer import pipeline_dict_to_ir
@@ -111,15 +111,15 @@ def _run_inputs(args: argparse.Namespace) -> int:
     pending = session.pending()
     payload = {
         "phase": pending.phase,
-        "questions": [
+        "options": [
             {
-                "question_id": question.question_id,
-                "prompt": question.prompt,
-                "description": question.description,
-                "default": question.default,
-                "required": question.required,
+                "option_id": option.option_id,
+                "prompt": option.prompt,
+                "description": option.description,
+                "default": option.default,
+                "required": option.required,
             }
-            for question in pending.questions
+            for option in pending.options
         ],
     }
     _emit_json(payload, args.out)
@@ -140,7 +140,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     inspect = subparsers.add_parser(
         "inspect",
-        help="Emit pending translation questions for a report as JSON.",
+        help="Emit pending translation options for a report as JSON.",
     )
     inspect.add_argument("report", type=Path, help="Path to the translation report or pipeline IR JSON.")
     inspect.add_argument(
@@ -149,7 +149,7 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Optional path to a JSON file of answers already collected; "
-            "questions whose conditions depend on those answers will surface "
+            "options whose conditions depend on those answers will surface "
             "only when their conditions are met."
         ),
     )
@@ -165,12 +165,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Apply collected answers to a translation report and write the stamped IR.",
     )
     modify.add_argument("report", type=Path, help="Path to the translation report or pipeline IR JSON.")
-    modify.add_argument("answers", type=Path, help="Path to a JSON file mapping question_id to answer string.")
+    modify.add_argument("answers", type=Path, help="Path to a JSON file mapping option_id to answer string.")
     modify.add_argument(
         "--out",
         type=Path,
         required=True,
-        help="Destination path for the preference-stamped IR JSON.",
+        help="Destination path for the configuration-stamped IR JSON.",
     )
     modify.add_argument(
         "--lookup-values",
@@ -210,11 +210,11 @@ def _build_parser() -> argparse.ArgumentParser:
 
     inputs = subparsers.add_parser(
         "inputs",
-        help="Emit the migration-phase input questions for an orchestra phase as JSON.",
+        help="Emit the migration-phase input options for an orchestra phase as JSON.",
     )
     inputs.add_argument(
         "phase",
-        choices=("ingest", "translate", "prepare"),
+        choices=("profile", "translate", "prepare"),
         help="Migration phase whose input prompts the agent should surface.",
     )
     inputs.add_argument(
@@ -260,7 +260,7 @@ def _run_inspect(args: argparse.Namespace) -> int:
         return 1
     answers = _read_answers_optional(args.answers) if getattr(args, "answers", None) else {}
     payload = {
-        "pipelines": [_pending_to_payload(gather_questions(pipeline, [], answers=answers)) for pipeline in pipelines],
+        "pipelines": [_pending_to_payload(gather_options(pipeline, [], answers=answers)) for pipeline in pipelines],
     }
     _emit_json(payload, args.out)
     return 0
@@ -270,12 +270,12 @@ def _read_answers_optional(answers_path: Path) -> dict[str, str]:
     """Loads an answers JSON file supplied to ``inspect``.
 
     Args:
-        answers_path: Path to a JSON file mapping question_id to answer.
+        answers_path: Path to a JSON file mapping option_id to answer.
 
     Returns:
-        Mapping of question_id to answer string.  Returns an empty dict
+        Mapping of option_id to answer string.  Returns an empty dict
         when the file is missing or unparseable so ``inspect`` still
-        succeeds (question gating just sees no prior answers).
+        succeeds (option gating just sees no prior answers).
     """
     try:
         raw = json.loads(answers_path.read_text(encoding="utf-8"))
@@ -301,13 +301,13 @@ def _run_modify(args: argparse.Namespace) -> int:
         return 1
     try:
         answers = _load_answers(args.answers)
-        preferences = _preferences_from_answers(answers)
+        configuration = _configuration_from_answers(answers)
     except ValueError as error:
         print(f"Invalid answers payload: {error}", file=sys.stderr)
         return 2
     lookup_values = _load_lookup_values(args.lookup_values) if args.lookup_values else []
     stamped_pipelines = [
-        _stamp_lookup_values_into_metadata_driven_motifs(apply_preferences(pipeline, preferences), lookup_values)
+        _stamp_lookup_values_into_metadata_driven_motifs(apply_configuration(pipeline, configuration), lookup_values)
         for pipeline in pipelines
     ]
     modified = [_pipeline_to_dict(pipeline) for pipeline in stamped_pipelines]
@@ -383,7 +383,7 @@ def _stamp_lookup_values_into_metadata_driven_motifs(pipeline, lookup_values: li
     """Stamps lookup values onto every metadata-driven motif marked for consolidation.
 
     Args:
-        pipeline: Preference-stamped pipeline IR.
+        pipeline: Configuration-stamped pipeline IR.
         lookup_values: Rows materialised by the agent or the user.
 
     Returns:
@@ -456,10 +456,10 @@ def _load_answers(answers_path: Path) -> dict[str, str]:
     """Loads a JSON answers file and validates its top-level shape.
 
     Args:
-        answers_path: Path to a JSON file mapping question_id to answer.
+        answers_path: Path to a JSON file mapping option_id to answer.
 
     Returns:
-        Mapping of question_id to answer string.
+        Mapping of option_id to answer string.
 
     Raises:
         ValueError: When the file is not a JSON object of string values.
@@ -475,86 +475,86 @@ def _load_answers(answers_path: Path) -> dict[str, str]:
     return coerced
 
 
-def _preferences_from_answers(answers: dict[str, str]) -> TranslationPreferences:
-    """Builds a :class:`TranslationPreferences` from a validated answers dict.
+def _configuration_from_answers(answers: dict[str, str]) -> TranslationConfiguration:
+    """Builds a :class:`TranslationConfiguration` from a validated answers dict.
 
     Args:
-        answers: Validated mapping of question_id to answer string.
+        answers: Validated mapping of option_id to answer string.
 
     Returns:
-        Preferences with every answered field overridden and every
+        Configuration with every answered field overridden and every
         unanswered field defaulted.
 
     Raises:
         ValueError: When an answer is not in the allowed set for its
-            question.
+            option.
     """
     validated = {qid: validate_answer(qid, value) for qid, value in answers.items()}
     motif_consolidations: dict[str, MotifConsolidate] = {}
     for qid, value in validated.items():
-        if qid.startswith(MOTIF_CONSOLIDATE_QUESTION_PREFIX):
-            motif_consolidations[qid[len(MOTIF_CONSOLIDATE_QUESTION_PREFIX) :]] = MotifConsolidate(value)
-    return TranslationPreferences(
+        if qid.startswith(MOTIF_CONSOLIDATE_OPTION_PREFIX):
+            motif_consolidations[qid[len(MOTIF_CONSOLIDATE_OPTION_PREFIX) :]] = MotifConsolidate(value)
+    return TranslationConfiguration(
         copy_activity_paradigm=CopyActivityParadigm(
-            validated.get("copy_activity_paradigm", DEFAULT_PREFERENCES.copy_activity_paradigm)
+            validated.get("copy_activity_paradigm", DEFAULT_CONFIGURATION.copy_activity_paradigm)
         ),
         non_databricks_task_compute=NonDatabricksTaskCompute(
-            validated.get("non_databricks_task_compute", DEFAULT_PREFERENCES.non_databricks_task_compute)
+            validated.get("non_databricks_task_compute", DEFAULT_CONFIGURATION.non_databricks_task_compute)
         ),
         use_lakeflow_connectors=UseLakeflowConnectors(
-            validated.get("use_lakeflow_connectors", DEFAULT_PREFERENCES.use_lakeflow_connectors)
+            validated.get("use_lakeflow_connectors", DEFAULT_CONFIGURATION.use_lakeflow_connectors)
         ),
         lakeflow_connector_type=LakeflowConnectorType(
-            validated.get("lakeflow_connector_type", DEFAULT_PREFERENCES.lakeflow_connector_type)
+            validated.get("lakeflow_connector_type", DEFAULT_CONFIGURATION.lakeflow_connector_type)
         ),
         metadata_driven_consolidate=MetadataDrivenConsolidate(
-            validated.get("metadata_driven_consolidate", DEFAULT_PREFERENCES.metadata_driven_consolidate)
+            validated.get("metadata_driven_consolidate", DEFAULT_CONFIGURATION.metadata_driven_consolidate)
         ),
         metadata_driven_access=MetadataDrivenAccess(
-            validated.get("metadata_driven_access", DEFAULT_PREFERENCES.metadata_driven_access)
+            validated.get("metadata_driven_access", DEFAULT_CONFIGURATION.metadata_driven_access)
         ),
         metadata_driven_size=MetadataDrivenSize(
-            validated.get("metadata_driven_size", DEFAULT_PREFERENCES.metadata_driven_size)
+            validated.get("metadata_driven_size", DEFAULT_CONFIGURATION.metadata_driven_size)
         ),
         metadata_driven_lookup_tool=MetadataDrivenLookupTool(
-            validated.get("metadata_driven_lookup_tool", DEFAULT_PREFERENCES.metadata_driven_lookup_tool)
+            validated.get("metadata_driven_lookup_tool", DEFAULT_CONFIGURATION.metadata_driven_lookup_tool)
         ),
         motif_consolidations=motif_consolidations,
     )
 
 
-def _pending_to_payload(pending: PendingQuestions) -> dict[str, Any]:
-    """Serialises pending questions for transmission over stdout.
+def _pending_to_payload(pending: PendingOptions) -> dict[str, Any]:
+    """Serialises pending options for transmission over stdout.
 
     Args:
-        pending: Outstanding questions for a single pipeline.
+        pending: Outstanding options for a single pipeline.
 
     Returns:
         JSON-friendly dict the agent can iterate over to prompt the user.
     """
     return {
         "pipeline_name": pending.pipeline_name,
-        "questions": [_question_to_payload(question) for question in pending.questions],
+        "options": [_option_to_payload(option) for option in pending.options],
     }
 
 
-def _question_to_payload(question: TranslationQuestion) -> dict[str, Any]:
-    """Serialises a single :class:`TranslationQuestion` to a JSON-friendly dict.
+def _option_to_payload(option: TranslationOption) -> dict[str, Any]:
+    """Serialises a single :class:`TranslationOption` to a JSON-friendly dict.
 
     Args:
-        question: Question to serialise.
+        option: Option to serialise.
 
     Returns:
-        Dict containing the question's fields with options flattened to
+        Dict containing the option's fields with options flattened to
         plain dicts.
     """
     return {
-        "question_id": question.question_id,
-        "prompt": question.prompt,
-        "rationale": question.rationale,
-        "options": [asdict(option) for option in question.options],
-        "affected_task_keys": list(question.affected_task_keys),
-        "default": question.default,
+        "option_id": option.option_id,
+        "prompt": option.prompt,
+        "rationale": option.rationale,
+        "options": [asdict(option) for option in option.options],
+        "affected_task_keys": list(option.affected_task_keys),
+        "default": option.default,
     }
 
 
@@ -574,7 +574,7 @@ def _emit_json(payload: dict[str, Any], out: Path | None) -> None:
 
 
 def _write_modified_report(report_path: Path, pipelines: list[dict[str, Any]], out: Path) -> None:
-    """Writes the preference-stamped IR to *out* using the input report's shape.
+    """Writes the configuration-stamped IR to *out* using the input report's shape.
 
     Args:
         report_path: Path the modified report was sourced from.  Used

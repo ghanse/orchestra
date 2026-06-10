@@ -1,10 +1,10 @@
 ---
-name: ingest
+name: profile
 description: >
   Load and parse Azure Data Factory pipeline definitions from Unity Catalog volumes or local directories.
   Produces a typed inventory that classifies every activity as deterministic, agentic, or unsupported.
 triggers:
-  - "ingest ADF"
+  - "profile ADF"
   - "load ADF"
   - "parse ADF"
   - "import pipelines"
@@ -13,7 +13,7 @@ triggers:
   - "inventory ADF"
 ---
 
-# Ingest ADF Pipeline Definitions
+# Profile ADF Pipeline Definitions
 
 Parse Azure Data Factory pipeline, dataset, linked service, and trigger JSON files into a typed AST and produce a classified inventory.
 
@@ -109,7 +109,7 @@ python3 <plugin_dir>/src/orchestra/parser/adf_loader.py \
 Where:
 - `<plugin_dir>` is the root of the orchestra plugin (the directory containing `src/`)
 - `<source_path>` is the local directory containing ADF JSON files
-- `<output_path>` is where to write the parsed output (default: `./orchestra_output/ingest/`)
+- `<output_path>` is where to write the parsed output (default: `./orchestra_output/profile/`)
 - `<pipeline_name>` (optional) — when provided, filters the inventory to include only the named pipeline. When omitted, all pipelines in the source directory are included.
 
 **Always pass `--pipeline` when the user has specified a specific pipeline to migrate.** This ensures the inventory and all downstream phases are scoped to only that pipeline.
@@ -202,11 +202,11 @@ Tell the user where the inventory and AST files were written, and confirm they c
 
 ## Examples
 
-- "Ingest my ADF pipelines from /Volumes/main/default/adf_export"
+- "Profile my ADF pipelines from /Volumes/main/default/adf_export"
 - "Parse ADF definitions from ./tests/resources/json/"
 - "Load the ADF pipeline JSON files and show me the inventory"
 - "Import pipelines from /tmp/customer_adf_export"
-- "Ingest only the pl_demo_01 pipeline from /Volumes/main/default/adf_export"
+- "Profile only the pl_demo_01 pipeline from /Volumes/main/default/adf_export"
 
 ## Output Artifacts
 

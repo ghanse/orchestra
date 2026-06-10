@@ -41,16 +41,16 @@ orchestra, run the following command from a Claude Code session:
 You can also copy the skill folders into your local `/.claude/skills` folder:
 
 ```bash
-cp -R skills/{setup,ingest,translate,prepare,migrate} ~/.claude/skills/
+cp -R skills/{setup,profile,translate,prepare,migrate} ~/.claude/skills/
 ```
 
-Once installed, the skills can be invoked using `/orchestra:migrate`, `/orchestra:ingest`, etc. Claude Code can also invoke the skills when prompted.  See the [Claude Code Plugins documentation](https://docs.claude.com/en/docs/claude-code/plugins) for more details.
+Once installed, the skills can be invoked using `/orchestra:migrate`, `/orchestra:profile`, etc. Claude Code can also invoke the skills when prompted.  See the [Claude Code Plugins documentation](https://docs.claude.com/en/docs/claude-code/plugins) for more details.
 </Tab>
 
 <Tab value="Other AI tools">
 Any tool that supports the [Agent Skills](https://agentskills.io/) open standard can install the orchestra skills. The general pattern:
 
-1. Copy each skill folder (`skills/setup`, `skills/ingest`, `skills/translate`, `skills/prepare`, `skills/migrate`) into the tool's configured skills directory.
+1. Copy each skill folder (`skills/setup`, `skills/profile`, `skills/translate`, `skills/prepare`, `skills/migrate`) into the tool's configured skills directory.
 2. Make sure the path contains `SKILL.md` directly,
 3. Restart the tool if it caches skill metadata at startup.
 
@@ -68,7 +68,7 @@ cat skills/*/SKILL.md > orchestra-skills.md
 
 Orchestra's skills invoke Python modules that may depend on third-party packages. The `setup` skill provisions an isolated virtual environment with the required dependencies.
 
-Run it **once** after installing the skills, before `ingest`, `translate`, `prepare`, or `migrate`. Just ask your agent:
+Run it **once** after installing the skills, before `profile`, `translate`, `prepare`, or `migrate`. Just ask your agent:
 
 > Set up the orchestra environment
 
@@ -99,7 +99,7 @@ After the venv exists, every Python command the skills run uses the venv interpr
 
 ```bash
 export PYTHONPATH="<plugin_dir>/src"
-"<plugin_dir>/.venv/bin/python" -m orchestra.adapter inputs ingest
+"<plugin_dir>/.venv/bin/python" -m orchestra.adapter inputs profile
 ```
 
 On Windows, the interpreter is `<plugin_dir>\.venv\Scripts\python.exe`. The agent normally runs these commands for you; they are handy for troubleshooting a `ModuleNotFoundError`.

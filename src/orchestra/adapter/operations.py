@@ -1,7 +1,7 @@
-"""Standalone operations: question gathering, validation, and IR modification.
+"""Standalone operations: option gathering, validation, and IR modification.
 
 The agent adapter and the CLI bridge call into these functions; nothing
-here is stateful.  Preference dataclasses, StrEnums, and question shapes
+here is stateful.  Configuration dataclasses, StrEnums, and option shapes
 live in :mod:`orchestra.adapter.models`.
 """
 
@@ -23,14 +23,14 @@ from orchestra.adapter.constants import (
     LAKEFLOW_CONNECT_REPLACEMENT,
     LAKEFLOW_CONNECTOR_TYPE_QUERY_BASED,
     METADATA_DRIVEN_MOTIF_ID,
-    MOTIF_CONSOLIDATE_QUESTION_PREFIX,
-    QUESTION_COPY_ACTIVITY_PARADIGM,
-    QUESTION_METADATA_DRIVEN_ACCESS,
-    QUESTION_METADATA_DRIVEN_CONSOLIDATE,
-    QUESTION_METADATA_DRIVEN_LOOKUP_TOOL,
-    QUESTION_METADATA_DRIVEN_SIZE,
-    QUESTION_NON_DATABRICKS_TASK_COMPUTE,
-    QUESTION_USE_LAKEFLOW_CONNECTORS,
+    MOTIF_CONSOLIDATE_OPTION_PREFIX,
+    OPTION_COPY_ACTIVITY_PARADIGM,
+    OPTION_METADATA_DRIVEN_ACCESS,
+    OPTION_METADATA_DRIVEN_CONSOLIDATE,
+    OPTION_METADATA_DRIVEN_LOOKUP_TOOL,
+    OPTION_METADATA_DRIVEN_SIZE,
+    OPTION_NON_DATABRICKS_TASK_COMPUTE,
+    OPTION_USE_LAKEFLOW_CONNECTORS,
 )
 from orchestra.adapter.models import (
     FIELD_TO_ENUM,
@@ -42,10 +42,10 @@ from orchestra.adapter.models import (
     MetadataDrivenSize,
     MotifConsolidate,
     NonDatabricksTaskCompute,
-    PendingQuestions,
-    QuestionOption,
-    TranslationPreferences,
-    TranslationQuestion,
+    OptionChoice,
+    PendingOptions,
+    TranslationConfiguration,
+    TranslationOption,
     UseLakeflowConnectors,
 )
 from orchestra.adapter.predicates import (
@@ -69,55 +69,55 @@ from orchestra.models.ir import (
 from orchestra.models.motifs import MOTIF_LAKEFLOW_CONNECT_DATABASE
 
 
-def enum_for(question_id: str) -> type[StrEnum] | None:
-    """Returns the enum class backing a preference field.
+def enum_for(option_id: str) -> type[StrEnum] | None:
+    """Returns the enum class backing a configuration field.
 
     Args:
-        question_id: Field name (e.g. ``"copy_activity_paradigm"``) or
+        option_id: Field name (e.g. ``"copy_activity_paradigm"``) or
             per-motif id (e.g. ``"consolidate_motif:rest_api_pagination"``).
 
     Returns:
         The :class:`StrEnum` subclass that defines the allowed values, or
-        ``None`` when the question_id is unknown.
+        ``None`` when the option_id is unknown.
     """
-    if question_id.startswith(MOTIF_CONSOLIDATE_QUESTION_PREFIX):
+    if option_id.startswith(MOTIF_CONSOLIDATE_OPTION_PREFIX):
         return MotifConsolidate
-    return FIELD_TO_ENUM.get(question_id)
+    return FIELD_TO_ENUM.get(option_id)
 
 
-def allowed_values_for(question_id: str) -> tuple[str, ...]:
-    """Returns the allowed string values for a preference field.
+def allowed_values_for(option_id: str) -> tuple[str, ...]:
+    """Returns the allowed string values for a configuration field.
 
     Args:
-        question_id: Field name (e.g. ``"copy_activity_paradigm"``).
+        option_id: Field name (e.g. ``"copy_activity_paradigm"``).
 
     Returns:
         Tuple of allowed string values in declaration order.  Empty when
         the field is unknown.
     """
-    enum_cls = enum_for(question_id)
+    enum_cls = enum_for(option_id)
     return tuple(member.value for member in enum_cls) if enum_cls else ()
 
 
-def validate_answer(question_id: str, value: str) -> str:
-    """Returns *value* when it is an allowed answer for *question_id*.
+def validate_answer(option_id: str, value: str) -> str:
+    """Returns *value* when it is an allowed answer for *option_id*.
 
     Args:
-        question_id: Stable question identifier.
+        option_id: Stable option identifier.
         value: Caller-supplied answer string.
 
     Returns:
         The validated value, unchanged.
 
     Raises:
-        ValueError: When *question_id* is not known or *value* is not in
-            the allowed set for the question.
+        ValueError: When *option_id* is not known or *value* is not in
+            the allowed set for the option.
     """
-    allowed = allowed_values_for(question_id)
+    allowed = allowed_values_for(option_id)
     if not allowed:
-        raise ValueError(f"Unknown question_id {question_id!r}")
+        raise ValueError(f"Unknown option_id {option_id!r}")
     if value not in allowed:
-        raise ValueError(f"Invalid answer {value!r} for {question_id!r}; allowed: {sorted(allowed)}")
+        raise ValueError(f"Invalid answer {value!r} for {option_id!r}; allowed: {sorted(allowed)}")
     return value
 
 
@@ -213,118 +213,116 @@ def _walk_workspace_paths(tasks: list[dict[str, Any]] | None, candidates: list[s
         _walk_workspace_paths(task.get("default_activities"), candidates)
 
 
-def gather_questions(
+def gather_options(
     pipeline: Pipeline,
     motifs: list | None = None,
     *,
     answers: dict[str, str] | None = None,
-) -> PendingQuestions:
-    """Walks the IR and returns the questions that apply to *pipeline*.
+) -> PendingOptions:
+    """Walks the IR and returns the options that apply to *pipeline*.
 
     Args:
         pipeline: Translated pipeline IR after motif collapsing.
         motifs: Detected motifs, used to surface the Lakeflow Connect
-            question for multi-step database ingestion patterns.
-        answers: Answers the caller has already collected.  Questions
-            whose ``question_id`` is in this mapping are filtered out,
-            and questions whose ``conditions`` reference earlier answers
+            option for multi-step database ingestion patterns.
+        answers: Answers the caller has already collected.  Options
+            whose ``option_id`` is in this mapping are filtered out,
+            and options whose ``conditions`` reference earlier answers
             are evaluated against this mapping.
 
     Returns:
-        A :class:`PendingQuestions` instance carrying the questions whose
+        A :class:`PendingOptions` instance carrying the options whose
         IR preconditions and answer-dependent conditions are met but
-        whose ``question_id`` has not yet been answered.
+        whose ``option_id`` has not yet been answered.
     """
     motif_list = motifs or []
     answer_map = answers or {}
     builders = (
-        _build_use_lakeflow_connectors_question,
-        _build_lakeflow_connector_type_question,
-        _build_copy_activity_paradigm_question,
-        _build_non_databricks_task_compute_question,
-        _build_metadata_driven_consolidate_question,
-        _build_metadata_driven_access_question,
-        _build_metadata_driven_size_question,
-        _build_metadata_driven_lookup_tool_question,
+        _build_use_lakeflow_connectors_option,
+        _build_lakeflow_connector_type_option,
+        _build_copy_activity_paradigm_option,
+        _build_non_databricks_task_compute_option,
+        _build_metadata_driven_consolidate_option,
+        _build_metadata_driven_access_option,
+        _build_metadata_driven_size_option,
+        _build_metadata_driven_lookup_tool_option,
     )
     candidates = (builder(pipeline, motif_list, answers=answer_map) for builder in builders)
     pending = [
-        question
-        for question in candidates
-        if question is not None
-        and question.question_id not in answer_map
-        and _conditions_met(question.conditions, answer_map)
+        option
+        for option in candidates
+        if option is not None and option.option_id not in answer_map and _conditions_met(option.conditions, answer_map)
     ]
-    # Per-motif "consolidate?" questions: one per detected motif.  Each
-    # gets its own question_id ``consolidate_motif:<motif_id>`` so the
+    # Per-motif "consolidate?" options: one per detected motif.  Each
+    # gets its own option_id ``consolidate_motif:<motif_id>`` so the
     # adapter can solicit and validate them independently.  Default is
     # ``keep`` -- nothing is collapsed without an explicit yes.
-    for motif_question in _build_motif_consolidation_questions(motif_list):
-        if motif_question.question_id in answer_map:
+    for motif_option in _build_motif_consolidation_options(motif_list):
+        if motif_option.option_id in answer_map:
             continue
-        pending.append(motif_question)
-    return PendingQuestions(pipeline_name=pipeline.name, questions=pending)
+        pending.append(motif_option)
+    return PendingOptions(pipeline_name=pipeline.name, options=pending)
 
 
 def _conditions_met(conditions: tuple[tuple[str, str], ...], answers: dict[str, str]) -> bool:
     """Returns True when every condition is satisfied by *answers*.
 
     Args:
-        conditions: Tuples of ``(question_id, expected_value)`` from a
-            :class:`TranslationQuestion`.
-        answers: Mapping of question_id to the caller-supplied answer.
+        conditions: Tuples of ``(option_id, expected_value)`` from a
+            :class:`TranslationOption`.
+        answers: Mapping of option_id to the caller-supplied answer.
 
     Returns:
-        ``True`` when every condition's question has been answered with
+        ``True`` when every condition's option has been answered with
         the expected value (or when *conditions* is empty); ``False``
         otherwise.
     """
     return all(answers.get(qid) == expected for qid, expected in conditions)
 
 
-def apply_preferences(pipeline: Pipeline, pipeline_preferences: TranslationPreferences) -> Pipeline:
-    """Returns a copy of *pipeline* with preferences stamped onto each activity.
+def apply_configuration(pipeline: Pipeline, pipeline_configuration: TranslationConfiguration) -> Pipeline:
+    """Returns a copy of *pipeline* with configuration stamped onto each activity.
 
     Args:
         pipeline: Translated pipeline IR after motif collapsing.
-        pipeline_preferences: Validated pipeline-wide preferences.
+        pipeline_configuration: Validated pipeline-wide configuration.
 
     Returns:
         A new :class:`Pipeline` whose activities carry concrete decisions
         about compute, target format, and Lakeflow Connect replacement.
         The input pipeline is not mutated.
     """
-    stamped_tasks = [_stamp_activity(activity, pipeline_preferences) for activity in pipeline.tasks]
+    stamped_tasks = [_stamp_activity(activity, pipeline_configuration) for activity in pipeline.tasks]
     return dataclasses.replace(
         pipeline,
         tasks=stamped_tasks,
-        translation_preferences=pipeline_preferences,
+        translation_configuration=pipeline_configuration,
     )
 
 
-def _build_copy_activity_paradigm_question(
+def _build_copy_activity_paradigm_option(
     pipeline: Pipeline, motifs: list, answers: dict[str, str] | None = None
-) -> TranslationQuestion | None:
-    """Builds the SDP-vs-notebook question for Copy activities targeting Delta.
+) -> TranslationOption | None:
+    """Builds the SDP-vs-notebook option for Copy activities targeting Delta.
 
     Args:
         pipeline: Translated pipeline IR.
         motifs: Detected motifs (unused; accepted for builder uniformity).
         answers: Answers already supplied for prior prompts.  When the
-            user opted into Lakeflow Connect, this question only fires
+            user opted into Lakeflow Connect, this option only fires
             for Copy activities that are *not* LFC-eligible -- the
             paradigm choice is moot for Copies that will become
             managed LFC pipelines.
 
     Returns:
-        The constructed :class:`TranslationQuestion`, or ``None`` when no
+        The constructed :class:`TranslationOption`, or ``None`` when no
         Copy activity needs a paradigm choice.  Copies whose source
         query is unfit for both LFC and SDP (joins, aggregates, etc.)
         are forced to PySpark notebook and excluded from the affected
         set.
     """
     answers = answers or {}
-    going_to_lfc = answers.get(QUESTION_USE_LAKEFLOW_CONNECTORS) == UseLakeflowConnectors.LAKEFLOW_CONNECT.value
+    going_to_lfc = answers.get(OPTION_USE_LAKEFLOW_CONNECTORS) == UseLakeflowConnectors.LAKEFLOW_CONNECT.value
     affected = tuple(
         activity.task_key
         for activity in walk_activities(pipeline.tasks)
@@ -334,8 +332,8 @@ def _build_copy_activity_paradigm_question(
     )
     if not affected:
         return None
-    return TranslationQuestion(
-        question_id=QUESTION_COPY_ACTIVITY_PARADIGM,
+    return TranslationOption(
+        option_id=OPTION_COPY_ACTIVITY_PARADIGM,
         prompt="How should Copy Data activities targeting Delta be implemented?",
         rationale=(
             "One or more Copy Data activities write to a Delta table.  "
@@ -343,12 +341,12 @@ def _build_copy_activity_paradigm_question(
             "a PySpark notebook stays closer to the original ADF activity shape."
         ),
         options=(
-            QuestionOption(
+            OptionChoice(
                 value=CopyActivityParadigm.NOTEBOOK.value,
                 label="PySpark notebook",
                 description="Generates a notebook task that reads the source and writes Delta directly.",
             ),
-            QuestionOption(
+            OptionChoice(
                 value=CopyActivityParadigm.SDP.value,
                 label="Lakeflow Spark Declarative Pipeline",
                 description="Emits an SDP pipeline resource with declarative table definitions.",
@@ -359,10 +357,10 @@ def _build_copy_activity_paradigm_question(
     )
 
 
-def _build_non_databricks_task_compute_question(
+def _build_non_databricks_task_compute_option(
     pipeline: Pipeline, motifs: list, answers: dict[str, str] | None = None
-) -> TranslationQuestion | None:
-    """Builds the serverless-vs-classic question for non-Databricks tasks.
+) -> TranslationOption | None:
+    """Builds the serverless-vs-classic option for non-Databricks tasks.
 
     Args:
         pipeline: Translated pipeline IR.
@@ -372,12 +370,12 @@ def _build_non_databricks_task_compute_question(
             because LFC pipelines always use serverless compute.
 
     Returns:
-        The constructed :class:`TranslationQuestion`, or ``None`` when
+        The constructed :class:`TranslationOption`, or ``None`` when
         every non-Databricks task in the pipeline is going to LFC (no
         compute choice to make).
     """
     answers = answers or {}
-    going_to_lfc = answers.get(QUESTION_USE_LAKEFLOW_CONNECTORS) == UseLakeflowConnectors.LAKEFLOW_CONNECT.value
+    going_to_lfc = answers.get(OPTION_USE_LAKEFLOW_CONNECTORS) == UseLakeflowConnectors.LAKEFLOW_CONNECT.value
     affected = tuple(
         activity.task_key
         for activity in walk_activities(pipeline.tasks)
@@ -385,8 +383,8 @@ def _build_non_databricks_task_compute_question(
     )
     if not affected:
         return None
-    return TranslationQuestion(
-        question_id=QUESTION_NON_DATABRICKS_TASK_COMPUTE,
+    return TranslationOption(
+        option_id=OPTION_NON_DATABRICKS_TASK_COMPUTE,
         prompt="What compute should the non-Databricks tasks use?",
         rationale=(
             "Tasks such as Copy Data, Web, Lookup, and Wait can run on serverless "
@@ -394,12 +392,12 @@ def _build_non_databricks_task_compute_question(
             "tasks and a larger fixed-size cluster for Copy Data."
         ),
         options=(
-            QuestionOption(
+            OptionChoice(
                 value=NonDatabricksTaskCompute.SERVERLESS.value,
                 label="Serverless",
                 description="Runs every non-Databricks task on serverless compute.",
             ),
-            QuestionOption(
+            OptionChoice(
                 value=NonDatabricksTaskCompute.CLASSIC.value,
                 label="Classic job_cluster",
                 description="Provisions classic job_clusters sized per task type.",
@@ -410,24 +408,24 @@ def _build_non_databricks_task_compute_question(
     )
 
 
-def _build_use_lakeflow_connectors_question(
+def _build_use_lakeflow_connectors_option(
     pipeline: Pipeline, motifs: list, answers: dict[str, str] | None = None
-) -> TranslationQuestion | None:
-    """Builds the Lakeflow Connect question for eligible database ingestions.
+) -> TranslationOption | None:
+    """Builds the Lakeflow Connect option for eligible database ingestions.
 
     Args:
         pipeline: Translated pipeline IR.
         motifs: Detected motifs, scanned for database-source ingestion patterns.
 
     Returns:
-        The constructed :class:`TranslationQuestion`, or ``None`` when no
+        The constructed :class:`TranslationOption`, or ``None`` when no
         Copy activity or motif qualifies for Lakeflow Connect.
     """
     affected = _affected_task_keys_for_lakeflow_connect(pipeline, motifs)
     if not affected:
         return None
-    return TranslationQuestion(
-        question_id=QUESTION_USE_LAKEFLOW_CONNECTORS,
+    return TranslationOption(
+        option_id=OPTION_USE_LAKEFLOW_CONNECTORS,
         prompt="Migrate eligible SQL Server, MySQL, and PostgreSQL ingestions to Lakeflow Connect?",
         rationale=(
             "One or more Copy Data activities ingest from SQL Server, MySQL, or "
@@ -436,12 +434,12 @@ def _build_use_lakeflow_connectors_question(
             "the ADF-shaped activity intact."
         ),
         options=(
-            QuestionOption(
+            OptionChoice(
                 value=UseLakeflowConnectors.EXISTING.value,
                 label="Keep existing translation",
                 description="Preserves the Copy Data activity as a notebook or SDP task.",
             ),
-            QuestionOption(
+            OptionChoice(
                 value=UseLakeflowConnectors.LAKEFLOW_CONNECT.value,
                 label="Use Lakeflow Connect",
                 description="Replaces eligible ingestions with a managed Lakeflow Connect pipeline.",
@@ -452,10 +450,10 @@ def _build_use_lakeflow_connectors_question(
     )
 
 
-def _build_lakeflow_connector_type_question(
+def _build_lakeflow_connector_type_option(
     pipeline: Pipeline, motifs: list, answers: dict[str, str] | None = None
-) -> TranslationQuestion | None:
-    """Builds the CDC-vs-query connector question, suppressed when not actionable.
+) -> TranslationOption | None:
+    """Builds the CDC-vs-query connector option, suppressed when not actionable.
 
     Args:
         pipeline: Translated pipeline IR.
@@ -468,7 +466,7 @@ def _build_lakeflow_connector_type_question(
         (table-based reads → CDC because the query-based connector
         requires a cursor column; queries with a cursor → query-based
         because CDC requires direct table access).  A pipeline-wide
-        preference between CDC and query-based therefore has no
+        configuration between CDC and query-based therefore has no
         actionable effect; the modifier picks the eligible connector
         per Copy.
     """
@@ -476,27 +474,27 @@ def _build_lakeflow_connector_type_question(
     return None
 
 
-def _build_metadata_driven_consolidate_question(
+def _build_metadata_driven_consolidate_option(
     pipeline: Pipeline,
     motifs: list,
     answers: dict[str, str] | None = None,
-) -> TranslationQuestion | None:
-    """Builds the consolidate-or-keep question for metadata-driven motifs.
+) -> TranslationOption | None:
+    """Builds the consolidate-or-keep option for metadata-driven motifs.
 
     Args:
         pipeline: Translated pipeline IR.
-        motifs: Detected motifs; the question only surfaces when at
+        motifs: Detected motifs; the option only surfaces when at
             least one matches the metadata-driven bulk copy pattern.
 
     Returns:
-        The constructed :class:`TranslationQuestion`, or ``None`` when
+        The constructed :class:`TranslationOption`, or ``None`` when
         the pipeline contains no metadata-driven motif.
     """
     affected = _metadata_driven_motif_task_keys(pipeline, motifs)
     if not affected:
         return None
-    return TranslationQuestion(
-        question_id=QUESTION_METADATA_DRIVEN_CONSOLIDATE,
+    return TranslationOption(
+        option_id=OPTION_METADATA_DRIVEN_CONSOLIDATE,
         prompt="Consolidate the metadata-driven ingestions into one managed pipeline?",
         rationale=(
             "A Lookup feeds a ForEach that copies each row's table.  Consolidating "
@@ -506,12 +504,12 @@ def _build_metadata_driven_consolidate_question(
             "per-row Copy translation."
         ),
         options=(
-            QuestionOption(
+            OptionChoice(
                 value=MetadataDrivenConsolidate.KEEP.value,
                 label="Keep the per-row loop",
                 description="Preserves the ForEach + Copy translation as a motif scaffold.",
             ),
-            QuestionOption(
+            OptionChoice(
                 value=MetadataDrivenConsolidate.CONSOLIDATE.value,
                 label="Consolidate into one pipeline",
                 description="Emits one pipeline resource that ingests every source from the lookup.",
@@ -522,26 +520,26 @@ def _build_metadata_driven_consolidate_question(
     )
 
 
-def _build_metadata_driven_access_question(
+def _build_metadata_driven_access_option(
     pipeline: Pipeline,
     motifs: list,
     answers: dict[str, str] | None = None,
-) -> TranslationQuestion | None:
-    """Builds the metadata-source access question, gated on consolidate=yes.
+) -> TranslationOption | None:
+    """Builds the metadata-source access option, gated on consolidate=yes.
 
     Args:
         pipeline: Translated pipeline IR.
         motifs: Detected motifs.
 
     Returns:
-        The constructed :class:`TranslationQuestion`, or ``None`` when no
+        The constructed :class:`TranslationOption`, or ``None`` when no
         metadata-driven motif applies.
     """
     affected = _metadata_driven_motif_task_keys(pipeline, motifs)
     if not affected:
         return None
-    return TranslationQuestion(
-        question_id=QUESTION_METADATA_DRIVEN_ACCESS,
+    return TranslationOption(
+        option_id=OPTION_METADATA_DRIVEN_ACCESS,
         prompt="Do you have access to query the metadata source and approve doing so?",
         rationale=(
             "Consolidating a metadata-driven ingestion requires materialising the "
@@ -550,12 +548,12 @@ def _build_metadata_driven_access_question(
             "translation pass; answering no falls back to the per-row scaffold."
         ),
         options=(
-            QuestionOption(
+            OptionChoice(
                 value=MetadataDrivenAccess.YES.value,
                 label="Yes, query is allowed",
                 description="The metadata source is reachable and approved for read during translation.",
             ),
-            QuestionOption(
+            OptionChoice(
                 value=MetadataDrivenAccess.NO.value,
                 label="No, skip materialising the lookup",
                 description="Keeps the per-row motif scaffold without inlining the configuration.",
@@ -563,30 +561,30 @@ def _build_metadata_driven_access_question(
         ),
         affected_task_keys=affected,
         default=MetadataDrivenAccess.NO.value,
-        conditions=((QUESTION_METADATA_DRIVEN_CONSOLIDATE, MetadataDrivenConsolidate.CONSOLIDATE.value),),
+        conditions=((OPTION_METADATA_DRIVEN_CONSOLIDATE, MetadataDrivenConsolidate.CONSOLIDATE.value),),
     )
 
 
-def _build_metadata_driven_size_question(
+def _build_metadata_driven_size_option(
     pipeline: Pipeline,
     motifs: list,
     answers: dict[str, str] | None = None,
-) -> TranslationQuestion | None:
-    """Builds the t-shirt sizing question, gated on consolidate=yes.
+) -> TranslationOption | None:
+    """Builds the t-shirt sizing option, gated on consolidate=yes.
 
     Args:
         pipeline: Translated pipeline IR.
         motifs: Detected motifs.
 
     Returns:
-        The constructed :class:`TranslationQuestion`, or ``None`` when no
+        The constructed :class:`TranslationOption`, or ``None`` when no
         metadata-driven motif applies.
     """
     affected = _metadata_driven_motif_task_keys(pipeline, motifs)
     if not affected:
         return None
-    return TranslationQuestion(
-        question_id=QUESTION_METADATA_DRIVEN_SIZE,
+    return TranslationOption(
+        option_id=OPTION_METADATA_DRIVEN_SIZE,
         prompt="Roughly how many configuration rows feed the metadata-driven ingestion?",
         rationale=(
             "The size determines whether the modifier inlines every lookup row into "
@@ -595,17 +593,17 @@ def _build_metadata_driven_size_question(
             "avoid generating an unwieldy pipeline definition."
         ),
         options=(
-            QuestionOption(
+            OptionChoice(
                 value=MetadataDrivenSize.SMALL.value,
                 label="S (under 50 rows)",
                 description="Lookup feeds fewer than 50 ingestion targets.",
             ),
-            QuestionOption(
+            OptionChoice(
                 value=MetadataDrivenSize.MEDIUM.value,
                 label="M (under 250 rows)",
                 description="Lookup feeds 50 to 249 ingestion targets.",
             ),
-            QuestionOption(
+            OptionChoice(
                 value=MetadataDrivenSize.LARGE.value,
                 label="L (250 or more rows)",
                 description="Lookup feeds 250+ targets; skip inline consolidation.",
@@ -613,30 +611,30 @@ def _build_metadata_driven_size_question(
         ),
         affected_task_keys=affected,
         default=MetadataDrivenSize.LARGE.value,
-        conditions=((QUESTION_METADATA_DRIVEN_CONSOLIDATE, MetadataDrivenConsolidate.CONSOLIDATE.value),),
+        conditions=((OPTION_METADATA_DRIVEN_CONSOLIDATE, MetadataDrivenConsolidate.CONSOLIDATE.value),),
     )
 
 
-def _build_metadata_driven_lookup_tool_question(
+def _build_metadata_driven_lookup_tool_option(
     pipeline: Pipeline,
     motifs: list,
     answers: dict[str, str] | None = None,
-) -> TranslationQuestion | None:
-    """Builds the agent-tool question for the lookup query, gated on size != L.
+) -> TranslationOption | None:
+    """Builds the agent-tool option for the lookup query, gated on size != L.
 
     Args:
         pipeline: Translated pipeline IR.
         motifs: Detected motifs.
 
     Returns:
-        The constructed :class:`TranslationQuestion`, or ``None`` when no
+        The constructed :class:`TranslationOption`, or ``None`` when no
         metadata-driven motif applies.
     """
     affected = _metadata_driven_motif_task_keys(pipeline, motifs)
     if not affected:
         return None
-    return TranslationQuestion(
-        question_id=QUESTION_METADATA_DRIVEN_LOOKUP_TOOL,
+    return TranslationOption(
+        option_id=OPTION_METADATA_DRIVEN_LOOKUP_TOOL,
         prompt="Does the agent have a tool that can run the lookup query?",
         rationale=(
             "When the agent has a Genie skill, an MCP database tool, or a SQL "
@@ -646,12 +644,12 @@ def _build_metadata_driven_lookup_tool_question(
             "comma-separated string of values and the modifier ingests that."
         ),
         options=(
-            QuestionOption(
+            OptionChoice(
                 value=MetadataDrivenLookupTool.HAVE.value,
                 label="Yes, the agent can run the lookup",
                 description="Agent executes the lookup query via its own tool.",
             ),
-            QuestionOption(
+            OptionChoice(
                 value=MetadataDrivenLookupTool.NONE.value,
                 label="No, ask the user for the values",
                 description="Agent prompts the user for a CSV file or string of values.",
@@ -660,22 +658,22 @@ def _build_metadata_driven_lookup_tool_question(
         affected_task_keys=affected,
         default=MetadataDrivenLookupTool.NONE.value,
         conditions=(
-            (QUESTION_METADATA_DRIVEN_CONSOLIDATE, MetadataDrivenConsolidate.CONSOLIDATE.value),
-            (QUESTION_METADATA_DRIVEN_ACCESS, MetadataDrivenAccess.YES.value),
+            (OPTION_METADATA_DRIVEN_CONSOLIDATE, MetadataDrivenConsolidate.CONSOLIDATE.value),
+            (OPTION_METADATA_DRIVEN_ACCESS, MetadataDrivenAccess.YES.value),
         ),
     )
 
 
-def _build_motif_consolidation_questions(motifs: list) -> list[TranslationQuestion]:
-    """Builds one ``consolidate_motif:<id>`` question per detected motif.
+def _build_motif_consolidation_options(motifs: list) -> list[TranslationOption]:
+    """Builds one ``consolidate_motif:<id>`` option per detected motif.
 
     Args:
         motifs: Detected :class:`~orchestra.models.motifs.DetectedMotif`
             instances from :func:`orchestra.motifs.detector.detect_motifs`.
 
     Returns:
-        A list of :class:`TranslationQuestion` instances, one per
-        detected motif.  Each question uses a unique question_id of the
+        A list of :class:`TranslationOption` instances, one per
+        detected motif.  Each option uses a unique option_id of the
         form ``consolidate_motif:<motif_id>`` so multiple distinct motif
         types in the same pipeline (e.g. ``rest_api_pagination`` *and*
         ``metadata_driven_bulk_copy``) each get their own prompt.
@@ -688,7 +686,7 @@ def _build_motif_consolidation_questions(motifs: list) -> list[TranslationQuesti
           the safer default.
         - When the same motif type is detected more than once in the
           same pipeline (rare in practice but possible) the builder
-          emits a single question covering all instances of that type.
+          emits a single option covering all instances of that type.
           Per-instance overrides can still be expressed by adding more
           fine-grained gating in :class:`MotifActivity`.
         - The ``affected_task_keys`` field lists the *underlying* ADF
@@ -699,7 +697,7 @@ def _build_motif_consolidation_questions(motifs: list) -> list[TranslationQuesti
     if not motifs:
         return []
     seen: set[str] = set()
-    questions: list[TranslationQuestion] = []
+    options: list[TranslationOption] = []
     for motif in motifs:
         definition = motif.definition
         motif_id = definition.motif_id
@@ -707,13 +705,13 @@ def _build_motif_consolidation_questions(motifs: list) -> list[TranslationQuesti
             continue
         seen.add(motif_id)
         affected = tuple(motif.matched_activities)
-        question_id = f"{MOTIF_CONSOLIDATE_QUESTION_PREFIX}{motif_id}"
+        option_id = f"{MOTIF_CONSOLIDATE_OPTION_PREFIX}{motif_id}"
         confidence_suffix = ""
         if motif.confidence_notes:
             confidence_suffix = "  Detector notes: " + " | ".join(motif.confidence_notes)
-        questions.append(
-            TranslationQuestion(
-                question_id=question_id,
+        options.append(
+            TranslationOption(
+                option_id=option_id,
                 prompt=f"Consolidate the {definition.display_name!r} motif into a single task?",
                 rationale=(
                     f"{definition.description} "
@@ -722,12 +720,12 @@ def _build_motif_consolidation_questions(motifs: list) -> list[TranslationQuesti
                     f"them with a single {definition.databricks_replacement!r} task."
                 ),
                 options=(
-                    QuestionOption(
+                    OptionChoice(
                         value=MotifConsolidate.KEEP.value,
                         label="Keep individual activities",
                         description="Preserves the per-activity translation; no motif collapse.",
                     ),
-                    QuestionOption(
+                    OptionChoice(
                         value=MotifConsolidate.CONSOLIDATE.value,
                         label="Consolidate into one task",
                         description=f"Replaces matched activities with a {definition.databricks_replacement!r} task.",
@@ -737,7 +735,7 @@ def _build_motif_consolidation_questions(motifs: list) -> list[TranslationQuesti
                 default=MotifConsolidate.KEEP.value,
             )
         )
-    return questions
+    return options
 
 
 def _metadata_driven_motif_task_keys(
@@ -790,7 +788,7 @@ def _copy_paradigm_decided_by_lfc(activity: CopyActivity, going_to_lfc: bool) ->
 
     Args:
         activity: Copy activity to inspect.
-        going_to_lfc: ``True`` when the caller answered the LFC question
+        going_to_lfc: ``True`` when the caller answered the LFC option
             with ``lakeflow_connect``.
 
     Returns:
@@ -809,7 +807,7 @@ def _task_compute_decided_by_lfc(activity, going_to_lfc: bool) -> bool:
 
     Args:
         activity: Activity to inspect.
-        going_to_lfc: ``True`` when the caller answered the LFC question
+        going_to_lfc: ``True`` when the caller answered the LFC option
             with ``lakeflow_connect``.
 
     Returns:
@@ -862,13 +860,13 @@ def _motif_task_keys_for_lakeflow_connect(
     ]
 
 
-def _stamp_activity(activity: Activity, pipeline_preferences: TranslationPreferences) -> Activity:
-    """Stamps preference-derived decisions onto an activity.
+def _stamp_activity(activity: Activity, pipeline_configuration: TranslationConfiguration) -> Activity:
+    """Stamps configuration-derived decisions onto an activity.
 
     Args:
         activity: Source activity from the IR.
-        pipeline_preferences: Pipeline-wide preferences; per-task overrides
-            apply via :meth:`TranslationPreferences.effective_for`.
+        pipeline_configuration: Pipeline-wide configuration; per-task overrides
+            apply via :meth:`TranslationConfiguration.effective_for`.
 
     Returns:
         A new activity instance with ``compute_mode``, ``target_format``,
@@ -876,32 +874,32 @@ def _stamp_activity(activity: Activity, pipeline_preferences: TranslationPrefere
         flow activities are recursed into so their inner bodies are
         stamped too.
     """
-    activity_preferences = pipeline_preferences.effective_for(activity.task_key)
+    activity_configuration = pipeline_configuration.effective_for(activity.task_key)
     if isinstance(activity, ForEachActivity):
-        return _stamp_for_each_activity(activity, pipeline_preferences, activity_preferences)
+        return _stamp_for_each_activity(activity, pipeline_configuration, activity_configuration)
     if isinstance(activity, IfConditionActivity):
-        return _stamp_if_condition_activity(activity, pipeline_preferences, activity_preferences)
+        return _stamp_if_condition_activity(activity, pipeline_configuration, activity_configuration)
     if isinstance(activity, SwitchActivity):
-        return _stamp_switch_activity(activity, pipeline_preferences, activity_preferences)
+        return _stamp_switch_activity(activity, pipeline_configuration, activity_configuration)
     if isinstance(activity, CopyActivity):
-        return _stamp_copy_activity(activity, activity_preferences)
+        return _stamp_copy_activity(activity, activity_configuration)
     if isinstance(activity, MotifActivity):
-        return _stamp_motif_activity(activity, activity_preferences)
-    return dataclasses.replace(activity, compute_mode=_resolve_compute_mode(activity, activity_preferences))
+        return _stamp_motif_activity(activity, activity_configuration)
+    return dataclasses.replace(activity, compute_mode=_resolve_compute_mode(activity, activity_configuration))
 
 
 def _stamp_for_each_activity(
     activity: ForEachActivity,
-    pipeline_preferences: TranslationPreferences,
-    activity_preferences: TranslationPreferences,
+    pipeline_configuration: TranslationConfiguration,
+    activity_configuration: TranslationConfiguration,
 ) -> ForEachActivity:
     """Stamps a ForEach activity and recurses into its inner body.
 
     Args:
         activity: Source ForEach activity.
-        pipeline_preferences: Pipeline-wide preferences threaded into
+        pipeline_configuration: Pipeline-wide configuration threaded into
             inner activities so they re-resolve their own overrides.
-        activity_preferences: Preferences after per-task overrides for
+        activity_configuration: Configuration after per-task overrides for
             *activity*.
 
     Returns:
@@ -909,23 +907,23 @@ def _stamp_for_each_activity(
     """
     return dataclasses.replace(
         activity,
-        inner_activities=[_stamp_activity(inner, pipeline_preferences) for inner in activity.inner_activities],
-        compute_mode=_resolve_compute_mode(activity, activity_preferences),
+        inner_activities=[_stamp_activity(inner, pipeline_configuration) for inner in activity.inner_activities],
+        compute_mode=_resolve_compute_mode(activity, activity_configuration),
     )
 
 
 def _stamp_if_condition_activity(
     activity: IfConditionActivity,
-    pipeline_preferences: TranslationPreferences,
-    activity_preferences: TranslationPreferences,
+    pipeline_configuration: TranslationConfiguration,
+    activity_configuration: TranslationConfiguration,
 ) -> IfConditionActivity:
     """Stamps an IfCondition activity and recurses into both branches.
 
     Args:
         activity: Source IfCondition activity.
-        pipeline_preferences: Pipeline-wide preferences threaded into
+        pipeline_configuration: Pipeline-wide configuration threaded into
             inner activities so they re-resolve their own overrides.
-        activity_preferences: Preferences after per-task overrides for
+        activity_configuration: Configuration after per-task overrides for
             *activity*.
 
     Returns:
@@ -933,24 +931,24 @@ def _stamp_if_condition_activity(
     """
     return dataclasses.replace(
         activity,
-        if_true_activities=[_stamp_activity(inner, pipeline_preferences) for inner in activity.if_true_activities],
-        if_false_activities=[_stamp_activity(inner, pipeline_preferences) for inner in activity.if_false_activities],
-        compute_mode=_resolve_compute_mode(activity, activity_preferences),
+        if_true_activities=[_stamp_activity(inner, pipeline_configuration) for inner in activity.if_true_activities],
+        if_false_activities=[_stamp_activity(inner, pipeline_configuration) for inner in activity.if_false_activities],
+        compute_mode=_resolve_compute_mode(activity, activity_configuration),
     )
 
 
 def _stamp_switch_activity(
     activity: SwitchActivity,
-    pipeline_preferences: TranslationPreferences,
-    activity_preferences: TranslationPreferences,
+    pipeline_configuration: TranslationConfiguration,
+    activity_configuration: TranslationConfiguration,
 ) -> SwitchActivity:
     """Stamps a Switch activity and recurses into every case and the default.
 
     Args:
         activity: Source Switch activity.
-        pipeline_preferences: Pipeline-wide preferences threaded into
+        pipeline_configuration: Pipeline-wide configuration threaded into
             inner activities so they re-resolve their own overrides.
-        activity_preferences: Preferences after per-task overrides for
+        activity_configuration: Configuration after per-task overrides for
             *activity*.
 
     Returns:
@@ -959,46 +957,46 @@ def _stamp_switch_activity(
     stamped_cases = [
         SwitchCase(
             value=case.value,
-            activities=[_stamp_activity(inner, pipeline_preferences) for inner in case.activities],
+            activities=[_stamp_activity(inner, pipeline_configuration) for inner in case.activities],
         )
         for case in activity.cases
     ]
     return dataclasses.replace(
         activity,
         cases=stamped_cases,
-        default_activities=[_stamp_activity(inner, pipeline_preferences) for inner in activity.default_activities],
-        compute_mode=_resolve_compute_mode(activity, activity_preferences),
+        default_activities=[_stamp_activity(inner, pipeline_configuration) for inner in activity.default_activities],
+        compute_mode=_resolve_compute_mode(activity, activity_configuration),
     )
 
 
 def _stamp_copy_activity(
     activity: CopyActivity,
-    activity_preferences: TranslationPreferences,
+    activity_configuration: TranslationConfiguration,
 ) -> CopyActivity:
     """Stamps a Copy activity with paradigm, compute, and Lakeflow Connect flags.
 
     Args:
         activity: Source Copy activity.
-        activity_preferences: Effective preferences for this activity.
+        activity_configuration: Effective configuration for this activity.
 
     Returns:
         A new :class:`CopyActivity` whose ``target_format``,
         ``compute_mode``, and ``use_lakeflow_connector`` fields reflect
         the user's choices.  Copies whose query is unfit for LFC and
         SDP (joins, aggregates, etc.) are forced to the notebook
-        paradigm regardless of preference because the alternative
+        paradigm regardless of configuration because the alternative
         paradigms cannot represent arbitrary SQL.
     """
-    user_picked_lfc = activity_preferences.use_lakeflow_connectors is UseLakeflowConnectors.LAKEFLOW_CONNECT
+    user_picked_lfc = activity_configuration.use_lakeflow_connectors is UseLakeflowConnectors.LAKEFLOW_CONNECT
     use_lakeflow_connector = user_picked_lfc and copy_eligible_for_any_lfc_connector(activity)
-    paradigm = _resolve_paradigm(activity, activity_preferences, use_lakeflow_connector)
+    paradigm = _resolve_paradigm(activity, activity_configuration, use_lakeflow_connector)
     connector_type = (
-        _resolve_lakeflow_connector_type(activity, activity_preferences) if use_lakeflow_connector else None
+        _resolve_lakeflow_connector_type(activity, activity_configuration) if use_lakeflow_connector else None
     )
     return dataclasses.replace(
         activity,
         target_format=paradigm.value,
-        compute_mode=_resolve_compute_mode(activity, activity_preferences),
+        compute_mode=_resolve_compute_mode(activity, activity_configuration),
         use_lakeflow_connector=use_lakeflow_connector,
         lakeflow_connector_type=connector_type,
     )
@@ -1006,14 +1004,14 @@ def _stamp_copy_activity(
 
 def _resolve_paradigm(
     activity: CopyActivity,
-    activity_preferences: TranslationPreferences,
+    activity_configuration: TranslationConfiguration,
     use_lakeflow_connector: bool,
 ) -> CopyActivityParadigm:
     """Resolves the paradigm (notebook vs SDP) for a Copy that won't go to LFC.
 
     Args:
         activity: Source Copy activity.
-        activity_preferences: Effective preferences for this activity.
+        activity_configuration: Effective configuration for this activity.
         use_lakeflow_connector: ``True`` when the modifier already
             routed the Copy to a managed LFC pipeline; the paradigm is
             informational in that case.
@@ -1029,20 +1027,20 @@ def _resolve_paradigm(
         return CopyActivityParadigm.NOTEBOOK
     if not copy_targets_delta(activity):
         return CopyActivityParadigm.NOTEBOOK
-    return activity_preferences.copy_activity_paradigm
+    return activity_configuration.copy_activity_paradigm
 
 
-def _resolve_lakeflow_connector_type(activity: CopyActivity, activity_preferences: TranslationPreferences) -> str:
+def _resolve_lakeflow_connector_type(activity: CopyActivity, activity_configuration: TranslationConfiguration) -> str:
     """Resolves which Lakeflow Connect connector to use for an eligible Copy.
 
     Args:
         activity: Source Copy activity (already known to be LFC-eligible).
-        activity_preferences: Effective preferences for this activity.
+        activity_configuration: Effective configuration for this activity.
 
     Returns:
         Always the connector flavour the Copy is actually eligible for.
         Query-based eligibility (parseable query + cursor column) wins
-        over the user's CDC preference because no cursor candidate
+        over the user's CDC configuration because no cursor candidate
         exists for a CDC connector to use on a query-only Copy.
         Table-based Copies route to CDC because the query-based
         connector requires a cursor column and there is none.
@@ -1054,13 +1052,13 @@ def _resolve_lakeflow_connector_type(activity: CopyActivity, activity_preference
 
 def _stamp_motif_activity(
     activity: MotifActivity,
-    activity_preferences: TranslationPreferences,
+    activity_configuration: TranslationConfiguration,
 ) -> MotifActivity:
     """Stamps a Motif activity, swapping in Lakeflow Connect when eligible.
 
     Args:
         activity: Source motif activity.
-        activity_preferences: Effective preferences for this activity.
+        activity_configuration: Effective configuration for this activity.
 
     Returns:
         A new :class:`MotifActivity` whose ``databricks_replacement`` is
@@ -1071,7 +1069,7 @@ def _stamp_motif_activity(
         consolidation, granted access, and the size bucket is S or M.
     """
     qualifies_for_lakeflow_connect = (
-        activity_preferences.use_lakeflow_connectors is UseLakeflowConnectors.LAKEFLOW_CONNECT
+        activity_configuration.use_lakeflow_connectors is UseLakeflowConnectors.LAKEFLOW_CONNECT
         and activity.source_type_hint == DATABASE_SOURCE_TYPE_HINT
     )
     replacement = LAKEFLOW_CONNECT_REPLACEMENT if qualifies_for_lakeflow_connect else activity.databricks_replacement
@@ -1080,25 +1078,25 @@ def _stamp_motif_activity(
         if qualifies_for_lakeflow_connect
         else activity.notebook_template
     )
-    consolidate = _should_consolidate_metadata_driven(activity, activity_preferences)
+    consolidate = _should_consolidate_metadata_driven(activity, activity_configuration)
     return dataclasses.replace(
         activity,
         databricks_replacement=replacement,
         notebook_template=notebook_template,
-        compute_mode=_resolve_compute_mode(activity, activity_preferences),
+        compute_mode=_resolve_compute_mode(activity, activity_configuration),
         consolidate_metadata_driven=consolidate,
     )
 
 
 def _should_consolidate_metadata_driven(
     activity: MotifActivity,
-    activity_preferences: TranslationPreferences,
+    activity_configuration: TranslationConfiguration,
 ) -> bool:
     """Returns True when the modifier should consolidate a metadata-driven motif.
 
     Args:
         activity: Source motif activity.
-        activity_preferences: Effective preferences for this activity.
+        activity_configuration: Effective configuration for this activity.
 
     Returns:
         ``True`` when the motif matches the metadata-driven bulk-copy
@@ -1109,19 +1107,19 @@ def _should_consolidate_metadata_driven(
     """
     if activity.motif_id != "metadata_driven_bulk_copy":
         return False
-    if activity_preferences.metadata_driven_consolidate is not MetadataDrivenConsolidate.CONSOLIDATE:
+    if activity_configuration.metadata_driven_consolidate is not MetadataDrivenConsolidate.CONSOLIDATE:
         return False
-    if activity_preferences.metadata_driven_access is not MetadataDrivenAccess.YES:
+    if activity_configuration.metadata_driven_access is not MetadataDrivenAccess.YES:
         return False
-    return activity_preferences.metadata_driven_size is not MetadataDrivenSize.LARGE
+    return activity_configuration.metadata_driven_size is not MetadataDrivenSize.LARGE
 
 
-def _resolve_compute_mode(activity: Activity, activity_preferences: TranslationPreferences) -> str:
+def _resolve_compute_mode(activity: Activity, activity_configuration: TranslationConfiguration) -> str:
     """Resolves the compute mode an activity should run on.
 
     Args:
         activity: Source activity.
-        activity_preferences: Effective preferences for this activity.
+        activity_configuration: Effective configuration for this activity.
 
     Returns:
         One of :data:`COMPUTE_MODE_SERVERLESS`,
@@ -1135,7 +1133,7 @@ def _resolve_compute_mode(activity: Activity, activity_preferences: TranslationP
     """
     if not is_non_databricks_task(activity):
         return COMPUTE_MODE_INHERIT
-    if activity_preferences.non_databricks_task_compute is NonDatabricksTaskCompute.SERVERLESS:
+    if activity_configuration.non_databricks_task_compute is NonDatabricksTaskCompute.SERVERLESS:
         return COMPUTE_MODE_SERVERLESS
     if isinstance(activity, CopyActivity):
         return COMPUTE_MODE_CLASSIC_MULTI_NODE

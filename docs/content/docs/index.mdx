@@ -19,7 +19,7 @@ agent that supports the open [Agent Skills](https://agentskills.io/) format) how
 
 Translation runs in three phases:
 
-1. `ingest` parses Azure Resource Manager templates (e.g. for Data Factory pipelines, datasets, linked services, and triggers) into an execution 
+1. `profile` parses Azure Resource Manager templates (e.g. for Data Factory pipelines, datasets, linked services, and triggers) into an execution 
 tree and builds an inventory.
 2. `translate` processes the inventory and converts each activity into a Databricks-compatible intermediate representation. *Deterministic 
 activities* are translated by Python handlers while *agentic activities* are handed off to an LLM-assisted translator with the right context. 

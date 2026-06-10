@@ -182,7 +182,7 @@ def copy_query_unfit_for_lfc(activity: CopyActivity) -> bool:
         contains JOIN, GROUP BY, aggregates, UNION, window functions,
         subqueries, or column expressions).  Such Copies should be
         translated through PySpark notebooks regardless of paradigm
-        preference because LFC's query-based connector and SDP's
+        configuration because LFC's query-based connector and SDP's
         declarative table form both reject the query.
     """
     if not copy_has_source_query(activity):

@@ -170,32 +170,22 @@ def translate_pipeline(
             deterministic_count += 1
         elif strategy is TranslationStrategy.AGENTIC:
             agentic_count += 1
-            gaps.append(
-                AgenticGap(
-                    activity_name=adf_activity.name,
-                    activity_type=adf_activity.type,
-                    recommended_skill=skill,
-                    raw_definition=adf_activity.type_properties,
-                )
-            )
         else:
             unsupported_count += 1
-            gaps.append(
-                AgenticGap(
-                    activity_name=adf_activity.name,
-                    activity_type=adf_activity.type,
-                    recommended_skill=None,
-                    raw_definition=adf_activity.type_properties,
-                )
-            )
-            warnings.append(f"Activity '{adf_activity.name}' (type={adf_activity.type}) has no translation path.")
+
+    # Collect every agentic / unsupported activity across the whole tree --
+    # including activities nested inside IfCondition / ForEach / Until
+    # containers -- so each gap reaches the agent with its full ADF/ARM JSON.
+    gaps = _collect_agentic_gaps(pipeline.activities, warnings)
 
     parameter_entries: list[dict[str, Any]] = []
     if pipeline.parameters:
         for param_name, param_def in pipeline.parameters.items():
             entry: dict[str, Any] = {"name": param_name, "type": param_def.type}
             if param_def.default_value is not None:
-                entry["default"] = _coerce_parameter_default(param_def.default_value, param_def.type)
+                entry["default"] = _resolve_parameter_default(
+                    param_def.default_value, param_def.type, context, warnings
+                )
             parameter_entries.append(entry)
 
     schedule = _compile_pipeline_schedule(pipeline, definitions)
@@ -215,7 +205,7 @@ def translate_pipeline(
     pipeline_ir = rewrite_pipeline_expressions(pipeline_ir, warnings=warnings)
 
     # Motif detection: scan for known multi-activity patterns.  Collapsing is
-    # gated on the per-motif preference -- when *motif_consolidations* is
+    # gated on the per-motif configuration -- when *motif_consolidations* is
     # ``None`` we preserve back-compat behaviour and collapse every detected
     # motif; otherwise only motifs whose motif_id maps to ``"consolidate"`` are
     # collapsed.
@@ -269,6 +259,40 @@ def _filter_motifs_for_collapse(
     if motif_consolidations is None:
         return list(detected_motifs)
     return [m for m in detected_motifs if motif_consolidations.get(m.definition.motif_id) == "consolidate"]
+
+
+def _collect_agentic_gaps(activities: list[AdfActivity], warnings: list[str]) -> list[AgenticGap]:
+    """Walk the activity tree and emit a gap for every agentic / unsupported activity.
+
+    Recurses into IfCondition branches and ForEach / Until container children so
+    that nested activities (e.g. an ``Until`` inside an ``IfCondition``) are not
+    lost.  Each gap carries the activity's full ADF/ARM JSON (``raw``) so the
+    agentic handler can translate directly from source.
+    """
+    gaps: list[AgenticGap] = []
+    seen: set[str] = set()
+
+    def _walk(acts: list[AdfActivity] | None) -> None:
+        for act in acts or []:
+            strategy, skill = classify_activity(act.type)
+            if strategy is not TranslationStrategy.DETERMINISTIC and act.name not in seen:
+                seen.add(act.name)
+                gaps.append(
+                    AgenticGap(
+                        activity_name=act.name,
+                        activity_type=act.type,
+                        recommended_skill=skill,
+                        raw_definition=act.raw if act.raw is not None else act.type_properties,
+                    )
+                )
+                if strategy is TranslationStrategy.UNSUPPORTED:
+                    warnings.append(f"Activity '{act.name}' (type={act.type}) has no translation path.")
+            _walk(act.if_true_activities)
+            _walk(act.if_false_activities)
+            _walk(act.activities)
+
+    _walk(activities)
+    return gaps
 
 
 def _dispatch_activity(
@@ -355,6 +379,8 @@ def _dispatch_activity(
                 **base_kwargs,
                 original_type=activity.type,
                 comment=reason,
+                agentic_skill=skill,
+                raw_definition=activity.raw,
             )
             context = context.with_activity(activity.name, placeholder)
             return placeholder, context
@@ -1114,6 +1140,45 @@ def _coerce_int(value: Any) -> Any:
         return value
 
 
+def _resolve_parameter_default(
+    value: Any,
+    declared_type: str,
+    context: TranslationContext,
+    warnings: list[str],
+) -> Any:
+    """Resolve a pipeline parameter default for emission as a job parameter.
+
+    ADF parameter defaults may themselves be ``@``-expressions -- most
+    commonly ``@utcNow('yyyy-MM-dd')``.  Those must be lowered to a DAB
+    dynamic value reference (e.g. ``{{job.start_time.iso_date}}``) so the
+    generated job-parameter default is valid Databricks YAML rather than a
+    raw ADF token.  Non-expression defaults fall through to type coercion.
+
+    Args:
+        value: The raw ADF default value.
+        declared_type: The ADF parameter type (``String`` / ``Int`` / ...).
+        context: Current translation context (for variable/expression refs).
+        warnings: Mutable warning list; an entry is appended when an
+            ``@``-expression default cannot be lowered deterministically.
+
+    Returns:
+        The resolved default -- a DAB ref / literal for ``@``-expressions,
+        otherwise the type-coerced value.
+    """
+    if isinstance(value, str) and value.strip().startswith("@"):
+        from orchestra.parser.expression_parser import resolve_expression
+
+        result = resolve_expression(value, context)
+        if result is not None and result.kind in ("dab_ref", "literal"):
+            return result.value
+        warnings.append(
+            f"Pipeline parameter default '{value}' could not be lowered to a DAB value "
+            "reference; emitted as-is. Set it explicitly at deploy time if needed."
+        )
+        return value
+    return _coerce_parameter_default(value, declared_type)
+
+
 def _coerce_parameter_default(value: Any, declared_type: str) -> Any:
     """Coerce an ADF parameter default into a Python type matching its declared type.
 
@@ -1242,30 +1307,30 @@ def _pipeline_to_dict(pipeline: Pipeline) -> dict[str, Any]:
         "tags": pipeline.tags,
         "tasks": [_activity_to_dict(task) for task in pipeline.tasks],
     }
-    if pipeline.translation_preferences is not None:
-        result["translation_preferences"] = _preferences_to_dict(pipeline.translation_preferences)
+    if pipeline.translation_configuration is not None:
+        result["translation_configuration"] = _configuration_to_dict(pipeline.translation_configuration)
     return result
 
 
-def _preferences_to_dict(preferences: Any) -> dict[str, Any]:
-    """Serialise a TranslationPreferences instance to a JSON-friendly dictionary.
+def _configuration_to_dict(configuration: Any) -> dict[str, Any]:
+    """Serialise a TranslationConfiguration instance to a JSON-friendly dictionary.
 
     Args:
-        preferences: The :class:`TranslationPreferences` snapshot to serialise.
+        configuration: The :class:`TranslationConfiguration` snapshot to serialise.
 
     Returns:
         Dictionary with each StrEnum field rendered as its string value
         and per-task overrides preserved verbatim.
     """
     return {
-        "copy_activity_paradigm": str(preferences.copy_activity_paradigm),
-        "non_databricks_task_compute": str(preferences.non_databricks_task_compute),
-        "use_lakeflow_connectors": str(preferences.use_lakeflow_connectors),
-        "lakeflow_connector_type": str(preferences.lakeflow_connector_type),
+        "copy_activity_paradigm": str(configuration.copy_activity_paradigm),
+        "non_databricks_task_compute": str(configuration.non_databricks_task_compute),
+        "use_lakeflow_connectors": str(configuration.use_lakeflow_connectors),
+        "lakeflow_connector_type": str(configuration.lakeflow_connector_type),
         "motif_consolidations": {
-            motif_id: str(choice) for motif_id, choice in preferences.motif_consolidations.items()
+            motif_id: str(choice) for motif_id, choice in configuration.motif_consolidations.items()
         },
-        "per_task": dict(preferences.per_task),
+        "per_task": dict(configuration.per_task),
     }
 
 

@@ -34,7 +34,7 @@ class LakeflowConnectorType(StrEnum):
 
     Used only when ``use_lakeflow_connectors`` is ``lakeflow_connect``.  The
     modifier still routes Copy activities that read from a SQL query into
-    the query-based connector regardless of this preference; this enum
+    the query-based connector regardless of this configuration; this enum
     controls the default for table-based Copy activities.
     """
 
@@ -106,7 +106,7 @@ FIELD_TO_ENUM: Final[MappingProxyType[str, type[StrEnum]]] = MappingProxyType(
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
-class TranslationPreferences:
+class TranslationConfiguration:
     """Snapshot of user choices that shape downstream IR transformations.
 
     Each field accepts either a raw string or the corresponding enum
@@ -159,21 +159,21 @@ class TranslationPreferences:
             coerced[motif_id] = choice if isinstance(choice, MotifConsolidate) else MotifConsolidate(choice)
         object.__setattr__(self, "motif_consolidations", coerced)
 
-    def effective_for(self, task_key: str) -> TranslationPreferences:
-        """Returns a preferences view where per-task overrides for *task_key* win.
+    def effective_for(self, task_key: str) -> TranslationConfiguration:
+        """Returns a configuration view where per-task overrides for *task_key* win.
 
         Args:
             task_key: Sanitised task key of the activity being prepared.
 
         Returns:
-            A new :class:`TranslationPreferences` with overrides for
+            A new :class:`TranslationConfiguration` with overrides for
             *task_key* applied on top of the pipeline-wide values, or
             ``self`` unchanged when no overrides exist for *task_key*.
         """
         override = self.per_task.get(task_key)
         if not override:
             return self
-        return TranslationPreferences(
+        return TranslationConfiguration(
             copy_activity_paradigm=CopyActivityParadigm(
                 override.get("copy_activity_paradigm", self.copy_activity_paradigm)
             ),
@@ -201,12 +201,12 @@ class TranslationPreferences:
         )
 
 
-DEFAULT_PREFERENCES: Final[TranslationPreferences] = TranslationPreferences()
+DEFAULT_CONFIGURATION: Final[TranslationConfiguration] = TranslationConfiguration()
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
-class QuestionOption:
-    """One allowed answer to a :class:`TranslationQuestion`.
+class OptionChoice:
+    """One allowed answer to a :class:`TranslationOption`.
 
     Attributes:
         value: Machine-readable identifier matching the backing enum member.
@@ -221,63 +221,63 @@ class QuestionOption:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
-class TranslationQuestion:
-    """A single just-in-time question raised by the IR inspector.
+class TranslationOption:
+    """A single just-in-time option raised by the IR inspector.
 
     Attributes:
-        question_id: Stable identifier matching the preferences field.
-        prompt: Human-readable question text.
-        rationale: One- or two-sentence explanation of why the question
+        option_id: Stable identifier matching the configuration field.
+        prompt: Human-readable option text.
+        rationale: One- or two-sentence explanation of why the option
             is being raised.
         options: Allowed answers; the first option is the conservative
             default and is also exposed via ``default``.
         affected_task_keys: Activity task keys impacted by the answer.
-        default: Default value applied when the caller skips the question.
-        conditions: Tuples of ``(question_id, expected_value)`` that must
+        default: Default value applied when the caller skips the option.
+        conditions: Tuples of ``(option_id, expected_value)`` that must
             already be answered with the expected value before this
-            question surfaces.  An empty tuple means the question is
+            option surfaces.  An empty tuple means the option is
             evaluated solely on its IR/motif preconditions.
     """
 
-    question_id: str
+    option_id: str
     prompt: str
     rationale: str
-    options: tuple[QuestionOption, ...]
+    options: tuple[OptionChoice, ...]
     affected_task_keys: tuple[str, ...]
     default: str
     conditions: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(slots=True, kw_only=True)
-class PendingQuestions:
-    """Outstanding questions for a single pipeline translation.
+class PendingOptions:
+    """Outstanding options for a single pipeline translation.
 
     Attributes:
-        pipeline_name: Name of the pipeline these questions belong to.
-        questions: Ordered list of questions still awaiting an answer.
+        pipeline_name: Name of the pipeline these options belong to.
+        options: Ordered list of options still awaiting an answer.
     """
 
     pipeline_name: str
-    questions: list[TranslationQuestion] = field(default_factory=list)
+    options: list[TranslationOption] = field(default_factory=list)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
-class MigrationInputQuestion:
+class MigrationInputOption:
     """A free-text input gathered before an orchestra phase runs.
 
     Attributes:
-        question_id: Stable identifier the skill uses to key the answer.
-        prompt: Human-readable question text.
+        option_id: Stable identifier the skill uses to key the answer.
+        prompt: Human-readable option text.
         description: One-sentence explanation of what the value is used
             for and what shape is expected (path, URL, identifier).
         default: Default value applied when the caller skips the
-            question; ``None`` when the field is required and has no
+            option; ``None`` when the field is required and has no
             sensible default.
         required: When ``True`` the skill must collect a value; when
             ``False`` the default (which may be ``None``) is permitted.
     """
 
-    question_id: str
+    option_id: str
     prompt: str
     description: str
     default: str | None = None
@@ -286,13 +286,13 @@ class MigrationInputQuestion:
 
 @dataclass(slots=True, kw_only=True)
 class PendingMigrationInputs:
-    """Outstanding migration-phase input questions for a single phase.
+    """Outstanding migration-phase input options for a single phase.
 
     Attributes:
-        phase: The migration phase name (``"ingest"``, ``"translate"``,
+        phase: The migration phase name (``"profile"``, ``"translate"``,
             ``"prepare"``).
-        questions: Ordered list of questions still awaiting an answer.
+        options: Ordered list of options still awaiting an answer.
     """
 
     phase: str
-    questions: list[MigrationInputQuestion] = field(default_factory=list)
+    options: list[MigrationInputOption] = field(default_factory=list)

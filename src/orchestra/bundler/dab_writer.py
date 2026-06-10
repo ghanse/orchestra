@@ -363,7 +363,7 @@ def main() -> None:
         help="Databricks CLI profile to use when downloading workspace artifacts.",
     )
     parser.add_argument(
-        "--no-vendor-workspace-files",
+        "--no-download-workspace-files",
         action="store_true",
         help=(
             "Skip downloading workspace-resident notebooks / Python files / JARs. "
@@ -379,7 +379,7 @@ def main() -> None:
     if args.profile:
         set_profile(args.profile)
 
-    if not args.no_vendor_workspace_files:
+    if not args.no_download_workspace_files:
         workspace_paths = collect_workspace_artifact_paths(args.report)
         if workspace_paths:
             if not prompt_for_auth_if_missing(workspace_paths):
@@ -1366,31 +1366,31 @@ def pipeline_dict_to_ir(pipeline_dict: dict[str, Any]) -> tuple[Pipeline, list[d
         name=pipeline_dict.get("name", "unknown"),
         tasks=activities,
         parameters=parameters or None,
-        translation_preferences=_reconstruct_preferences(pipeline_dict.get("translation_preferences")),
+        translation_configuration=_reconstruct_configuration(pipeline_dict.get("translation_configuration")),
         schedule=pipeline_dict.get("schedule"),
     )
     return pipeline, parameters
 
 
-def _reconstruct_preferences(raw: dict[str, Any] | None) -> Any:
-    """Rebuilds a :class:`TranslationPreferences` from its serialised form.
+def _reconstruct_configuration(raw: dict[str, Any] | None) -> Any:
+    """Rebuilds a :class:`TranslationConfiguration` from its serialised form.
 
     Args:
-        raw: Dict emitted by ``engine._preferences_to_dict``, or ``None``
-            when the report carries no preferences.
+        raw: Dict emitted by ``engine._configuration_to_dict``, or ``None``
+            when the report carries no configuration.
 
     Returns:
-        A :class:`TranslationPreferences` instance, or ``None`` when
+        A :class:`TranslationConfiguration` instance, or ``None`` when
         *raw* is falsy.
     """
     if not raw:
         return None
-    from orchestra.adapter.models import TranslationPreferences
+    from orchestra.adapter.models import TranslationConfiguration
 
     # Reports authored before the databricks_task_compute option was
     # removed may still carry that key; drop it silently so old reports
     # remain rehydratable.
-    return TranslationPreferences(
+    return TranslationConfiguration(
         copy_activity_paradigm=raw.get("copy_activity_paradigm", "notebook"),
         non_databricks_task_compute=raw.get("non_databricks_task_compute", "serverless"),
         use_lakeflow_connectors=raw.get("use_lakeflow_connectors", "existing"),

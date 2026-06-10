@@ -45,6 +45,9 @@ def prepare(activity: WebActivity, *, scope: str = "") -> PreparedActivity:
         base_parameters={
             "url": resolve_param_value(activity.url),
             "method": resolve_param_value(activity.method),
+            # Bind variable/task-value widgets referenced by the resolved body
+            # (e.g. {{tasks._init_batchId.values.batchId}}).
+            **dict(activity.body_required_parameters or {}),
         },
     )
 

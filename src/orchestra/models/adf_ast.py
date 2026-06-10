@@ -149,6 +149,10 @@ class AdfActivity:
     if_true_activities: list[AdfActivity] | None = None
     if_false_activities: list[AdfActivity] | None = None
     activities: list[AdfActivity] | None = None  # ForEach, Until
+    # Original ADF/ARM activity JSON, retained so agentic handlers (e.g.
+    # the Until handler) can translate an unsupported activity directly
+    # from its source definition.
+    raw: dict[str, Any] | None = None
 
 
 # ---------------------------------------------------------------------------

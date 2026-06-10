@@ -41,7 +41,7 @@ Open a fresh conversation and prompt your agent with the path to your JSON templ
 
 Orchestra will use the `migrate` skill to chain 3 other skills:
 
-1. `ingest` parses every JSON file, builds an inventory, and assigns a translation strategy for each resource. This can be deterministic, agentic, or unsupported.
+1. `profile` parses every JSON file, builds an inventory, and assigns a translation strategy for each resource. This can be deterministic, agentic, or unsupported.
 2. `translate` converts each activity to an intermediate representation. The agent will ask for confirmation before running any LLM-based translation.
 3. `prepare` creates a [Declarative Automation Bundle](https://docs.databricks.com/aws/en/dev-tools/bundles/resources) with job configuration files, code, and setup scripts (e.g. to create Databricks Secret Scopes or Unity Catalog connections).
 
