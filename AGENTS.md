@@ -14,17 +14,25 @@ To run the **plugin skills** (profile/translate/prepare/migrate) without a uv-ba
 bootstrap a self-contained virtual environment with pip via the `setup` skill or directly:
 
 ```bash
-bash scripts/bootstrap.sh   # creates .venv and pip-installs requirements.txt
-# then run plugin code with src/ on PYTHONPATH:
-PYTHONPATH=src .venv/bin/python -m orchestra.adapter inputs profile
+bash scripts/bootstrap.sh   # creates the venv, pip-installs requirements.txt, writes .migration-venv
+# then run plugin code with src/ on PYTHONPATH, using the interpreter from the marker file:
+PY="$(cat .migration-venv)"
+PYTHONPATH=src "$PY" -m orchestra.adapter inputs profile
 ```
+
+`bootstrap.sh` creates the venv at `/Workspace/Users/<current user>/.migration-skills` when running
+under Databricks (Genie Code / notebooks; detected via `DATABRICKS_RUNTIME_VERSION`) and at
+`<plugin_dir>/.venv` everywhere else. It writes the resolved interpreter path to
+`<plugin_dir>/.migration-venv`; read that marker file rather than hardcoding an interpreter path.
 
 ### Databricks Serverless / Genie Code Compatibility
 
 All skills and the bootstrap script are designed to run on **Databricks serverless compute**
 (Genie Code, notebook serverless) as well as local machines. Key adaptations:
 
-- **venv:** `bootstrap.sh` falls back to `--without-pip` + `get-pip.py` when `ensurepip`
+- **venv:** `bootstrap.sh` creates the venv at `/Workspace/Users/<current user>/.migration-skills`
+  on Databricks and `<plugin_dir>/.venv` locally, writing the interpreter path to
+  `<plugin_dir>/.migration-venv`. It falls back to `--without-pip` + `get-pip.py` when `ensurepip`
   is unavailable (standard on serverless images).
 - **Auth:** `workspace_downloader.py` auto-detects `DATABRICKS_RUNTIME_VERSION` and writes
   `~/.databrickscfg` from `dbruntime.databricks_repl_context` so the SDK can authenticate.
@@ -44,9 +52,13 @@ ADF JSON -> Parse (AST) -> Classify (Inventory) -> Translate (IR) -> Prepare (Ta
 ## Architecture
 
 ### Three-Phase Pipeline
-1. **Profile** -- Parse ADF JSON from UC volumes -> typed AST -> inventory.json
-2. **Translate** -- Registry dispatch + topological sort -> Pipeline IR (deterministic + agentic gaps)
-3. **Prepare** -- IR -> DAB YAML + generated notebooks + setup scripts
+All three phases write into one shared `<output_dir>` (default `./orchestra_output`):
+the DAB bundle at the top level, kept artifacts under `metadata/`, and transient
+intermediates under `.work/` (pruned by `prepare`).
+
+1. **Profile** -- Parse ADF JSON from UC volumes -> typed AST -> `metadata/inventory.json` + `metadata/profile_report.csv` + verbatim `metadata/<pipeline>.arm.json`
+2. **Translate** -- Registry dispatch + topological sort -> Pipeline IR (deterministic + agentic gaps); transient report at `.work/translation_report.json`
+3. **Prepare** -- IR -> DAB YAML + generated notebooks + setup scripts; prunes `.work/`
 
 ### Key Patterns
 - `@dataclass(slots=True, kw_only=True)` for all models
@@ -61,7 +73,7 @@ ADF JSON -> Parse (AST) -> Classify (Inventory) -> Translate (IR) -> Prepare (Ta
 | `models/adf_ast.py` | Typed AST nodes for ADF definitions |
 | `models/ir.py` | Databricks intermediate representation |
 | `models/dab.py` | DAB output schema types |
-| `parser/adf_loader.py` | Parses ADF exports, produces inventory.json |
+| `parser/adf_loader.py` | Parses ADF exports, produces `metadata/inventory.json` + `metadata/profile_report.csv` |
 | `parser/expression_parser.py` | Translates ADF expressions (@activity, @pipeline, @variables) |
 | `translator/engine.py` | Registry dispatch, topological sort, context threading |
 | `translator/activity_translators/` | One module per deterministic activity type (16 total) |

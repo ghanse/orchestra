@@ -1726,8 +1726,12 @@ if __name__ == "__main__":
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=Path("./orchestra_output/translate"),
-        help="Directory to write translation results into.",
+        default=Path("./orchestra_output"),
+        help=(
+            "Migration output directory. The translation report and other "
+            "intermediate IR are written to its transient .work/ subfolder "
+            "(consumed by the adapter/prepare phases; pruned by prepare)."
+        ),
     )
     parser.add_argument(
         "--pipeline",
@@ -1784,7 +1788,11 @@ if __name__ == "__main__":
     logger.info("Loaded %d pipeline(s) from %s", len(definitions.pipelines), args.source_dir)
 
     output_dir: Path = args.output_dir.resolve()
-    output_dir.mkdir(parents=True, exist_ok=True)
+    # Translation IR is intermediate, not a kept output: write it to a transient
+    # .work/ subfolder of the migration dir.  The prepare phase consumes the
+    # report from here and prunes .work/ at the end, leaving metadata/ curated.
+    work_dir = output_dir / ".work"
+    work_dir.mkdir(parents=True, exist_ok=True)
 
     total_deterministic = 0
     total_agentic = 0
@@ -1801,7 +1809,7 @@ if __name__ == "__main__":
         total_agentic += report.agentic_count
         total_unsupported += report.unsupported_count
 
-        pipeline_file = output_dir / f"{_sanitize_task_key(pipeline.name)}.json"
+        pipeline_file = work_dir / f"{_sanitize_task_key(pipeline.name)}.json"
         pipeline_dict = _pipeline_to_dict(report.pipeline)
         pipeline_file.write_text(json.dumps(pipeline_dict, indent=2, default=str), encoding="utf-8")
         logger.info("Wrote pipeline IR to %s", pipeline_file)
@@ -1809,7 +1817,7 @@ if __name__ == "__main__":
 
         # Write debug IR if requested
         if args.debug:
-            debug_file = output_dir / f"{_sanitize_task_key(pipeline.name)}.debug.json"
+            debug_file = work_dir / f"{_sanitize_task_key(pipeline.name)}.debug.json"
             debug_dict = _pipeline_to_debug_dict(report.pipeline)
             debug_file.write_text(json.dumps(debug_dict, indent=2, default=str), encoding="utf-8")
             logger.info("Wrote debug IR to %s", debug_file)
@@ -1824,7 +1832,7 @@ if __name__ == "__main__":
     # Write canonical translation_report.json so downstream tools (adapter
     # inspect, workspace-paths, dab_writer) can always reference a well-known
     # filename regardless of whether --pipeline was specified.
-    report_file = output_dir / "translation_report.json"
+    report_file = work_dir / "translation_report.json"
     if len(all_pipeline_dicts) == 1:
         report_payload = all_pipeline_dicts[0]
     else:
@@ -1833,7 +1841,7 @@ if __name__ == "__main__":
     logger.info("Wrote translation_report.json to %s", report_file)
 
     if all_gaps:
-        gaps_file = output_dir / "gaps.json"
+        gaps_file = work_dir / "gaps.json"
         gaps_file.write_text(json.dumps(all_gaps, indent=2, default=str), encoding="utf-8")
         logger.info("Wrote %d gap(s) to %s", len(all_gaps), gaps_file)
 
@@ -1844,3 +1852,4 @@ if __name__ == "__main__":
     print(f"Agentic:          {total_agentic}")
     print(f"Unsupported:      {total_unsupported}")
     print(f"Total:            {total}")
+    print(f"\nTranslation report (intermediate): {report_file}")

@@ -37,16 +37,19 @@ any Python commands, ensure the plugin's virtual environment is bootstrapped. Ru
 bash <plugin_dir>/scripts/bootstrap.sh
 ```
 
-This creates `<plugin_dir>/.venv` and installs dependencies from `requirements.txt`. If Python or 
-pip is missing, the script prints a warning telling the user what to install — relay it and stop
-until they have installed Python 3.12+ and pip.
+This creates the venv (`<plugin_dir>/.venv` locally, or `/Workspace/Users/<current user>/.migration-skills`
+on Databricks) and installs dependencies from `requirements.txt`. If Python or pip is missing, the
+script prints a warning telling the user what to install — relay it and stop until they have installed
+Python 3.12+ and pip.
 
 ### Databricks serverless / Genie Code environments
 
 When running on Databricks serverless compute, two differences apply automatically:
 
-1. **venv creation:** The bootstrap script falls back to `--without-pip` + `get-pip.py` since
-   `ensurepip` is not bundled. No manual workaround needed.
+1. **venv creation:** The bootstrap script creates the venv at
+   `/Workspace/Users/<current user>/.migration-skills` (persisted in the workspace) and falls back to
+   `--without-pip` + `get-pip.py` since `ensurepip` is not bundled. No manual workaround needed. The
+   resolved interpreter path is written to `<plugin_dir>/.migration-venv`.
 2. **Workspace auth:** The `workspace_downloader` module detects the Databricks runtime and
    auto-configures `~/.databrickscfg` from the notebook context token. Skip the
    `databricks auth login` interactive step.
@@ -54,12 +57,14 @@ When running on Databricks serverless compute, two differences apply automatical
    Present the generated bundle for review and instruct the user to validate/deploy from
    the web terminal, local CLI, or CI/CD.
 
-Run **every** Python command in this skill with the venv interpreter and `src/` on `PYTHONPATH` 
-(use it anywhere a command below shows `python3`):
+Run **every** Python command in this skill with the venv interpreter (from the marker file
+`<plugin_dir>/.migration-venv`) and `src/` on `PYTHONPATH` (use `$PY` anywhere a command below
+shows `python3`):
 
 ```bash
 export PYTHONPATH="<plugin_dir>/src"
-"<plugin_dir>/.venv/bin/python" <plugin_dir>/src/orchestra/parser/adf_loader.py ...
+PY="$(cat <plugin_dir>/.migration-venv)"
+"$PY" -m orchestra.adapter inputs profile
 ```
 
 ## Workflow
@@ -72,15 +77,15 @@ Before invoking profile, run the adapter inputs subcommand once per
 phase so the agent surfaces the matching free-text prompts:
 
 ```bash
-python3 -m orchestra.adapter inputs profile
-python3 -m orchestra.adapter inputs translate
-python3 -m orchestra.adapter inputs prepare
+"$PY" -m orchestra.adapter inputs profile
+"$PY" -m orchestra.adapter inputs translate
+"$PY" -m orchestra.adapter inputs prepare
 ```
 
-Each response carries the options for that phase plus their
-descriptions and defaults.  Collect answers from the user (or accept
-the defaults), persist them to `<output_dir>/<phase>/inputs.json`, and
-thread the values into the downstream CLI calls.
+Each response carries the options for that phase plus their descriptions and
+defaults.  Collect answers from the user (or accept the defaults) and thread the
+values into the downstream CLI calls. All phases share **one** migration
+`<output_dir>` (default `./orchestra_output`).
 
 ### Step 1 — Gather inputs
 
@@ -89,7 +94,7 @@ Ask the user for all required inputs upfront:
 | Parameter | Description | Required | Default |
 |---|---|---|---|
 | ADF source path | UC volume path or local directory with ADF JSON files | Yes | — |
-| Output directory | Root directory for all orchestra output | No | `./orchestra_output/` |
+| Output directory | Single shared root for all orchestra output (bundle + `metadata/`) | No | `./orchestra_output` |
 | Target catalog | Unity Catalog catalog for tables/volumes | No | `main` |
 | Target schema | Schema within the catalog | No | `default` |
 | Bundle name | Name for the generated DABs project | No | derived from pipelines |
@@ -103,7 +108,7 @@ Example prompt:
 
 ### Step 2 — Phase 1: Profile
 
-Invoke the `orchestra:profile` skill with the ADF source path and output directory set to `<output_dir>/profile/`.
+Invoke the `orchestra:profile` skill with the ADF source path and `--output-dir <output_dir>` (the shared migration dir). Profile writes `<output_dir>/metadata/{inventory.json, profile_report.csv, <pipeline>.arm.json}`.
 
 Wait for the profile to complete and present the inventory summary:
 
@@ -128,7 +133,7 @@ Ask the user to review the inventory and confirm before continuing:
 
 If the user says no, explain the options:
 - Re-run profile with a different source directory
-- Review the `inventory.json` to understand unsupported activities
+- Review `<output_dir>/metadata/inventory.json` (and `profile_report.csv`) to understand unsupported activities and pipeline complexity
 - Manually classify activities before proceeding
 
 If the user says yes, proceed to step 4.
@@ -136,9 +141,8 @@ If the user says yes, proceed to step 4.
 ### Step 4 — Phase 2: Translate
 
 Invoke the `orchestra:translate` skill with:
-- Inventory path: `<output_dir>/profile/inventory.json`
-- ADF source dir: the original ADF source path
-- Output dir: `<output_dir>/translate/`
+- ADF source dir: the original ADF source path (same `--source-dir` as profile)
+- Output dir: the same shared `<output_dir>` (translate writes its report to `<output_dir>/.work/`)
 
 Wait for the translation to complete and present the summary:
 
@@ -165,20 +169,12 @@ For failures, suggest:
 
 ### Step 5.1 — Gather just-in-time translation configuration
 
-Drive the loop multi-pass: re-run `inspect --answers <answers.json>`
-after each batch of answers so the adapter can surface chained
-metadata-driven prompts.  When the user opts to consolidate a
-metadata-driven motif and the agent has a database tool, run the
-lookup query directly and persist the rows to
-`<output_dir>/translate/lookup_values.json`; otherwise prompt the user
-for a CSV file or comma-separated string and run:
-
-```bash
-python3 -m orchestra.adapter materialize-lookup "<csv-or-path>" \
-    --out <output_dir>/translate/lookup_values.json
-```
-
-Pass `--lookup-values` to the modify call when the file exists.
+Drive the loop multi-pass: re-run `inspect` with all answers collected so far
+appended as `--answer OPTION_ID=VALUE` flags so the adapter can surface chained
+metadata-driven prompts. When the user opts to consolidate a metadata-driven motif
+and the agent has a database tool, run the lookup query to get CSV rows; otherwise
+prompt the user for a CSV file path or literal CSV string. Pass it inline to
+`modify` via `--lookup-csv "<csv-or-path>"` (no intermediate JSON file).
 
 #### Legacy flow details
 
@@ -186,24 +182,26 @@ Before bundle generation, run the adapter inspect CLI on the translation
 report to surface any pipeline-modifier options the IR raises:
 
 ```bash
-python3 -m orchestra.adapter inspect <output_dir>/translate/translation_report.json
+"$PY" -m orchestra.adapter inspect <output_dir>/.work/translation_report.json
 ```
 
-For each option in the JSON output, prompt the user with the rationale,
-options, and the affected task keys.  Collect answers into
-`<output_dir>/translate/answers.json` keyed by `option_id`, then apply
-them to a stamped report:
+For each option in the JSON output, prompt the user with the rationale, options,
+and the affected task keys. Then apply the collected answers as repeatable
+`--answer OPTION_ID=VALUE` flags:
 
 ```bash
-python3 -m orchestra.adapter modify \
-  <output_dir>/translate/translation_report.json \
-  <output_dir>/translate/answers.json \
-  --out <output_dir>/translate/translation_report.stamped.json
+"$PY" -m orchestra.adapter modify \
+  <output_dir>/.work/translation_report.json \
+  --output-dir <output_dir> \
+  --answer copy_activity_paradigm=sdp \
+  --answer non_databricks_task_compute=serverless \
+  [--lookup-csv "<csv-or-path>"]
 ```
 
-Use the stamped report (when produced) as the input to the prepare phase.
-When inspect emits no options for any pipeline, skip modify and use the
-original report.
+`modify` writes the stamped report to `<output_dir>/.work/translation_report.stamped.json`
+and the kept answers record to `<output_dir>/metadata/configuration.json`. The prepare phase
+reads the stamped report from `.work/` automatically. When inspect emits no options for any
+pipeline, skip `modify` — prepare falls back to the un-stamped report.
 
 The options the adapter raises:
 
@@ -239,8 +237,8 @@ Before invoking the prepare phase, run the adapter's
 the bundle would need to download:
 
 ```bash
-python3 -m orchestra.adapter workspace-paths \
-  <output_dir>/translate/translation_report.stamped.json \
+"$PY" -m orchestra.adapter workspace-paths \
+  <output_dir>/.work/translation_report.stamped.json \
   --source-dir <adf_source_path>
 ```
 
@@ -261,10 +259,13 @@ Skip this step entirely when `needs_auth` is `false`.
 ### Step 7 — Phase 3: Prepare
 
 Invoke the `orchestra:prepare` skill with:
-- Translation report: `<output_dir>/translate/translation_report.stamped.json` if step 5.5 produced one, otherwise `<output_dir>/translate/translation_report.json`
-- Output dir: `<output_dir>/dab_output/`
+- Output dir: the same shared `<output_dir>` — prepare reads the stamped report from
+  `<output_dir>/.work/` automatically (no report path needed) and writes the bundle here
 - Catalog: user-specified or `main`
 - Schema: user-specified or `default`
+
+Prepare prunes the transient `<output_dir>/.work/` after a successful build, leaving the
+bundle (databricks.yml, resources/, src/, SETUP.md) plus the kept `metadata/` folder.
 
 ### Step 8 — Present final summary
 
@@ -275,20 +276,20 @@ Migration Complete
 ==================
 
 Source:    /Volumes/main/default/adf_export (12 ADF pipelines)
-Output:    ./orchestra_output/dab_output/
+Output:    ./orchestra_output/  (bundle + metadata/)
 
 Coverage:
   Total activities:           47
   Successfully translated:    43 (91.5%)
   Placeholder tasks:           4 ( 8.5%)
 
-Generated Files:
-  dab_output/
-    databricks.yml
-    resources/          (3 job definitions)
-    src/notebooks/      (12 notebooks)
-    setup/              (3 setup scripts)
-    tests/              (3 test files)
+Generated Files (under ./orchestra_output/):
+  databricks.yml
+  resources/          (3 job definitions)
+  src/notebooks/      (12 notebooks)
+  src/setup/          (3 setup scripts)
+  SETUP.md
+  metadata/           inventory.json, profile_report.csv, <pipeline>.arm.json, configuration.json
 
 Setup Required:
   - Run setup/create_volumes.py to create UC volumes
@@ -296,7 +297,7 @@ Setup Required:
   - Run setup/register_connections.py to register external connections
 
 Next Steps:
-  1. cd ./orchestra_output/dab_output/
+  1. cd ./orchestra_output/
   2. Review generated files, especially notebooks and setup scripts
   3. databricks bundle validate --target dev
   4. Run setup scripts on the target workspace
@@ -328,10 +329,10 @@ See `references/workflow.md` for a detailed description of the three-phase archi
 
 ## Output Artifacts
 
-All artifacts from all three phases are produced under the output directory:
+All three phases write into a single shared `<output_dir>` (default `./orchestra_output`):
 
-| Directory | Phase | Contents |
+| Path | Phase | Contents |
 |---|---|---|
-| `profile/` | Profile | `inventory.json`, `ast/`, `parse_errors.json` |
-| `translate/` | Translate | `translation_report.json`, `ir/`, `notebooks/`, `agentic_results/` |
-| `dab_output/` | Prepare | `databricks.yml`, `resources/`, `src/`, `setup/`, `tests/` |
+| `metadata/` | Profile + Modify | `inventory.json`, `profile_report.csv`, `<pipeline>.arm.json`, `configuration.json` |
+| `databricks.yml`, `resources/`, `src/`, `SETUP.md` | Prepare | The deployable DAB bundle |
+| `.work/` | Translate/Modify (transient) | Translation report + IR; pruned by prepare |

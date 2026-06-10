@@ -36,16 +36,19 @@ any Python commands, ensure the plugin's virtual environment is bootstrapped. Ru
 bash <plugin_dir>/scripts/bootstrap.sh
 ```
 
-This creates `<plugin_dir>/.venv` and installs dependencies from `requirements.txt`. If Python or 
-pip is missing, the script prints a warning telling the user what to install — relay it and stop
-until they have installed Python 3.12+ and pip.
+This creates the venv (`<plugin_dir>/.venv` locally, or `/Workspace/Users/<current user>/.migration-skills`
+on Databricks) and installs dependencies from `requirements.txt`. If Python or pip is missing, the
+script prints a warning telling the user what to install — relay it and stop until they have installed
+Python 3.12+ and pip.
 
-Run **every** Python command in this skill with the venv interpreter and `src/` on `PYTHONPATH` 
-(use it anywhere a command below shows `python3`):
+Run **every** Python command in this skill with the venv interpreter (from the marker file
+`<plugin_dir>/.migration-venv`) and `src/` on `PYTHONPATH` (use `$PY` anywhere a command below
+shows `python3`):
 
 ```bash
 export PYTHONPATH="<plugin_dir>/src"
-"<plugin_dir>/.venv/bin/python" <plugin_dir>/src/orchestra/parser/adf_loader.py ...
+PY="$(cat <plugin_dir>/.migration-venv)"
+"$PY" -m orchestra.bundler.dab_writer ...
 ```
 
 ## Workflow
@@ -54,11 +57,14 @@ Follow these steps in order:
 
 ### Step 1 — Locate the translation report
 
-Read `translation_report.json` from the translate phase. If the path is not in conversation context, ask the user:
+The translate/modify phases left the stamped report at `<output_dir>/.work/translation_report.stamped.json`
+(or `<output_dir>/.work/translation_report.json` when `modify` was not run). If the shared
+`<output_dir>` is not in conversation context, ask the user:
 
-> Where is the translation_report.json from the translate phase? (default: `./orchestra_output/translate/translation_report.json`)
+> Which migration output directory should I build the bundle in? (default: `./orchestra_output`)
 
-Validate the file exists and all required translations have status `translated`.
+`prepare` reads the report from `<output_dir>/.work/` automatically — you do not pass a report path.
+Validate that a report exists there and that all required translations have status `translated`.
 
 ### Step 2 — Gather deployment parameters
 
@@ -68,7 +74,7 @@ Ask the user for the following (provide defaults):
 |---|---|---|
 | Target catalog | Unity Catalog catalog for tables/volumes | `main` |
 | Target schema | Schema within the catalog | `default` |
-| Output directory | Where to write the DABs project | `./dab_output/` |
+| Output directory | Shared migration dir; bundle + `metadata/` are written here | `./orchestra_output` |
 | Bundle name | Name for the DABs project | derived from first pipeline name |
 | Target environments | Deployment targets to configure | `dev, staging, prod` |
 | Warehouse ID | SQL warehouse for SQL tasks (optional) | prompt if SQL tasks exist |
@@ -89,8 +95,8 @@ files, SparkJar libraries) or DBFS paths that the bundle should
 download to be self-contained:
 
 ```bash
-python3 -m orchestra.adapter workspace-paths \
-  <translation_report_path> \
+"$PY" -m orchestra.adapter workspace-paths \
+  <output_dir>/.work/translation_report.stamped.json \
   --source-dir <adf_source_dir>
 ```
 
@@ -133,22 +139,26 @@ know which notebooks the bundle will download.
 Execute the DAB writer:
 
 ```bash
-# Unified runner (recommended): `python -m orchestra.adapter prepare ...`
+# Unified runner (recommended): `"$PY" -m orchestra.adapter prepare ...`
 # forwards to dab_writer below.
-python3 <plugin_dir>/src/orchestra/bundler/dab_writer.py \
-  --report <translation_report_path> \
+"$PY" -m orchestra.bundler.dab_writer \
   --output-dir <output_dir> \
   --catalog <catalog> \
   --schema <schema> \
   --bundle-name <bundle_name> \
   [--profile <databricks-cli-profile>] \
-  [--no-download-workspace-files]
+  [--no-download-workspace-files] \
+  [--keep-intermediates]
 ```
 
 Where:
-- `<plugin_dir>` is the root of the orchestra plugin
-- `<translation_report_path>` is the path to `translation_report.json`
+- `<output_dir>` is the shared migration directory — `prepare` defaults `--report` to
+  `<output_dir>/.work/translation_report.stamped.json` (falling back to the un-stamped report).
+  Pass `--report <path>` only to override.
 - Other parameters are from step 2
+- After a successful build, `prepare` **prunes the transient `<output_dir>/.work/`** so the
+  final tree contains only the bundle and the kept `metadata/` files. Pass `--keep-intermediates`
+  to retain `.work/` for debugging.
 
 **Workspace artifact downloading (default: enabled).** When the report references workspace-resident notebooks (`/Shared/...`), DBFS Spark JARs (`dbfs:/...`), or Spark Python files, the preparer downloads them via the Databricks CLI auth so the resulting bundle is self-contained and deployable across environments. Downloaded notebooks are downloaded under `src/notebooks/` and bound to the default `job_cluster` (since they may rely on classic-compute features). The original `notebook_path` in the resource YAML is rewritten to the bundle-relative path `../src/notebooks/<file>.py`.
 
@@ -175,24 +185,26 @@ Use `--no-download-workspace-files` to opt out entirely; the bundle then keeps o
 Show the user what was generated:
 
 ```
-dab_output/
+<output_dir>/                         # the shared migration directory
   databricks.yml
   resources/
     etl_main_job.yml
-    etl_secondary_job.yml
     transform_dlt_pipeline.yml
   src/
     notebooks/
       copy_from_blob.py
-      lookup_config.py
       web_activity_call.py
-      set_variable_helper.py
-  setup/
-    create_volumes.py
-    create_secrets.py
-    register_connections.py
-  tests/
-    test_etl_main.py
+    setup/
+      create_volumes.py
+      create_secrets.py
+      register_connections.py
+  SETUP.md
+  metadata/                           # kept migration metadata (from profile + modify)
+    inventory.json
+    profile_report.csv
+    <pipeline>.arm.json               # verbatim original ADF/ARM source
+    configuration.json                # the collected configuration answers
+  # .work/ (transient translation report + IR) is pruned after a successful build
 ```
 
 ### Step 5 — Explain setup tasks
@@ -254,12 +266,18 @@ Recommend running `databricks bundle validate` first to catch any configuration 
 
 ## Output Artifacts
 
+All under the shared `<output_dir>`:
+
 | File | Description |
 |---|---|
 | `databricks.yml` | Root bundle configuration |
 | `resources/*.yml` | Job and pipeline YAML definitions |
 | `src/notebooks/*.py` | Generated notebooks |
-| `setup/*.py` | Infrastructure setup scripts |
-| `tests/*.py` | Skeleton test files |
+| `src/setup/*.py` | Infrastructure setup scripts |
+| `SETUP.md` | Human-readable setup instructions |
+| `metadata/inventory.json` | Activity inventory (from profile) |
+| `metadata/profile_report.csv` | Per-pipeline complexity report (from profile) |
+| `metadata/<pipeline>.arm.json` | Verbatim original ADF/ARM source (from profile) |
+| `metadata/configuration.json` | Collected configuration answers (from modify) |
 
 > **Notification destinations.** When a `copy_and_notify` motif was opted into a Slack/Teams/PagerDuty/Generic-Webhook destination, the destination is created (or reused by display name) via the SDK at **prompt time** (the `modify` phase), and its resolved id is carried in the report; prepare simply wires that id into the task's `webhook_notifications`. If the report has no pre-resolved id (creation was deferred or failed earlier), prepare retries the create; failing that — e.g. no workspace auth — a `notification_destination` setup task is emitted in SETUP.md instead and the task ships without notifications. Email destinations use raw `email_notifications` and never create an SDK destination.

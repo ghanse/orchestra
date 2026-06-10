@@ -686,20 +686,28 @@ class TestCli:
         pipeline = Pipeline(name="p", tasks=[_delta_copy()])
         report_path = tmp_path / "report.json"
         report_path.write_text(json.dumps(_pipeline_to_dict(pipeline)))
-        answers_path = tmp_path / "answers.json"
-        answers_path.write_text(
-            json.dumps(
-                {
-                    "copy_activity_paradigm": "sdp",
-                    "non_databricks_task_compute": "classic",
-                    "use_lakeflow_connectors": "lakeflow_connect",
-                }
-            )
-        )
         out_path = tmp_path / "modified.json"
-        exit_code = adapter_cli_main(["modify", str(report_path), str(answers_path), "--out", str(out_path)])
+        exit_code = adapter_cli_main(
+            [
+                "modify",
+                str(report_path),
+                "--answer",
+                "copy_activity_paradigm=sdp",
+                "--answer",
+                "non_databricks_task_compute=classic",
+                "--answer",
+                "use_lakeflow_connectors=lakeflow_connect",
+                "--out",
+                str(out_path),
+                "--config-out",
+                str(tmp_path / "configuration.json"),
+            ]
+        )
         assert exit_code == 0
         modified = json.loads(out_path.read_text())
+        # The collected answers are persisted verbatim as configuration.json.
+        config = json.loads((tmp_path / "configuration.json").read_text())
+        assert config["copy_activity_paradigm"] == "sdp"
         assert modified["translation_configuration"]["copy_activity_paradigm"] == "sdp"
         copy_task = next(task for task in modified["tasks"] if task["task_key"] == "copy_to_delta")
         assert copy_task["target_format"] == "sdp"
@@ -733,28 +741,23 @@ class TestCli:
         pipeline = Pipeline(name="p", tasks=[motif])
         report_path = tmp_path / "report.json"
         report_path.write_text(json.dumps(_pipeline_to_dict(pipeline)))
-        answers_path = tmp_path / "answers.json"
-        answers_path.write_text(
-            json.dumps(
-                {
-                    "metadata_driven_consolidate": "consolidate",
-                    "metadata_driven_access": "yes",
-                    "metadata_driven_size": "small",
-                }
-            )
-        )
-        lookup_values_path = tmp_path / "lookup_values.json"
-        lookup_values_path.write_text(json.dumps([{"source_table": "orders"}]))
         out_path = tmp_path / "modified.json"
         exit_code = adapter_cli_main(
             [
                 "modify",
                 str(report_path),
-                str(answers_path),
-                "--lookup-values",
-                str(lookup_values_path),
+                "--answer",
+                "metadata_driven_consolidate=consolidate",
+                "--answer",
+                "metadata_driven_access=yes",
+                "--answer",
+                "metadata_driven_size=small",
+                "--lookup-csv",
+                "source_table\norders",
                 "--out",
                 str(out_path),
+                "--config-out",
+                str(tmp_path / "configuration.json"),
             ]
         )
         assert exit_code == 0
@@ -769,11 +772,72 @@ class TestCli:
         pipeline = Pipeline(name="p", tasks=[_delta_copy()])
         report_path = tmp_path / "report.json"
         report_path.write_text(json.dumps(_pipeline_to_dict(pipeline)))
-        answers_path = tmp_path / "answers.json"
-        answers_path.write_text(json.dumps({"copy_activity_paradigm": "yaml"}))
         out_path = tmp_path / "modified.json"
-        exit_code = adapter_cli_main(["modify", str(report_path), str(answers_path), "--out", str(out_path)])
+        exit_code = adapter_cli_main(
+            ["modify", str(report_path), "--answer", "copy_activity_paradigm=yaml", "--out", str(out_path)]
+        )
         assert exit_code == 2
+
+    def test_modify_output_dir_convention_writes_work_and_metadata(self, tmp_path: Path):
+        from orchestra.translator.engine import _pipeline_to_dict
+
+        pipeline = Pipeline(name="p", tasks=[_delta_copy()])
+        report_path = tmp_path / ".work" / "translation_report.json"
+        report_path.parent.mkdir(parents=True)
+        report_path.write_text(json.dumps(_pipeline_to_dict(pipeline)))
+        exit_code = adapter_cli_main(
+            ["modify", str(report_path), "--output-dir", str(tmp_path), "--answer", "copy_activity_paradigm=sdp"]
+        )
+        assert exit_code == 0
+        # Stamped IR lands in the transient .work/, configuration.json in metadata/.
+        assert (tmp_path / ".work" / "translation_report.stamped.json").exists()
+        config = json.loads((tmp_path / "metadata" / "configuration.json").read_text())
+        assert config == {"copy_activity_paradigm": "sdp"}
+
+    def test_modify_requires_output_dir_or_out(self, tmp_path: Path):
+        from orchestra.translator.engine import _pipeline_to_dict
+
+        pipeline = Pipeline(name="p", tasks=[_delta_copy()])
+        report_path = tmp_path / "report.json"
+        report_path.write_text(json.dumps(_pipeline_to_dict(pipeline)))
+        exit_code = adapter_cli_main(["modify", str(report_path), "--answer", "copy_activity_paradigm=sdp"])
+        assert exit_code == 2
+
+    def test_inspect_answer_gates_chained_followups(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]):
+        from orchestra.models.ir import CopyActivity, Dependency, WebActivity
+        from orchestra.translator.engine import _pipeline_to_dict
+
+        copy = CopyActivity(name="Load", task_key="load")
+        notify = WebActivity(
+            name="Notify",
+            task_key="notify",
+            url="https://x",
+            method="POST",
+            depends_on=[Dependency(task_key="load", outcome="Failed")],
+        )
+        pipeline = Pipeline(name="p", tasks=[copy, notify])
+        report_path = tmp_path / "report.json"
+        report_path.write_text(json.dumps(_pipeline_to_dict(pipeline)))
+
+        # No answers: only the destination question surfaces.
+        assert adapter_cli_main(["inspect", str(report_path)]) == 0
+        ids = {o["option_id"] for o in json.loads(capsys.readouterr().out)["pipelines"][0]["options"]}
+        assert "copy_notify_destination" in ids
+        assert "copy_notify_email_recipients" not in ids
+
+        # Pass the destination answer via --answer: the email follow-up now appears.
+        assert adapter_cli_main(["inspect", str(report_path), "--answer", "copy_notify_destination=email"]) == 0
+        ids = {o["option_id"] for o in json.loads(capsys.readouterr().out)["pipelines"][0]["options"]}
+        assert "copy_notify_email_recipients" in ids
+
+    def test_inspect_rejects_malformed_answer(self, tmp_path: Path):
+        from orchestra.translator.engine import _pipeline_to_dict
+
+        pipeline = Pipeline(name="p", tasks=[_delta_copy()])
+        report_path = tmp_path / "report.json"
+        report_path.write_text(json.dumps(_pipeline_to_dict(pipeline)))
+        # Missing '=' -> validation error -> exit 2.
+        assert adapter_cli_main(["inspect", str(report_path), "--answer", "no_equals_sign"]) == 2
 
 
 class TestBundleOutput:

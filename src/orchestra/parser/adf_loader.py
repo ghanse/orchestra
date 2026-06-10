@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import logging
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -66,6 +68,23 @@ AGENTIC_TYPES: dict[str, str] = {
     "Fail": "adf-to-databricks:adf-pipeline-converter",
     "Script": "adf-to-databricks:adf-pipeline-converter",
 }
+
+# Activity complexity categories, easiest-to-migrate first.  Databricks-native
+# activities map almost 1:1 to a Databricks task; control-flow / parameter-setting
+# activities translate deterministically but restructure the DAG; everything else
+# (Copy, Web, Lookup, data movement, agentic types, ...) carries the most migration
+# risk.  Weights feed the complexity score used to size each pipeline.
+_DATABRICKS_NATIVE_TYPES: frozenset[str] = frozenset(
+    {"DatabricksNotebook", "DatabricksSparkJar", "DatabricksSparkPython", "DatabricksJob"}
+)
+_CONTROL_FLOW_TYPES: frozenset[str] = frozenset(
+    {"ForEach", "IfCondition", "Switch", "SetVariable", "AppendVariable", "Filter", "Wait", "Until"}
+)
+_ACTIVITY_WEIGHT: dict[str, int] = {"databricks": 1, "control": 2, "other": 3}
+
+# Complexity-score -> T-shirt size cutoffs (inclusive upper bounds).  Score is
+# sum(activity weights) + #datasets + #linked_services + #collapsible_patterns.
+_TSHIRT_CUTOFFS: tuple[tuple[int, str], ...] = ((5, "S"), (15, "M"), (30, "L"))
 
 
 # ---------------------------------------------------------------------------
@@ -266,6 +285,7 @@ def _parse_pipeline_json(data: dict[str, Any], *, fallback_name: str = "unknown"
     Returns:
         Parsed :class:`AdfPipeline`.
     """
+    raw_source = data
     data = _normalize_arm(data)
     props = data.get("properties", data)
     name = data.get("name") or props.get("name") or fallback_name
@@ -310,6 +330,7 @@ def _parse_pipeline_json(data: dict[str, Any], *, fallback_name: str = "unknown"
         variables=variables,
         annotations=annotations,
         folder=folder,
+        raw=raw_source,
     )
 
 
@@ -704,6 +725,181 @@ def _inventory_to_dict(inventory: Inventory, source_dir: str) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Profile complexity report (CSV)
+# ---------------------------------------------------------------------------
+
+
+def _walk_activities(activities: list[AdfActivity]):
+    """Yields every activity in *activities*, descending into container children."""
+    for activity in activities:
+        yield activity
+        for child in (activity.if_true_activities, activity.if_false_activities, activity.activities):
+            if child:
+                yield from _walk_activities(child)
+
+
+def _activity_category(activity_type: str) -> str:
+    """Returns the complexity category of *activity_type*.
+
+    One of ``"databricks"`` (native, simplest), ``"control"`` (control-flow /
+    parameter-setting), or ``"other"`` (data movement, web, agentic, ...).
+    """
+    if activity_type in _DATABRICKS_NATIVE_TYPES:
+        return "databricks"
+    if activity_type in _CONTROL_FLOW_TYPES:
+        return "control"
+    return "other"
+
+
+def _dataset_refs_for_activity(activity: AdfActivity) -> set[str]:
+    """Collects dataset names referenced by a single activity.
+
+    Looks at the activity's ``inputs``/``outputs`` plus the ``dataset`` /
+    ``datasets`` references some activity types (Lookup, Delete, GetMetadata)
+    carry inside ``typeProperties``.
+    """
+    names: set[str] = set()
+    for ref in (activity.inputs or []) + (activity.outputs or []):
+        if ref.reference_name:
+            names.add(ref.reference_name)
+    props = activity.type_properties or {}
+    for key in ("dataset", "source", "sink"):
+        candidate = props.get(key)
+        if isinstance(candidate, dict) and candidate.get("referenceName"):
+            names.add(candidate["referenceName"])
+    return names
+
+
+def _pipeline_reference_counts(
+    pipeline: AdfPipeline, definitions: AdfDefinitions
+) -> tuple[int, set[str], set[str], dict[str, int]]:
+    """Returns ``(activity_count, dataset_names, linked_service_names, category_counts)``.
+
+    Linked services are attributed both from activity-level references (e.g.
+    DatabricksNotebook compute) and transitively via the datasets a pipeline
+    touches (each dataset names its backing linked service).
+    """
+    dataset_names: set[str] = set()
+    linked_service_names: set[str] = set()
+    category_counts = {"databricks": 0, "control": 0, "other": 0}
+    activity_count = 0
+    for activity in _walk_activities(pipeline.activities):
+        activity_count += 1
+        category_counts[_activity_category(activity.type)] += 1
+        dataset_names |= _dataset_refs_for_activity(activity)
+        if activity.linked_service_name and activity.linked_service_name.reference_name:
+            linked_service_names.add(activity.linked_service_name.reference_name)
+    for dataset_name in dataset_names:
+        dataset = definitions.datasets.get(dataset_name)
+        if dataset and dataset.linked_service_name:
+            linked_service_names.add(dataset.linked_service_name)
+    return activity_count, dataset_names, linked_service_names, category_counts
+
+
+def _complexity_score(category_counts: dict[str, int], n_datasets: int, n_linked: int, n_patterns: int) -> int:
+    """Weighted complexity score: activity weights + datasets + linked services + patterns."""
+    weighted = sum(category_counts[cat] * _ACTIVITY_WEIGHT[cat] for cat in category_counts)
+    return weighted + n_datasets + n_linked + n_patterns
+
+
+def _tshirt_size(score: int) -> str:
+    """Maps a complexity score to a T-shirt size (S / M / L / XL)."""
+    for cutoff, size in _TSHIRT_CUTOFFS:
+        if score <= cutoff:
+            return size
+    return "XL"
+
+
+def build_profile_rows(definitions: AdfDefinitions) -> list[dict[str, Any]]:
+    """Builds one profile-report row per pipeline.
+
+    Each row carries the source activity / dataset / linked-service counts, the
+    number of collapsible motif patterns detected, and a weighted complexity
+    score plus its T-shirt size.
+
+    Args:
+        definitions: Parsed ADF definitions.
+
+    Returns:
+        List of row dicts ordered by pipeline name.
+    """
+    from orchestra.motifs.detector import detect_motifs
+
+    rows: list[dict[str, Any]] = []
+    for pipeline in sorted(definitions.pipelines, key=lambda p: p.name):
+        activity_count, datasets, linked_services, category_counts = _pipeline_reference_counts(pipeline, definitions)
+        try:
+            n_patterns = len(detect_motifs(pipeline, definitions))
+        except Exception as exc:  # noqa: BLE001 - profiling must never hard-fail on motif detection
+            logger.warning("Motif detection failed for pipeline %r: %s", pipeline.name, exc)
+            n_patterns = 0
+        score = _complexity_score(category_counts, len(datasets), len(linked_services), n_patterns)
+        rows.append(
+            {
+                "pipeline": pipeline.name,
+                "activities": activity_count,
+                "datasets": len(datasets),
+                "linked_services": len(linked_services),
+                "collapsible_patterns": n_patterns,
+                "databricks_native_activities": category_counts["databricks"],
+                "control_flow_activities": category_counts["control"],
+                "other_activities": category_counts["other"],
+                "complexity_score": score,
+                "complexity_size": _tshirt_size(score),
+            }
+        )
+    return rows
+
+
+_PROFILE_CSV_COLUMNS: tuple[str, ...] = (
+    "pipeline",
+    "activities",
+    "datasets",
+    "linked_services",
+    "collapsible_patterns",
+    "databricks_native_activities",
+    "control_flow_activities",
+    "other_activities",
+    "complexity_score",
+    "complexity_size",
+)
+
+
+def write_profile_csv(rows: list[dict[str, Any]], path: Path) -> None:
+    """Writes the per-pipeline profile rows to *path* as CSV."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(_PROFILE_CSV_COLUMNS))
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(row)
+
+
+def _sanitize_filename(name: str) -> str:
+    """Slugifies a pipeline name into a safe filename stem."""
+    slug = re.sub(r"[^0-9A-Za-z._-]+", "_", name).strip("_")
+    return slug or "pipeline"
+
+
+def write_pipeline_arm(definitions: AdfDefinitions, metadata_dir: Path) -> list[Path]:
+    """Writes each pipeline's original ARM JSON to ``metadata_dir/<pipeline>.arm.json``.
+
+    Returns the list of written paths.  Pipelines whose source JSON was not
+    retained are skipped (should not happen for parsed sources).
+    """
+    metadata_dir.mkdir(parents=True, exist_ok=True)
+    written: list[Path] = []
+    for pipeline in definitions.pipelines:
+        if pipeline.raw is None:
+            logger.warning("No source ARM JSON retained for pipeline %r; skipping arm export.", pipeline.name)
+            continue
+        arm_path = metadata_dir / f"{_sanitize_filename(pipeline.name)}.arm.json"
+        arm_path.write_text(json.dumps(pipeline.raw, indent=2), encoding="utf-8")
+        written.append(arm_path)
+    return written
+
+
+# ---------------------------------------------------------------------------
 # CLI entry point
 # ---------------------------------------------------------------------------
 
@@ -714,8 +910,11 @@ if __name__ == "__main__":
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=Path("./orchestra_output/profile"),
-        help="Directory to write inventory.json into.",
+        default=Path("./orchestra_output"),
+        help=(
+            "Migration output directory. Profile artifacts are written into its "
+            "metadata/ subfolder (inventory.json, profile_report.csv, <pipeline>.arm.json)."
+        ),
     )
     parser.add_argument(
         "--pipeline",
@@ -753,15 +952,25 @@ if __name__ == "__main__":
     inventory = build_inventory(definitions)
 
     output_dir: Path = args.output_dir.resolve()
-    output_dir.mkdir(parents=True, exist_ok=True)
-    inventory_path = output_dir / "inventory.json"
+    metadata_dir = output_dir / "metadata"
+    metadata_dir.mkdir(parents=True, exist_ok=True)
+
+    inventory_path = metadata_dir / "inventory.json"
     inventory_dict = _inventory_to_dict(inventory, str(args.source_dir))
     inventory_path.write_text(json.dumps(inventory_dict, indent=2), encoding="utf-8")
     logger.info("Wrote inventory to %s", inventory_path)
 
+    profile_rows = build_profile_rows(definitions)
+    csv_path = metadata_dir / "profile_report.csv"
+    write_profile_csv(profile_rows, csv_path)
+    logger.info("Wrote profile report to %s", csv_path)
+
+    arm_paths = write_pipeline_arm(definitions, metadata_dir)
+    logger.info("Wrote %d pipeline ARM JSON file(s) to %s", len(arm_paths), metadata_dir)
+
     summary = inventory_dict["summary"]
-    print("\nADF Ingestion Summary")
-    print("=====================")
+    print("\nADF Profile Summary")
+    print("===================")
     print(f"Pipelines parsed:     {summary['pipeline_count']}")
     print(f"Total activities:     {summary['activity_count']}")
     print("\nStrategy Breakdown:")
@@ -769,3 +978,11 @@ if __name__ == "__main__":
     print(f"  Agentic:            {summary['agentic_count']}")
     print(f"  Unsupported:        {summary['unsupported_count']}")
     print(f"\nCoverage:             {summary['coverage_pct']}%")
+    print("\nComplexity by pipeline (metadata/profile_report.csv):")
+    print(f"  {'pipeline':<32} {'acts':>4} {'ds':>3} {'ls':>3} {'patt':>4} {'score':>5}  size")
+    for row in profile_rows:
+        print(
+            f"  {row['pipeline'][:32]:<32} {row['activities']:>4} {row['datasets']:>3} "
+            f"{row['linked_services']:>3} {row['collapsible_patterns']:>4} "
+            f"{row['complexity_score']:>5}  {row['complexity_size']}"
+        )

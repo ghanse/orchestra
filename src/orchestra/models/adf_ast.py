@@ -171,6 +171,9 @@ class AdfPipeline:
         variables: Pipeline variable declarations, keyed by name.
         annotations: Free-form annotation strings attached to the pipeline.
         folder: Organisational folder path within the ADF workspace.
+        raw: Original ADF/ARM pipeline JSON as loaded from source, retained so
+            the profile phase can emit a verbatim ``<pipeline>.arm.json`` into the
+            bundle's metadata folder for provenance.
     """
 
     name: str
@@ -179,6 +182,7 @@ class AdfPipeline:
     variables: dict[str, AdfVariable] | None = None
     annotations: list[str] | None = None
     folder: str | None = None
+    raw: dict[str, Any] | None = None
 
 
 # ---------------------------------------------------------------------------

@@ -321,6 +321,19 @@ def write_bundle(
     return created_files
 
 
+def _default_report_path(output_dir: Path) -> Path:
+    """Returns the conventional report path under a migration dir's .work/ folder.
+
+    Prefers the modify-stamped report; falls back to the raw translation report
+    when modify was not run (no configuration applied).
+    """
+    work = Path(output_dir) / ".work"
+    stamped = work / "translation_report.stamped.json"
+    if stamped.exists():
+        return stamped
+    return work / "translation_report.json"
+
+
 def main() -> None:
     """CLI entry point for DAB bundle generation."""
     parser = argparse.ArgumentParser(
@@ -329,14 +342,22 @@ def main() -> None:
     parser.add_argument(
         "--report",
         type=Path,
-        required=True,
-        help="Path to the translation report or pipeline IR JSON produced by the translate phase.",
+        default=None,
+        help=(
+            "Path to the (stamped) translation report produced by translate/modify. "
+            "Defaults to <output-dir>/.work/translation_report.stamped.json (falling back to "
+            "<output-dir>/.work/translation_report.json when modify was not run)."
+        ),
     )
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=Path("./orchestra_output/bundle"),
-        help="Output directory for the DAB bundle (default: ./orchestra_output/bundle).",
+        default=Path("./orchestra_output"),
+        help=(
+            "Migration output directory. The bundle (databricks.yml, resources/, src/) is "
+            "written here alongside the metadata/ folder; the transient .work/ folder is pruned "
+            "after a successful build."
+        ),
     )
     parser.add_argument(
         "--catalog",
@@ -370,8 +391,15 @@ def main() -> None:
             "Tasks keep their original workspace paths and the bundle is not self-contained."
         ),
     )
+    parser.add_argument(
+        "--keep-intermediates",
+        action="store_true",
+        help="Keep the transient .work/ folder (translation report + IR) instead of pruning it.",
+    )
     args = parser.parse_args()
 
+    if args.report is None:
+        args.report = _default_report_path(args.output_dir)
     if not args.report.exists():
         print(f"Error: Report file not found: {args.report}", file=sys.stderr)
         sys.exit(1)
@@ -414,6 +442,14 @@ def main() -> None:
         )
         all_created.extend(created)
         print(f"  [{index + 1}/{len(workflows)}] {workflow.name}: {len(created)} files")
+
+    if not args.keep_intermediates:
+        work_dir = args.output_dir / ".work"
+        if work_dir.is_dir():
+            import shutil
+
+            shutil.rmtree(work_dir, ignore_errors=True)
+            print(f"Pruned transient {work_dir}")
 
     print(f"\nBundle generation complete: {len(all_created)} files written to {args.output_dir}")
     print("\nNext steps:")

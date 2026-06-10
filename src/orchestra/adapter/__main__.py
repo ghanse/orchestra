@@ -165,13 +165,14 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     inspect.add_argument("report", type=Path, help="Path to the translation report or pipeline IR JSON.")
     inspect.add_argument(
-        "--answers",
-        type=Path,
-        default=None,
+        "--answer",
+        action="append",
+        default=[],
+        metavar="OPTION_ID=VALUE",
         help=(
-            "Optional path to a JSON file of answers already collected; "
-            "options whose conditions depend on those answers will surface "
-            "only when their conditions are met."
+            "An answer already collected, as OPTION_ID=VALUE. Repeatable. Options whose "
+            "conditions depend on these answers surface only when their conditions are met, "
+            "so pass the answers gathered so far to reveal the next questions in a chain."
         ),
     )
     inspect.add_argument(
@@ -186,21 +187,50 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Apply collected answers to a translation report and write the stamped IR.",
     )
     modify.add_argument("report", type=Path, help="Path to the translation report or pipeline IR JSON.")
-    modify.add_argument("answers", type=Path, help="Path to a JSON file mapping option_id to answer string.")
     modify.add_argument(
-        "--out",
-        type=Path,
-        required=True,
-        help="Destination path for the configuration-stamped IR JSON.",
+        "--answer",
+        action="append",
+        default=[],
+        metavar="OPTION_ID=VALUE",
+        help=(
+            "A collected answer as OPTION_ID=VALUE (e.g. --answer copy_notify_destination=email). "
+            "Repeatable; pass one per option the user answered. Values may contain '=' (only the "
+            "first '=' splits the pair)."
+        ),
     )
     modify.add_argument(
-        "--lookup-values",
+        "--output-dir",
         type=Path,
         default=None,
         help=(
-            "Optional path to a JSON list of lookup-value rows that consolidated "
-            "metadata-driven motifs should ingest.  Each row is a dict mirroring "
-            "a row from the source Lookup query."
+            "Migration output directory. The stamped IR is written to its transient "
+            ".work/translation_report.stamped.json and the collected answers are written to "
+            "metadata/configuration.json. Either --output-dir or --out is required."
+        ),
+    )
+    modify.add_argument(
+        "--out",
+        type=Path,
+        default=None,
+        help=("Explicit destination for the configuration-stamped IR JSON (overrides the --output-dir convention)."),
+    )
+    modify.add_argument(
+        "--config-out",
+        type=Path,
+        default=None,
+        help=(
+            "Explicit destination for configuration.json (the collected answers). Defaults to "
+            "<output-dir>/metadata/configuration.json."
+        ),
+    )
+    modify.add_argument(
+        "--lookup-csv",
+        type=str,
+        default=None,
+        help=(
+            "Optional CSV file path or literal CSV string of lookup-value rows that consolidated "
+            "metadata-driven motifs should ingest. The header row names the columns; each "
+            "subsequent row becomes one dict."
         ),
     )
 
@@ -317,7 +347,11 @@ def _run_inspect(args: argparse.Namespace) -> int:
     pipelines = _load_pipelines(args.report)
     if pipelines is None:
         return 1
-    answers = _read_answers_optional(args.answers) if getattr(args, "answers", None) else {}
+    try:
+        answers = _parse_answer_args(getattr(args, "answer", []) or [])
+    except ValueError as error:
+        print(f"Invalid --answer: {error}", file=sys.stderr)
+        return 2
     payload = {
         "pipelines": [_pending_to_payload(gather_options(pipeline, [], answers=answers)) for pipeline in pipelines],
     }
@@ -325,22 +359,55 @@ def _run_inspect(args: argparse.Namespace) -> int:
     return 0
 
 
-def _read_answers_optional(answers_path: Path) -> dict[str, str]:
-    """Loads an answers JSON file supplied to ``inspect``.
+def _parse_answer_args(pairs: list[str]) -> dict[str, str]:
+    """Parses repeatable ``--answer OPTION_ID=VALUE`` CLI args into a mapping.
+
+    Only the first ``=`` splits each pair, so values may themselves contain
+    ``=`` (e.g. a query string or base64 token).
 
     Args:
-        answers_path: Path to a JSON file mapping option_id to answer.
+        pairs: Raw ``OPTION_ID=VALUE`` strings from argparse.
 
     Returns:
-        Mapping of option_id to answer string.  Returns an empty dict
-        when the file is missing or unparseable so ``inspect`` still
-        succeeds (option gating just sees no prior answers).
+        Mapping of option_id to answer string (later values win on duplicates).
+
+    Raises:
+        ValueError: When a token has no ``=`` or an empty option id.
     """
-    try:
-        raw = json.loads(answers_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
-    return {key: str(value) for key, value in raw.items() if isinstance(value, str)}
+    answers: dict[str, str] = {}
+    for pair in pairs:
+        if "=" not in pair:
+            raise ValueError(f"expected OPTION_ID=VALUE, got {pair!r}")
+        key, value = pair.split("=", 1)
+        key = key.strip()
+        if not key:
+            raise ValueError(f"empty option id in {pair!r}")
+        answers[key] = value
+    return answers
+
+
+def _resolve_modify_outputs(args: argparse.Namespace) -> tuple[Path, Path] | None:
+    """Resolves the (stamped_report_path, configuration_json_path) for ``modify``.
+
+    Honors explicit ``--out`` / ``--config-out`` overrides, otherwise derives both
+    from ``--output-dir`` (stamped -> ``.work/``, configuration.json -> ``metadata/``).
+    Returns ``None`` when neither ``--output-dir`` nor ``--out`` was supplied.
+    """
+    output_dir: Path | None = args.output_dir
+    stamped = args.out
+    if stamped is None:
+        if output_dir is None:
+            return None
+        stamped = output_dir / ".work" / "translation_report.stamped.json"
+    config_out = args.config_out
+    if config_out is None:
+        if output_dir is not None:
+            config_out = output_dir / "metadata" / "configuration.json"
+        elif stamped.parent.name == ".work":
+            config_out = stamped.parent.parent / "metadata" / "configuration.json"
+        else:
+            config_out = stamped.parent / "configuration.json"
+    return stamped, config_out
 
 
 def _run_modify(args: argparse.Namespace) -> int:
@@ -355,16 +422,27 @@ def _run_modify(args: argparse.Namespace) -> int:
         the report could not be loaded, ``2`` when the answers failed
         validation.
     """
+    outputs = _resolve_modify_outputs(args)
+    if outputs is None:
+        print("modify requires --output-dir (or an explicit --out)", file=sys.stderr)
+        return 2
+    stamped_out, config_out = outputs
+
     pipelines = _load_pipelines(args.report)
     if pipelines is None:
         return 1
     try:
-        answers = _load_answers(args.answers)
+        answers = _parse_answer_args(args.answer or [])
         configuration = _configuration_from_answers(answers)
     except ValueError as error:
-        print(f"Invalid answers payload: {error}", file=sys.stderr)
+        print(f"Invalid answers: {error}", file=sys.stderr)
         return 2
-    lookup_values = _load_lookup_values(args.lookup_values) if args.lookup_values else []
+    try:
+        lookup_values = _parse_csv_source(args.lookup_csv) if args.lookup_csv else []
+    except ValueError as error:
+        print(f"Invalid --lookup-csv: {error}", file=sys.stderr)
+        return 2
+
     stamped_pipelines = [
         _stamp_lookup_values_into_metadata_driven_motifs(apply_configuration(pipeline, configuration), lookup_values)
         for pipeline in pipelines
@@ -379,7 +457,13 @@ def _run_modify(args: argparse.Namespace) -> int:
         for message in messages:
             print(message, file=sys.stderr)
     modified = [_pipeline_to_dict(pipeline) for pipeline in provisioned_pipelines]
-    _write_modified_report(args.report, modified, args.out)
+    _write_modified_report(args.report, modified, stamped_out)
+
+    # Persist the collected answers as the kept configuration record.
+    config_out.parent.mkdir(parents=True, exist_ok=True)
+    config_out.write_text(json.dumps(answers, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    print(f"Wrote stamped IR to {stamped_out}", file=sys.stderr)
+    print(f"Wrote configuration to {config_out}", file=sys.stderr)
     return 0
 
 
@@ -425,26 +509,6 @@ def _parse_csv_source(source: str) -> list[dict[str, str]]:
     if reader.fieldnames is None:
         raise ValueError("Source CSV is empty or missing a header row")
     return [dict(row) for row in reader]
-
-
-def _load_lookup_values(lookup_values_path: Path) -> list[dict[str, Any]]:
-    """Loads materialised lookup values from a JSON file.
-
-    Args:
-        lookup_values_path: Path to a JSON list of row dicts.
-
-    Returns:
-        The parsed list of row dicts.  Returns an empty list when the
-        file is missing or unparseable so the modify pass still succeeds
-        (consolidated motifs will warn and fall back to the scaffold).
-    """
-    try:
-        raw = json.loads(lookup_values_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return []
-    if not isinstance(raw, list):
-        return []
-    return [row for row in raw if isinstance(row, dict)]
 
 
 def _stamp_lookup_values_into_metadata_driven_motifs(pipeline, lookup_values: list[dict[str, Any]]):
@@ -518,29 +582,6 @@ def _extract_pipeline_dicts(raw: Any) -> list[dict[str, Any]]:
             if entry.get("status") == "translated" and entry.get("ir")
         ]
     return []
-
-
-def _load_answers(answers_path: Path) -> dict[str, str]:
-    """Loads a JSON answers file and validates its top-level shape.
-
-    Args:
-        answers_path: Path to a JSON file mapping option_id to answer.
-
-    Returns:
-        Mapping of option_id to answer string.
-
-    Raises:
-        ValueError: When the file is not a JSON object of string values.
-    """
-    raw = json.loads(answers_path.read_text(encoding="utf-8"))
-    if not isinstance(raw, dict):
-        raise ValueError(f"Expected a JSON object at {answers_path}; got {type(raw).__name__}")
-    coerced: dict[str, str] = {}
-    for key, value in raw.items():
-        if not isinstance(value, str):
-            raise ValueError(f"Answer for {key!r} must be a string; got {type(value).__name__}")
-        coerced[key] = value
-    return coerced
 
 
 def _configuration_from_answers(answers: dict[str, str]) -> TranslationConfiguration:

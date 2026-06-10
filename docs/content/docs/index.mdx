@@ -20,14 +20,14 @@ agent that supports the open [Agent Skills](https://agentskills.io/) format) how
 Translation runs in three phases:
 
 1. `profile` parses Azure Resource Manager templates (e.g. for Data Factory pipelines, datasets, linked services, and triggers) into an execution 
-tree and builds an inventory.
+tree, builds an inventory, and emits a per-pipeline complexity report (`metadata/profile_report.csv`).
 2. `translate` processes the inventory and converts each activity into a Databricks-compatible intermediate representation. *Deterministic 
 activities* are translated by Python handlers while *agentic activities* are handed off to an LLM-assisted translator with the right context. 
 *Unsupported activities* are flagged as explicit gaps.
 3. `prepare` converts each translated pipeline into a [Declarative Automation Bundle](https://docs.databricks.com/aws/en/dev-tools/bundles/resources) that 
 can be deployed to a Databricks workspace. Bundles include job configuration files, code, and setup scripts (e.g. to create Databricks Secret Scopes or Unity Catalog connections).
 
-Each phase can be run independently, maintains its own input/output contract, produces artifacts you can inspect before moving to the next phase.
+All three phases write into one shared output directory (default `./orchestra_output`): the DAB bundle at the top level, kept artifacts under `metadata/`, and transient intermediates under `.work/` (pruned by `prepare`). Each phase can be run independently, maintains its own input/output contract, and produces artifacts you can inspect before moving to the next phase.
 
 ## Next steps
 

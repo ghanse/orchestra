@@ -81,8 +81,9 @@ bash <plugin_dir>/scripts/bootstrap.sh
 Running the setup process will:
 
 1. Check that `python3`, `pip`, and `venv` are available.
-2. Create `<plugin_dir>/.venv` if it doesn't already exist.
+2. Create the virtual environment if it doesn't already exist. When running under Databricks (Genie Code or notebooks, detected via `DATABRICKS_RUNTIME_VERSION`), the venv is created at `/Workspace/Users/<current user>/.migration-skills`; everywhere else it is created at `<plugin_dir>/.venv`.
 3. Install the `requirements.txt` dependencies into your virtual environment using `pip`.
+4. Write the resolved interpreter path to the marker file `<plugin_dir>/.migration-venv`.
 
 The environment is created once and reused. Re-running the script simply confirms the venv exists and its dependencies are satisfied.
 
@@ -95,14 +96,15 @@ To install Python in your environment, run one of the following commands:
 * **Windows:** [python.org/downloads](https://www.python.org/downloads/) (enable "Add python.exe to PATH")
 </Callout>
 
-After the venv exists, every Python command the skills run uses the venv interpreter with `src/` on `PYTHONPATH`:
+After the venv exists, every Python command the skills run uses the interpreter recorded in the marker file, with `src/` on `PYTHONPATH`. Read the interpreter path from `<plugin_dir>/.migration-venv` rather than hardcoding it:
 
 ```bash
 export PYTHONPATH="<plugin_dir>/src"
-"<plugin_dir>/.venv/bin/python" -m orchestra.adapter inputs profile
+PY="$(cat <plugin_dir>/.migration-venv)"
+"$PY" -m orchestra.adapter inputs profile
 ```
 
-On Windows, the interpreter is `<plugin_dir>\.venv\Scripts\python.exe`. The agent normally runs these commands for you; they are handy for troubleshooting a `ModuleNotFoundError`.
+The marker file points at `<plugin_dir>/.venv` locally or `/Workspace/Users/<user>/.migration-skills` on Databricks. The agent normally runs these commands for you; they are handy for troubleshooting a `ModuleNotFoundError`.
 
 ## Verifying the installation
 

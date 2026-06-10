@@ -18,7 +18,7 @@ Convert the parsed ADF inventory into Databricks intermediate representation (IR
 
 ## Context
 
-This is phase 2 of the orchestra migration workflow. It consumes the `inventory.json` produced by the `profile` skill and produces a `translation_report.json` that the `prepare` skill uses to generate Databricks Declarative Automation Bundles.
+This is phase 2 of the orchestra migration workflow. It consumes the ADF source (profiled by the `profile` skill) and produces a translation report — a transient intermediate under `<output_dir>/.work/` — that the `prepare` skill uses to generate Databricks Declarative Automation Bundles. It shares the single migration `<output_dir>` with the other phases.
 
 The translation follows a **deterministic-first** strategy:
 1. Activities with known, well-defined mappings are translated by built-in Python translators
@@ -34,16 +34,19 @@ any Python commands, ensure the plugin's virtual environment is bootstrapped. Ru
 bash <plugin_dir>/scripts/bootstrap.sh
 ```
 
-This creates `<plugin_dir>/.venv` and installs dependencies from `requirements.txt`. If Python or 
-pip is missing, the script prints a warning telling the user what to install — relay it and stop
-until they have installed Python 3.12+ and pip.
+This creates the venv (`<plugin_dir>/.venv` locally, or `/Workspace/Users/<current user>/.migration-skills`
+on Databricks) and installs dependencies from `requirements.txt`. If Python or pip is missing, the
+script prints a warning telling the user what to install — relay it and stop until they have installed
+Python 3.12+ and pip.
 
-Run **every** Python command in this skill with the venv interpreter and `src/` on `PYTHONPATH` 
-(use it anywhere a command below shows `python3`):
+Run **every** Python command in this skill with the venv interpreter (from the marker file
+`<plugin_dir>/.migration-venv`) and `src/` on `PYTHONPATH` (use `$PY` anywhere a command below
+shows `python3`):
 
 ```bash
 export PYTHONPATH="<plugin_dir>/src"
-"<plugin_dir>/.venv/bin/python" <plugin_dir>/src/orchestra/parser/adf_loader.py ...
+PY="$(cat <plugin_dir>/.migration-venv)"
+"$PY" -m orchestra.translator.engine ...
 ```
 
 ## Workflow
@@ -57,49 +60,48 @@ options the phase needs (inventory path, ADF source dir, output
 directory):
 
 ```bash
-python3 -m orchestra.adapter inputs translate
+"$PY" -m orchestra.adapter inputs translate
 ```
 
-The JSON response carries the prompts and defaults; collect answers
-from the user (or fall back to the defaults) and persist them to
-`<output_dir>/translate/inputs.json` so later steps and subsequent
-phases can read the same values.
+The JSON response carries the prompts and defaults; collect answers from the user
+(or fall back to the defaults). Keep them in conversation context — the same shared
+`<output_dir>` is used by every phase.
 
 ### Step 1 — Locate the inventory
 
-Read `inventory.json` from the profile phase. If the path is not already in conversation context, ask the user:
+The profile phase wrote `<output_dir>/metadata/inventory.json` (and `profile_report.csv`). If the
+shared `<output_dir>` is not already in conversation context, ask the user:
 
-> Where is the inventory.json from the profile phase? (default: `./orchestra_output/profile/inventory.json`)
+> Which migration output directory did the profile phase use? (default: `./orchestra_output`)
 
-Validate the file exists and is well-formed.
+Validate `<output_dir>/metadata/inventory.json` exists and is well-formed.
 
 ### Step 2 — Run deterministic translation
 
 Execute the translation engine on all deterministic activities:
 
 ```bash
-# Unified runner (recommended): `python -m orchestra.adapter translate ...`
+# Unified runner (recommended): `"$PY" -m orchestra.adapter translate ...`
 # forwards to the engine below; --adf-source-path aliases --source-dir.
-python3 <plugin_dir>/src/orchestra/translator/engine.py \
+"$PY" -m orchestra.translator.engine \
   --source-dir <adf_source_dir> \
   --output-dir <output_dir> \
   [--pipeline <pipeline_name>]
 ```
 
 Where:
-- `<plugin_dir>` is the root of the orchestra plugin
-- `<adf_source_dir>` is the original ADF JSON directory (from the profile phase)
-- `<output_dir>` is the translation output path (default: `./orchestra_output/translate/`)
+- `<adf_source_dir>` is the original ADF JSON directory (the same `--source-dir` used by profile)
+- `<output_dir>` is the **shared migration output directory** (default: `./orchestra_output`) — the
+  same one profile used
 - `<pipeline_name>` (optional) — when provided, translates only the named pipeline. **Always pass `--pipeline` when the user has specified a specific pipeline to migrate**, matching the value passed to the profile phase.
 
-This produces:
-- `<pipeline_name>.json` — the pipeline IR (one file per translated pipeline)
-- `ir/` directory — Databricks IR for each translated activity
-- `notebooks/` directory — generated helper notebooks
+The translation report and intermediate IR are written to the **transient** `<output_dir>/.work/`
+folder (`translation_report.json`, per-pipeline IR, `gaps.json`). These are consumed by the steps
+below and the prepare phase, then pruned — they are not kept artifacts.
 
 ### Step 3 — Read the translation report
 
-Read `translation_report.json`. It has this structure:
+Read `<output_dir>/.work/translation_report.json`. It has this structure:
 
 ```json
 {
@@ -217,22 +219,29 @@ arbitrary, e.g. `<pipeline>__<activity>.json`). Each file MUST use this schema:
 Fold the results into the translation report (placeholders are replaced in place):
 
 ```bash
-python3 <plugin_dir>/src/orchestra/translator/engine.py \
+"$PY" -m orchestra.translator.engine \
   --merge-agentic \
-  --report <translation_report_path> \
+  --report <output_dir>/.work/translation_report.json \
   --agentic-results <agentic_results_dir>
 ```
 
-Equivalently via the unified runner: `python -m orchestra.adapter translate --merge-agentic --report <report> --agentic-results <dir>`. Add `--output <path>` to write a copy instead of overwriting the report. The command exits non-zero if any result could not be matched to a placeholder.
+Equivalently via the unified runner: `"$PY" -m orchestra.adapter translate --merge-agentic --report <output_dir>/.work/translation_report.json --agentic-results <dir>`. Add `--output <path>` to write a copy instead of overwriting the report. The command exits non-zero if any result could not be matched to a placeholder.
 
-This updates `translation_report.json` with the agentic results merged in, changing their status from `pending` to `translated` (or `failed` if the agentic skill could not produce a result).
+This updates `<output_dir>/.work/translation_report.json` with the agentic results merged in, changing their status from `pending` to `translated` (or `failed` if the agentic skill could not produce a result).
 
 ### Step 6.1 — Gather just-in-time translation configuration
 
 The adapter raises several configuration options plus a chained set for
-metadata-driven motifs. Every time the user answers a option whose value 
-gates further prompts, re-run `inspect --answers <answers.json>` to surface 
-the next batch.
+metadata-driven motifs. Answers are passed as repeatable `--answer OPTION_ID=VALUE`
+flags — never a JSON file. Every time the user answers an option whose value gates
+further prompts, re-run `inspect` with **all** the answers collected so far appended
+as `--answer` flags to surface the next batch:
+
+```bash
+"$PY" -m orchestra.adapter inspect <output_dir>/.work/translation_report.json \
+  --answer copy_notify_destination=email \
+  --answer copy_notify_email_recipients=alerts@example.com
+```
 
 **Copy→Notify (`copy_and_notify`) motifs.** When a Copy activity is followed by
 notification Web activities, the adapter raises `copy_notify_destination`:
@@ -243,7 +252,7 @@ Databricks job-task `on_success`/`on_failure` notifications routed to that
 destination (the ADF Web activity URL/body is not used). Once a non-`keep`
 destination is chosen, the adapter chains **one follow-up per Databricks-SDK
 field** of that destination, required fields first, so each is prompted
-sequentially (re-run `inspect --answers` after each answer to surface the next):
+sequentially (re-run `inspect` with the accumulated `--answer` flags after each answer to surface the next):
 
 | Destination | Chained field options (SDK arg) |
 |-------------|---------------------------------|
@@ -267,26 +276,20 @@ created via the SDK.
 
 When the metadata-driven flow ends with `metadata_driven_lookup_tool=have`
 and the agent has a database tool (Genie, MCP SQL, or a workspace SDK),
-run the lookup query directly and write the rows to
-`<output_dir>/lookup_values.json`. When the answer is `none`, prompt
-the user for a CSV file or comma-separated string and call:
+run the lookup query directly to obtain the rows as CSV. When the answer is
+`none`, ask the user for a CSV file path or a literal CSV string. Pass it inline
+to `modify` via `--lookup-csv` (no intermediate JSON file):
 
 ```bash
-python3 -m orchestra.adapter materialize-lookup "<csv-or-path>" \
-    --out <output_dir>/lookup_values.json
+"$PY" -m orchestra.adapter modify \
+    <output_dir>/.work/translation_report.json \
+    --output-dir <output_dir> \
+    --answer metadata_driven_consolidate=consolidate \
+    --answer metadata_driven_access=yes \
+    --lookup-csv "<csv-file-path-or-literal-csv-string>"
 ```
 
-Then call `modify` with the lookup values:
-
-```bash
-python3 -m orchestra.adapter modify \
-    <translation_report_path> \
-    <output_dir>/answers.json \
-    --lookup-values <output_dir>/lookup_values.json \
-    --out <output_dir>/translation_report.stamped.json
-```
-
-When no metadata-driven motif is consolidated, `--lookup-values` is omitted.
+When no metadata-driven motif is consolidated, `--lookup-csv` is omitted.
 
 #### Legacy flow details
 
@@ -295,7 +298,7 @@ IR raises (Copy Data paradigm, non-Databricks task compute, Lakeflow Connect
 opt-in, Databricks task compute). Use the adapter CLI bridge:
 
 ```bash
-python3 -m orchestra.adapter inspect <translation_report_path>
+"$PY" -m orchestra.adapter inspect <output_dir>/.work/translation_report.json
 ```
 
 The command emits JSON:
@@ -321,29 +324,25 @@ The command emits JSON:
 }
 ```
 
-For each option, prompt the user with the rationale, options, and the
-task keys it affects. Use the default when the user defers. Collect the
-answers into a JSON file (`<output_dir>/answers.json`) shaped like:
-
-```json
-{
-  "copy_activity_paradigm": "sdp",
-  "non_databricks_task_compute": "serverless",
-  "use_lakeflow_connectors": "lakeflow_connect"
-}
-```
-
-Then apply the answers to produce a stamped report the prepare phase consumes:
+For each option, prompt the user with the rationale, options, and the task keys it
+affects. Use the default when the user defers. Then apply the collected answers as
+`--answer OPTION_ID=VALUE` flags:
 
 ```bash
-python3 -m orchestra.adapter modify \
-  <translation_report_path> \
-  <output_dir>/answers.json \
-  --out <output_dir>/translation_report.stamped.json
+"$PY" -m orchestra.adapter modify \
+  <output_dir>/.work/translation_report.json \
+  --output-dir <output_dir> \
+  --answer copy_activity_paradigm=sdp \
+  --answer non_databricks_task_compute=serverless \
+  --answer use_lakeflow_connectors=lakeflow_connect
 ```
 
-The prepare phase (next skill) must be pointed at the stamped report.
-When no options are raised, the inspect output is `{"pipelines": [{"pipeline_name": "...", "options": []},...]}` — skip the modify step and pass the original report straight through.
+`modify` writes two things under the shared `<output_dir>`:
+- `.work/translation_report.stamped.json` — the configuration-stamped IR the prepare phase consumes
+- `metadata/configuration.json` — the collected answers, kept as the migration's configuration record
+
+The prepare phase (next skill) reads the stamped report from `.work/` automatically.
+When no options are raised, the inspect output is `{"pipelines": [{"pipeline_name": "...", "options": []},...]}` — skip `modify`; prepare falls back to the un-stamped report.
 
 ### Step 7 — Present translation summary
 
@@ -364,10 +363,10 @@ Failed translations:
   - ETL_Main / CustomTask (Custom) — agentic skill returned error
   ...
 
-Generated artifacts:
+Generated artifacts (transient, under <output_dir>/.work/):
   - translation_report.json
-  - ir/ (43 files)
-  - notebooks/ (12 files)
+  - per-pipeline IR (43 files)
+  - gaps.json
 ```
 
 If coverage is below 100%, explain the options for failed translations:
@@ -389,9 +388,12 @@ See `references/activity-mapping.md` for the complete mapping between ADF activi
 
 ## Output Artifacts
 
+The translate phase writes only **transient** intermediates, under `<output_dir>/.work/` (consumed
+by `modify`/`prepare`, then pruned — not kept):
+
 | File | Description |
 |---|---|
-| `translation_report.json` | Full translation report with IR for all activities |
-| `ir/*.json` | Databricks IR for each translated activity |
-| `notebooks/*.py` | Generated helper notebooks |
-| `agentic_results/*.json` | Raw results from agentic skill invocations |
+| `.work/translation_report.json` | Full translation report with IR for all activities |
+| `.work/<pipeline>.json` | Per-pipeline Databricks IR |
+| `.work/gaps.json` | Agentic gaps awaiting skill conversion |
+| `.work/translation_report.stamped.json` | Configuration-stamped report (written by `modify`) |

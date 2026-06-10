@@ -2,8 +2,11 @@
 #
 # Bootstraps a Python environment for the orchestra plugin.
 #
-# Creates a virtual environment at <plugin_root>/.venv and installs the Python
-# dependencies listed in requirements.txt using pip.
+# Creates a virtual environment and installs the Python dependencies listed in
+# requirements.txt using pip.  The venv location depends on the environment:
+#   * Databricks (Genie Code / notebooks): /Workspace/Users/<current user>/.migration-skills
+#     so the environment persists in the workspace and is shared across sessions.
+#   * Everywhere else: <plugin_root>/.venv
 #
 # If python3, pip, or the venv module are unavailable, the script prints a clear
 # warning telling the user what to install and exits non-zero without making changes.
@@ -14,7 +17,10 @@
 # After bootstrapping, run the plugin's Python code with the venv interpreter and
 # src/ on PYTHONPATH, e.g.:
 #
-#   PYTHONPATH="<plugin_root>/src" "<plugin_root>/.venv/bin/python" -m orchestra.adapter inputs ingest
+#   PYTHONPATH="<plugin_root>/src" "<venv>/bin/python" -m orchestra.adapter inputs profile
+#
+# The resolved interpreter path is also written to <plugin_root>/.migration-venv
+# so the skills can discover it without re-deriving the location.
 #
 set -euo pipefail
 
@@ -49,6 +55,43 @@ EOF
 fi
 
 PYTHON_BIN="$(command -v python3)"
+
+# On Databricks (Genie Code / notebooks), create the venv under the current
+# user's workspace folder so it persists and is shared across sessions, rather
+# than inside the (ephemeral) plugin checkout.  Resolve the current user from the
+# notebook runtime context, falling back to the workspace SDK.
+if [ -n "${DATABRICKS_RUNTIME_VERSION:-}" ]; then
+  CURRENT_USER="$("$PYTHON_BIN" - <<'PYRESOLVE' 2>/dev/null || true
+def _resolve():
+    try:
+        from dbruntime.databricks_repl_context import get_context
+        ctx = get_context()
+        for attr in ("userName", "user"):
+            val = getattr(ctx, attr, None)
+            if val and "@" in str(val):
+                return str(val)
+    except Exception:
+        pass
+    try:
+        from databricks.sdk import WorkspaceClient
+        name = WorkspaceClient().current_user.me().user_name
+        if name:
+            return name
+    except Exception:
+        pass
+    return ""
+print(_resolve())
+PYRESOLVE
+)"
+  if [ -n "$CURRENT_USER" ]; then
+    VENV_DIR="/Workspace/Users/${CURRENT_USER}/.migration-skills"
+    echo "Databricks runtime detected; using workspace venv for ${CURRENT_USER}:"
+    echo "  $VENV_DIR"
+  else
+    echo "Databricks runtime detected but current user could not be resolved;" >&2
+    echo "  falling back to plugin-local venv at $VENV_DIR" >&2
+  fi
+fi
 
 # Verify pip is available
 if ! "$PYTHON_BIN" -m pip --version >/dev/null 2>&1; then
@@ -146,12 +189,17 @@ print(f'  -> {p} written (host={host})')
   fi
 fi
 
+# Record the resolved interpreter path so the skills can discover it without
+# re-deriving the (environment-dependent) venv location.
+echo "$VENV_PYTHON" > "$PLUGIN_ROOT/.migration-venv"
+
 cat <<EOF
 
 orchestra Python environment is ready.
   Interpreter : $VENV_PYTHON
   Source path : $PLUGIN_ROOT/src
+  Marker file : $PLUGIN_ROOT/.migration-venv
 
 Run the plugin's Python code with src/ on PYTHONPATH, for example:
-  PYTHONPATH="$PLUGIN_ROOT/src" "$VENV_PYTHON" -m orchestra.adapter inputs ingest
+  PYTHONPATH="$PLUGIN_ROOT/src" "$VENV_PYTHON" -m orchestra.adapter inputs profile
 EOF

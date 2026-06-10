@@ -35,16 +35,19 @@ any Python commands, ensure the plugin's virtual environment is bootstrapped. Ru
 bash <plugin_dir>/scripts/bootstrap.sh
 ```
 
-This creates `<plugin_dir>/.venv` and installs dependencies from `requirements.txt`. If Python or 
-pip is missing, the script prints a warning telling the user what to install — relay it and stop
-until they have installed Python 3.12+ and pip.
+This creates the venv (`<plugin_dir>/.venv` locally, or `/Workspace/Users/<current user>/.migration-skills`
+on Databricks) and installs dependencies from `requirements.txt`. If Python or pip is missing, the
+script prints a warning telling the user what to install — relay it and stop until they have installed
+Python 3.12+ and pip.
 
-Run **every** Python command in this skill with the venv interpreter and `src/` on `PYTHONPATH` 
-(use it anywhere a command below shows `python3`):
+Run **every** Python command in this skill with the venv interpreter and `src/` on `PYTHONPATH`. The
+interpreter path is in the marker file `<plugin_dir>/.migration-venv` (use `$PY` anywhere a command
+below shows `python3`):
 
 ```bash
 export PYTHONPATH="<plugin_dir>/src"
-"<plugin_dir>/.venv/bin/python" <plugin_dir>/src/orchestra/parser/adf_loader.py ...
+PY="$(cat <plugin_dir>/.migration-venv)"
+"$PY" <plugin_dir>/src/orchestra/parser/adf_loader.py ...
 ```
 
 ## Workflow
@@ -100,9 +103,9 @@ Set the working source directory to the local temp path for subsequent steps.
 Run the profile phase via the adapter's unified phase runner (recommended):
 
 ```bash
-"<plugin_dir>/.venv/bin/python" -m orchestra.adapter profile \
+"$PY" -m orchestra.adapter profile \
   --adf-source-path <source_path> \
-  --output-dir <output_path> \
+  --output-dir <output_dir> \
   [--pipeline <pipeline_name>]
 ```
 
@@ -111,26 +114,27 @@ Run the profile phase via the adapter's unified phase runner (recommended):
 the loader directly:
 
 ```bash
-python3 <plugin_dir>/src/orchestra/parser/adf_loader.py \
-  --source-dir <source_path> --output-dir <output_path> [--pipeline <pipeline_name>]
+"$PY" -m orchestra.parser.adf_loader \
+  --source-dir <source_path> --output-dir <output_dir> [--pipeline <pipeline_name>]
 ```
 
 Where:
 - `<plugin_dir>` is the root of the orchestra plugin (the directory containing `src/`)
 - `<source_path>` is the local directory containing ADF JSON files
-- `<output_path>` is where to write the parsed output (default: `./orchestra_output/profile/`)
-- `<pipeline_name>` (optional) — when provided, filters the inventory to include only the named pipeline. When omitted, all pipelines in the source directory are included.
+- `<output_dir>` is the **single shared migration output directory** used by all three phases
+  (default: `./orchestra_output`). Profile writes its artifacts into the `metadata/` subfolder.
+- `<pipeline_name>` (optional) — when provided, filters to only the named pipeline. When omitted, all pipelines in the source directory are included.
 
 **Always pass `--pipeline` when the user has specified a specific pipeline to migrate.** This ensures the inventory and all downstream phases are scoped to only that pipeline.
 
-This produces:
+This produces, under `<output_dir>/metadata/`:
 - `inventory.json` — the classified activity inventory
-- `ast/` directory — the typed AST for each pipeline
-- `parse_errors.json` — any files that failed to parse
+- `profile_report.csv` — one row per pipeline with a complexity assessment (see Step 4b)
+- `<pipeline>.arm.json` — the verbatim original ADF/ARM source for each pipeline (provenance)
 
 ### Step 4 — Read and validate the inventory
 
-Read the generated `inventory.json` file. It has this structure:
+Read the generated `<output_dir>/metadata/inventory.json` file. It has this structure:
 
 ```json
 {
@@ -166,6 +170,27 @@ Read the generated `inventory.json` file. It has this structure:
   }
 }
 ```
+
+### Step 4b — Review the complexity report
+
+`<output_dir>/metadata/profile_report.csv` carries one row per pipeline with a migration-complexity
+assessment. Columns:
+
+| Column | Meaning |
+|---|---|
+| `pipeline` | Pipeline name |
+| `activities` | Total activities (including nested ForEach/If/Switch children) |
+| `datasets` | Distinct datasets the pipeline references |
+| `linked_services` | Distinct linked services (activity-level + via referenced datasets) |
+| `collapsible_patterns` | Number of motif patterns detected (auto-collapsible during translate) |
+| `databricks_native_activities` | Notebook / SparkJar / SparkPython / Job activities (simplest) |
+| `control_flow_activities` | ForEach / If / Switch / SetVariable / AppendVariable / Filter / Wait / Until |
+| `other_activities` | Everything else — Copy, Web, Lookup, agentic types (hardest) |
+| `complexity_score` | Weighted score: native×1 + control×2 + other×3 + datasets + linked_services + collapsible_patterns |
+| `complexity_size` | T-shirt size from the score: **S** ≤5, **M** ≤15, **L** ≤30, **XL** >30 |
+
+Use it to set expectations: S/M pipelines are largely deterministic; L/XL pipelines (many "other"
+activities, datasets, or linked services) warrant closer review and more agentic translation.
 
 ### Step 5 — Present the summary
 
@@ -207,7 +232,7 @@ WARNING: The following activities have no automated translation path:
 
 ### Step 8 — Confirm output location
 
-Tell the user where the inventory and AST files were written, and confirm they can proceed to the `translate` phase.
+Tell the user where the metadata files were written (`<output_dir>/metadata/`: inventory.json, profile_report.csv, and the per-pipeline `.arm.json`), summarise the complexity sizes, and confirm they can proceed to the `translate` phase using the same `<output_dir>`.
 
 ## Examples
 
@@ -219,8 +244,10 @@ Tell the user where the inventory and AST files were written, and confirm they c
 
 ## Output Artifacts
 
+All under the shared `<output_dir>/metadata/` folder:
+
 | File | Description |
 |---|---|
-| `inventory.json` | Classified activity inventory for the translate phase |
-| `ast/*.json` | Typed AST for each pipeline |
-| `parse_errors.json` | Any files that failed to parse |
+| `metadata/inventory.json` | Classified activity inventory for the translate phase |
+| `metadata/profile_report.csv` | Per-pipeline complexity report (counts + T-shirt size) |
+| `metadata/<pipeline>.arm.json` | Verbatim original ADF/ARM source for each pipeline |
