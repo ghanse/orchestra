@@ -45,6 +45,17 @@ from orchestra.adapter.operations import (
 from orchestra.bundler.dab_writer import pipeline_dict_to_ir
 from orchestra.translator.engine import _pipeline_to_dict
 
+# Maps the unified phase runner subcommands to the module CLI they forward to.
+_PHASE_MODULES: dict[str, str] = {
+    "profile": "orchestra.parser.adf_loader",
+    "translate": "orchestra.translator.engine",
+    "prepare": "orchestra.bundler.dab_writer",
+}
+# Aliases so the inputs option ids double as CLI flags on the phase runners.
+_PHASE_FLAG_ALIASES: dict[str, str] = {
+    "--adf-source-path": "--source-dir",
+}
+
 
 def main(argv: list[str] | None = None) -> int:
     """Dispatches an ``inspect`` or ``modify`` subcommand.
@@ -56,6 +67,12 @@ def main(argv: list[str] | None = None) -> int:
     Returns:
         Exit code (0 on success, non-zero on usage or runtime errors).
     """
+    raw_args = list(sys.argv[1:]) if argv is None else list(argv)
+    if raw_args and raw_args[0] in _PHASE_MODULES:
+        # Phase runners are pure pass-through to the underlying phase CLI;
+        # bypass argparse so forwarded --flags aren't misparsed at this level.
+        return _run_phase(raw_args[0], raw_args[1:])
+
     parser = _build_parser()
     args = parser.parse_args(argv)
     if args.command == "inspect":
@@ -241,7 +258,45 @@ def _build_parser() -> argparse.ArgumentParser:
         required=True,
         help="Destination path for the lookup-values JSON list.",
     )
+
+    # Unified phase runners: `python -m orchestra.adapter <phase> -- <flags>`
+    # forwards to the underlying phase CLI so agents have a single, consistent
+    # entry point.  ``--adf-source-path`` is accepted as an alias of the
+    # loader/translator ``--source-dir`` flag (it matches the inputs option id).
+    for _phase in ("profile", "translate", "prepare"):
+        _runner = subparsers.add_parser(
+            _phase,
+            help=f"Run the {_phase} phase (forwards flags to the underlying phase CLI).",
+        )
+        _runner.add_argument(
+            "forward",
+            nargs=argparse.REMAINDER,
+            help="Flags forwarded to the phase CLI (e.g. --adf-source-path/--source-dir, --output-dir, --pipeline).",
+        )
+
     return parser
+
+
+def _run_phase(phase: str, forward: list[str]) -> int:
+    """Forward a phase runner subcommand to the underlying module CLI.
+
+    ``python -m orchestra.adapter profile --adf-source-path X --output-dir Y``
+    becomes ``python -m orchestra.parser.adf_loader --source-dir X --output-dir Y``.
+    Reuses the existing, tested phase CLIs verbatim so there is a single entry
+    point without duplicating each phase's argument surface.
+
+    Args:
+        phase: One of ``"profile"`` / ``"translate"`` / ``"prepare"``.
+        forward: Tokens after the phase name (flags for the phase CLI).
+
+    Returns:
+        The phase CLI's exit code.
+    """
+    import subprocess
+
+    module = _PHASE_MODULES[phase]
+    mapped = [_PHASE_FLAG_ALIASES.get(token, token) for token in (forward or [])]
+    return subprocess.call([sys.executable, "-m", module, *mapped])
 
 
 def _run_inspect(args: argparse.Namespace) -> int:

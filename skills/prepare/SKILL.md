@@ -133,6 +133,8 @@ know which notebooks the bundle will download.
 Execute the DAB writer:
 
 ```bash
+# Unified runner (recommended): `python -m orchestra.adapter prepare ...`
+# forwards to dab_writer below.
 python3 <plugin_dir>/src/orchestra/bundler/dab_writer.py \
   --report <translation_report_path> \
   --output-dir <output_dir> \

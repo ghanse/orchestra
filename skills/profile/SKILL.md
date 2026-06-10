@@ -97,13 +97,22 @@ Set the working source directory to the local temp path for subsequent steps.
 
 ### Step 3 — Run the deterministic parser
 
-Execute the ADF loader to parse JSON files and produce the inventory:
+Run the profile phase via the adapter's unified phase runner (recommended):
+
+```bash
+"<plugin_dir>/.venv/bin/python" -m orchestra.adapter profile \
+  --adf-source-path <source_path> \
+  --output-dir <output_path> \
+  [--pipeline <pipeline_name>]
+```
+
+`--adf-source-path` is accepted as an alias of `--source-dir` (it matches the
+`adf_source_path` input option). This forwards to, and is equivalent to, running
+the loader directly:
 
 ```bash
 python3 <plugin_dir>/src/orchestra/parser/adf_loader.py \
-  --source-dir <source_path> \
-  --output-dir <output_path> \
-  [--pipeline <pipeline_name>]
+  --source-dir <source_path> --output-dir <output_path> [--pipeline <pipeline_name>]
 ```
 
 Where:

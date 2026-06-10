@@ -78,6 +78,8 @@ Validate the file exists and is well-formed.
 Execute the translation engine on all deterministic activities:
 
 ```bash
+# Unified runner (recommended): `python -m orchestra.adapter translate ...`
+# forwards to the engine below; --adf-source-path aliases --source-dir.
 python3 <plugin_dir>/src/orchestra/translator/engine.py \
   --source-dir <adf_source_dir> \
   --output-dir <output_dir> \
