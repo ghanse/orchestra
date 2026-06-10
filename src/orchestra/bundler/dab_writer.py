@@ -1195,7 +1195,25 @@ def _build_job_resource(
     _strip_compute_mode_markers(workflow.tasks)
 
     if workflow.parameters:
-        job_def["parameters"] = workflow.parameters
+        # Emit each job parameter once and in the DAB shape ({name, default}).
+        # Dropping the internal ``type`` field keeps the two bundle paths
+        # (in-process vs report round-trip) byte-identical and matches the
+        # Databricks job-parameter schema.
+        seen_param_names: set[str | None] = set()
+        normalized_parameters: list[dict[str, Any]] = []
+        for parameter in workflow.parameters:
+            name = parameter.get("name")
+            if name in seen_param_names:
+                continue
+            seen_param_names.add(name)
+            entry: dict[str, Any] = {"name": name}
+            default = parameter.get("default")
+            if default is not None:
+                # Databricks job-parameter defaults are strings; JSON-encode
+                # Array / Object defaults so the YAML carries valid JSON.
+                entry["default"] = json.dumps(default) if isinstance(default, (list, dict)) else default
+            normalized_parameters.append(entry)
+        job_def["parameters"] = normalized_parameters
 
     # C-10 (SCHED-001): render the workflow schedule / trigger spec.
     schedule_spec = getattr(workflow, "schedule", None)
@@ -1325,11 +1343,11 @@ def _pipeline_dict_to_workflow(pipeline_dict: dict[str, Any]) -> PreparedWorkflo
     expression resolution, and motif handling without duplicating the
     per-activity preparer logic.
     """
-    pipeline, parameters = pipeline_dict_to_ir(pipeline_dict)
-    workflow = prepare_workflow(pipeline)
-    if parameters:
-        workflow.parameters.extend(parameters)
-    return workflow
+    pipeline, _parameters = pipeline_dict_to_ir(pipeline_dict)
+    # ``prepare_workflow`` already carries ``pipeline.parameters`` onto the
+    # workflow, so re-extending here would duplicate every job parameter
+    # (the same dict object twice -> a duplicate ``region`` entry in YAML).
+    return prepare_workflow(pipeline)
 
 
 def pipeline_dict_to_ir(pipeline_dict: dict[str, Any]) -> tuple[Pipeline, list[dict[str, Any]]]:
@@ -1358,6 +1376,11 @@ def pipeline_dict_to_ir(pipeline_dict: dict[str, Any]) -> tuple[Pipeline, list[d
             if isinstance(default_value, bool):
                 entry["default"] = default_value
             elif isinstance(default_value, (int, float)):
+                entry["default"] = default_value
+            elif isinstance(default_value, (list, dict)):
+                # Array / Object defaults are JSON-encoded to a string at
+                # emission time; keep the structure here so both bundle paths
+                # converge (a Python ``str()`` here would emit invalid JSON).
                 entry["default"] = default_value
             else:
                 entry["default"] = normalize_value(str(default_value))
@@ -1441,6 +1464,11 @@ def _reconstruct_ir(task_ir: dict[str, Any]) -> Activity:
             body=task_ir.get("body"),
             headers=task_ir.get("headers"),
             authentication=task_ir.get("authentication"),
+            body_code=task_ir.get("body_code"),
+            body_imports=list(task_ir.get("body_imports") or []),
+            body_required_parameters=dict(task_ir.get("body_required_parameters") or {}),
+            disable_cert_validation=bool(task_ir.get("disable_cert_validation", False)),
+            http_request_timeout_seconds=task_ir.get("http_request_timeout_seconds"),
         )
     if task_type == "SetVariableActivity":
         return SetVariableActivity(

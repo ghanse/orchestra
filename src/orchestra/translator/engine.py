@@ -1517,6 +1517,16 @@ def _activity_extra_fields(activity: Activity) -> dict[str, Any]:
                 extra["headers"] = activity.headers
             if activity.authentication:
                 extra["authentication"] = activity.authentication
+            if activity.body_code is not None:
+                extra["body_code"] = activity.body_code
+            if activity.body_imports:
+                extra["body_imports"] = activity.body_imports
+            if activity.body_required_parameters:
+                extra["body_required_parameters"] = activity.body_required_parameters
+            if activity.disable_cert_validation:
+                extra["disable_cert_validation"] = activity.disable_cert_validation
+            if activity.http_request_timeout_seconds:
+                extra["http_request_timeout_seconds"] = activity.http_request_timeout_seconds
         case DeleteActivity():
             extra["dataset_name"] = activity.dataset_name
             if activity.folder_path:
