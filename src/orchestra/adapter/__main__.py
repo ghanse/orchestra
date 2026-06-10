@@ -39,9 +39,11 @@ from orchestra.adapter.models import (
 )
 from orchestra.adapter.operations import (
     apply_configuration,
+    collect_copy_notify_args,
     collect_workspace_artifact_paths,
     detect_databricks_hosts,
     gather_options,
+    provision_notification_destinations,
     validate_answer,
 )
 from orchestra.bundler.dab_writer import pipeline_dict_to_ir
@@ -367,7 +369,16 @@ def _run_modify(args: argparse.Namespace) -> int:
         _stamp_lookup_values_into_metadata_driven_motifs(apply_configuration(pipeline, configuration), lookup_values)
         for pipeline in pipelines
     ]
-    modified = [_pipeline_to_dict(pipeline) for pipeline in stamped_pipelines]
+    # Prompt-time provisioning: create (or reuse) the Databricks notification
+    # destination for any non-email copy_and_notify spec now, so it exists and the
+    # resolved id is baked into the report.  Email needs no destination.
+    provisioned_pipelines = []
+    for pipeline in stamped_pipelines:
+        provisioned, messages = provision_notification_destinations(pipeline)
+        provisioned_pipelines.append(provisioned)
+        for message in messages:
+            print(message, file=sys.stderr)
+    modified = [_pipeline_to_dict(pipeline) for pipeline in provisioned_pipelines]
     _write_modified_report(args.report, modified, args.out)
     return 0
 
@@ -580,10 +591,8 @@ def _configuration_from_answers(answers: dict[str, str]) -> TranslationConfigura
             validated.get("copy_notify_destination", DEFAULT_CONFIGURATION.copy_notify_destination)
         ),
         copy_notify_events=NotifyEvents(validated.get("copy_notify_events", DEFAULT_CONFIGURATION.copy_notify_events)),
-        copy_notify_email_recipients=validated.get("copy_notify_email_recipients", ""),
-        copy_notify_webhook_url=validated.get("copy_notify_webhook_url", ""),
-        copy_notify_pagerduty_integration_key=validated.get("copy_notify_pagerduty_integration_key", ""),
         copy_notify_destination_name=validated.get("copy_notify_destination_name", ""),
+        copy_notify_args=collect_copy_notify_args(validated),
         motif_consolidations=motif_consolidations,
     )
 

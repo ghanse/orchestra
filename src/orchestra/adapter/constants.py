@@ -80,7 +80,6 @@ DATABASE_SOURCE_TYPE_HINT: Final[str] = "database"
 
 OPTION_COPY_NOTIFY_DESTINATION: Final[str] = "copy_notify_destination"
 OPTION_COPY_NOTIFY_EVENTS: Final[str] = "copy_notify_events"
-OPTION_COPY_NOTIFY_EMAIL_RECIPIENTS: Final[str] = "copy_notify_email_recipients"
-OPTION_COPY_NOTIFY_WEBHOOK_URL: Final[str] = "copy_notify_webhook_url"
-OPTION_COPY_NOTIFY_PAGERDUTY_KEY: Final[str] = "copy_notify_pagerduty_integration_key"
 OPTION_COPY_NOTIFY_DESTINATION_NAME: Final[str] = "copy_notify_destination_name"
+# Per-field notification follow-up option ids (e.g. copy_notify_email_recipients,
+# copy_notify_slack_url) are defined by the _NOTIFY_FIELDS registry in operations.py.

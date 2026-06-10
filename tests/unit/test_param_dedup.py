@@ -10,9 +10,13 @@ def _report(default="us"):
         "name": "pipeline_simple",
         "parameters": [{"name": "region", "type": "String", "default": default}],
         "tasks": [
-            {"name": "Ingest Bronze", "type": "NotebookActivity", "task_key": "ingest_bronze",
-             "notebook_path": "/Shared/ETL/01_ingest_bronze",
-             "base_parameters": {"region": "@pipeline().parameters.region"}},
+            {
+                "name": "Ingest Bronze",
+                "type": "NotebookActivity",
+                "task_key": "ingest_bronze",
+                "notebook_path": "/Shared/ETL/01_ingest_bronze",
+                "base_parameters": {"region": "@pipeline().parameters.region"},
+            },
         ],
     }
 

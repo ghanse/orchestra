@@ -167,10 +167,11 @@ class TranslationConfiguration:
     metadata_driven_lookup_tool: MetadataDrivenLookupTool = MetadataDrivenLookupTool.NONE
     copy_notify_destination: CopyNotifyDestination = CopyNotifyDestination.KEEP
     copy_notify_events: NotifyEvents = NotifyEvents.BOTH
-    copy_notify_email_recipients: str = ""
-    copy_notify_webhook_url: str = ""
-    copy_notify_pagerduty_integration_key: str = ""
     copy_notify_destination_name: str = ""
+    # Resolved Databricks-SDK config kwargs for the chosen destination, keyed by
+    # SDK arg name (e.g. ``addresses``, ``url``, ``integration_key``).  Populated
+    # from the chained per-field follow-up answers via collect_copy_notify_args.
+    copy_notify_args: dict[str, str] = field(default_factory=dict)
     motif_consolidations: dict[str, MotifConsolidate] = field(default_factory=dict)
     per_task: dict[str, dict[str, str]] = field(default_factory=dict)
 

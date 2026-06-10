@@ -14,8 +14,10 @@ def test_clean_job_has_no_findings():
         "name": "p",
         "parameters": [{"name": "region", "default": "us"}],
         "tasks": [
-            {"task_key": "a", "notebook_task": {"notebook_path": "/n",
-                                                "base_parameters": {"region": "{{job.parameters.region}}"}}},
+            {
+                "task_key": "a",
+                "notebook_task": {"notebook_path": "/n", "base_parameters": {"region": "{{job.parameters.region}}"}},
+            },
             {"task_key": "b", "depends_on": [{"task_key": "a"}], "notebook_task": {"notebook_path": "/n"}},
         ],
     }

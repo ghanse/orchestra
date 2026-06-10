@@ -27,10 +27,7 @@ from orchestra.adapter.constants import (
     OPTION_COPY_ACTIVITY_PARADIGM,
     OPTION_COPY_NOTIFY_DESTINATION,
     OPTION_COPY_NOTIFY_DESTINATION_NAME,
-    OPTION_COPY_NOTIFY_EMAIL_RECIPIENTS,
     OPTION_COPY_NOTIFY_EVENTS,
-    OPTION_COPY_NOTIFY_PAGERDUTY_KEY,
-    OPTION_COPY_NOTIFY_WEBHOOK_URL,
     OPTION_METADATA_DRIVEN_ACCESS,
     OPTION_METADATA_DRIVEN_CONSOLIDATE,
     OPTION_METADATA_DRIVEN_LOOKUP_TOOL,
@@ -78,6 +75,11 @@ from orchestra.models.ir import (
 )
 from orchestra.models.motifs import MOTIF_LAKEFLOW_CONNECT_DATABASE
 
+# Option ids that take free-form text input (no backing enum) are accepted by
+# ``validate_answer`` with any value -- distinct from a genuinely unknown option
+# id, which is still rejected.  The set is derived from the notification field
+# registry (COPY_NOTIFY_FREE_TEXT_OPTION_IDS, defined below).
+
 
 def enum_for(option_id: str) -> type[StrEnum] | None:
     """Returns the enum class backing a configuration field.
@@ -124,10 +126,13 @@ def validate_answer(option_id: str, value: str) -> str:
             the allowed set for the option.
     """
     allowed = allowed_values_for(option_id)
-    if not allowed:
-        raise ValueError(f"Unknown option_id {option_id!r}")
-    if value not in allowed:
-        raise ValueError(f"Invalid answer {value!r} for {option_id!r}; allowed: {sorted(allowed)}")
+    if allowed:
+        if value not in allowed:
+            raise ValueError(f"Invalid answer {value!r} for {option_id!r}; allowed: {sorted(allowed)}")
+        return value
+    if option_id in COPY_NOTIFY_FREE_TEXT_OPTION_IDS:
+        return value
+    raise ValueError(f"Unknown option_id {option_id!r}")
     return value
 
 
@@ -256,12 +261,6 @@ def gather_options(
         _build_metadata_driven_access_option,
         _build_metadata_driven_size_option,
         _build_metadata_driven_lookup_tool_option,
-        _build_copy_notify_destination_option,
-        _build_copy_notify_email_recipients_option,
-        _build_copy_notify_webhook_url_option,
-        _build_copy_notify_pagerduty_key_option,
-        _build_copy_notify_destination_name_option,
-        _build_copy_notify_events_option,
     )
     candidates = (builder(pipeline, motif_list, answers=answer_map) for builder in builders)
     pending = [
@@ -277,6 +276,12 @@ def gather_options(
         if motif_option.option_id in answer_map:
             continue
         pending.append(motif_option)
+    # Copy->Notify chain: destination choice first, then one follow-up per SDK
+    # field of the chosen destination (surfaced once the destination is answered).
+    for copy_notify_option in _build_copy_notify_options(pipeline, answer_map):
+        if copy_notify_option.option_id in answer_map:
+            continue
+        pending.append(copy_notify_option)
     return PendingOptions(pipeline_name=pipeline.name, options=pending)
 
 
@@ -319,8 +324,107 @@ def apply_configuration(pipeline: Pipeline, pipeline_configuration: TranslationC
     return stamped
 
 
+def provision_notification_destinations(pipeline: Pipeline) -> tuple[Pipeline, list[str]]:
+    """Create the Databricks notification destinations for *pipeline* at prompt time.
+
+    Walks the collapsed Copy tasks and, for every non-email ``copy_and_notify``
+    notification spec, creates (or reuses) the destination via the SDK now and stamps
+    the resolved ``destination_id`` back onto the task.  Email specs are left untouched
+    -- email wires raw ``email_notifications`` and needs no destination.  This runs in
+    the adapter ``modify`` phase so the destination exists (and validates) as soon as
+    the user answers, rather than at prepare time.
+
+    Returns:
+        ``(pipeline, messages)`` -- a copy of *pipeline* with resolved ids stamped in,
+        and human-readable status lines (one per destination) for surfacing to the user.
+        When no non-email notifications are present the pipeline is returned unchanged
+        with an empty message list and no SDK call is made.
+    """
+    from orchestra.preparer.notifications import provision_destination
+
+    messages: list[str] = []
+    new_tasks: list = []
+    changed = False
+    for task in pipeline.tasks:
+        spec = getattr(task, "notifications", None)
+        if spec and spec.get("destination") not in (None, "", "email"):
+            new_spec, message = provision_destination(spec)
+            if message:
+                messages.append(message)
+            if new_spec is not spec:
+                task = dataclasses.replace(task, notifications=new_spec)
+                changed = True
+        new_tasks.append(task)
+    if not changed:
+        return pipeline, messages
+    return dataclasses.replace(pipeline, tasks=new_tasks), messages
+
+
 _COPY_NOTIFY_WEBHOOK_DESTS: frozenset[str] = frozenset({"slack", "teams", "webhook"})
-_COPY_NOTIFY_NAMED_DESTS: frozenset[str] = frozenset({"slack", "teams", "pagerduty", "webhook"})
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class _NotifyField:
+    """One Databricks-SDK config field of a notification destination.
+
+    Surfaced as a chained follow-up option after the user picks a destination.
+
+    Attributes:
+        option_id: Adapter option id for the follow-up question.
+        sdk_arg: The kwarg on the SDK config class (e.g. ``url``, ``addresses``).
+        prompt: The question text.
+        required: Whether the SDK config needs this field for the destination.
+        is_list: When True the comma-separated answer is split into a list
+            (used for email ``addresses``).
+    """
+
+    option_id: str
+    sdk_arg: str
+    prompt: str
+    required: bool = True
+    is_list: bool = False
+
+
+# Per-destination SDK fields (required first), derived from the Databricks SDK
+# notification-destination config classes (settings.EmailConfig / SlackConfig /
+# MicrosoftTeamsConfig / PagerdutyConfig / GenericWebhookConfig).  The adapter
+# chains one follow-up option per field after the destination is chosen.
+_NOTIFY_FIELDS: dict[str, tuple[_NotifyField, ...]] = {
+    CopyNotifyDestination.EMAIL.value: (
+        _NotifyField(
+            "copy_notify_email_recipients",
+            "addresses",
+            "Recipient email address(es)? (comma-separated)",
+            is_list=True,
+        ),
+    ),
+    CopyNotifyDestination.SLACK.value: (
+        _NotifyField("copy_notify_slack_url", "url", "Slack incoming webhook URL?"),
+        _NotifyField("copy_notify_slack_channel_id", "channel_id", "Slack channel id? (optional)", required=False),
+        _NotifyField("copy_notify_slack_oauth_token", "oauth_token", "Slack OAuth token? (optional)", required=False),
+    ),
+    CopyNotifyDestination.TEAMS.value: (
+        _NotifyField("copy_notify_teams_url", "url", "Microsoft Teams incoming webhook URL?"),
+    ),
+    CopyNotifyDestination.PAGERDUTY.value: (
+        _NotifyField("copy_notify_pagerduty_integration_key", "integration_key", "PagerDuty integration key?"),
+    ),
+    CopyNotifyDestination.WEBHOOK.value: (
+        _NotifyField("copy_notify_webhook_url", "url", "Generic webhook URL?"),
+        _NotifyField(
+            "copy_notify_webhook_username", "username", "Webhook basic-auth username? (optional)", required=False
+        ),
+        _NotifyField(
+            "copy_notify_webhook_password", "password", "Webhook basic-auth password? (optional)", required=False
+        ),
+    ),
+}
+
+# Free-text follow-up option ids (no backing enum).  ``validate_answer`` accepts
+# any value for these, distinct from a genuinely unknown option id.
+COPY_NOTIFY_FREE_TEXT_OPTION_IDS: frozenset[str] = frozenset(
+    {field.option_id for fields in _NOTIFY_FIELDS.values() for field in fields} | {OPTION_COPY_NOTIFY_DESTINATION_NAME}
+)
 
 
 def _find_copy_notify_groups(tasks: list) -> dict[str, list[tuple[Any, str]]]:
@@ -350,13 +454,20 @@ def _copy_notify_dest(answers: dict[str, str] | None) -> str:
     return (answers or {}).get(OPTION_COPY_NOTIFY_DESTINATION, "")
 
 
-def _build_copy_notify_destination_option(
-    pipeline: Pipeline, motifs: list, answers: dict[str, str] | None = None
-) -> TranslationOption | None:
+def _freetext_option(option_id: str, prompt: str, rationale: str, affected: tuple[str, ...]) -> TranslationOption:
+    """Builds a free-text option (no enum choices)."""
+    return TranslationOption(
+        option_id=option_id,
+        prompt=prompt,
+        rationale=rationale,
+        options=(),
+        affected_task_keys=affected,
+        default="",
+    )
+
+
+def _build_copy_notify_destination_option(affected: tuple[str, ...]) -> TranslationOption:
     """Asks whether/how to route a Copy->Notify motif to a Databricks destination."""
-    affected = _copy_notify_present(pipeline)
-    if not affected:
-        return None
     return TranslationOption(
         option_id=OPTION_COPY_NOTIFY_DESTINATION,
         prompt="A Copy is followed by notification Web activities. Route these to a Databricks destination?",
@@ -403,81 +514,7 @@ def _build_copy_notify_destination_option(
     )
 
 
-def _freetext_option(option_id: str, prompt: str, rationale: str, affected: tuple[str, ...]) -> TranslationOption:
-    """Builds a free-text option (no enum choices)."""
-    return TranslationOption(
-        option_id=option_id,
-        prompt=prompt,
-        rationale=rationale,
-        options=(),
-        affected_task_keys=affected,
-        default="",
-    )
-
-
-def _build_copy_notify_email_recipients_option(
-    pipeline: Pipeline, motifs: list, answers: dict[str, str] | None = None
-) -> TranslationOption | None:
-    affected = _copy_notify_present(pipeline)
-    if not affected or _copy_notify_dest(answers) != CopyNotifyDestination.EMAIL.value:
-        return None
-    return _freetext_option(
-        OPTION_COPY_NOTIFY_EMAIL_RECIPIENTS,
-        "Recipient email address(es)? (comma-separated)",
-        "Addresses wired into the task's email_notifications for the chosen events.",
-        affected,
-    )
-
-
-def _build_copy_notify_webhook_url_option(
-    pipeline: Pipeline, motifs: list, answers: dict[str, str] | None = None
-) -> TranslationOption | None:
-    affected = _copy_notify_present(pipeline)
-    if not affected or _copy_notify_dest(answers) not in _COPY_NOTIFY_WEBHOOK_DESTS:
-        return None
-    return _freetext_option(
-        OPTION_COPY_NOTIFY_WEBHOOK_URL,
-        "Incoming webhook URL for the destination?",
-        "Used to create the Slack/Teams/Generic-Webhook notification destination via the Databricks SDK.",
-        affected,
-    )
-
-
-def _build_copy_notify_pagerduty_key_option(
-    pipeline: Pipeline, motifs: list, answers: dict[str, str] | None = None
-) -> TranslationOption | None:
-    affected = _copy_notify_present(pipeline)
-    if not affected or _copy_notify_dest(answers) != CopyNotifyDestination.PAGERDUTY.value:
-        return None
-    return _freetext_option(
-        OPTION_COPY_NOTIFY_PAGERDUTY_KEY,
-        "PagerDuty integration key?",
-        "Used to create the PagerDuty notification destination via the Databricks SDK.",
-        affected,
-    )
-
-
-def _build_copy_notify_destination_name_option(
-    pipeline: Pipeline, motifs: list, answers: dict[str, str] | None = None
-) -> TranslationOption | None:
-    affected = _copy_notify_present(pipeline)
-    if not affected or _copy_notify_dest(answers) not in _COPY_NOTIFY_NAMED_DESTS:
-        return None
-    return _freetext_option(
-        OPTION_COPY_NOTIFY_DESTINATION_NAME,
-        "Display name for the notification destination? (optional; default derived)",
-        "Reused if a destination with this name already exists, so prepare is idempotent.",
-        affected,
-    )
-
-
-def _build_copy_notify_events_option(
-    pipeline: Pipeline, motifs: list, answers: dict[str, str] | None = None
-) -> TranslationOption | None:
-    affected = _copy_notify_present(pipeline)
-    dest = _copy_notify_dest(answers)
-    if not affected or dest in ("", CopyNotifyDestination.KEEP.value):
-        return None
+def _build_copy_notify_events_option(affected: tuple[str, ...]) -> TranslationOption:
     return TranslationOption(
         option_id=OPTION_COPY_NOTIFY_EVENTS,
         prompt="Which events should notify?",
@@ -500,19 +537,77 @@ def _build_copy_notify_events_option(
     )
 
 
+def _build_copy_notify_options(pipeline: Pipeline, answers: dict[str, str] | None) -> list[TranslationOption]:
+    """Returns the chained copy_and_notify options.
+
+    The first prompt is the destination choice.  Once a (non-keep) destination is
+    answered, one follow-up option is surfaced per SDK field of that destination
+    (required first; optional fields flagged), so the agent prompts for each field
+    sequentially, followed by an optional display name and the events selector.
+    """
+    affected = _copy_notify_present(pipeline)
+    if not affected:
+        return []
+    options: list[TranslationOption] = [_build_copy_notify_destination_option(affected)]
+    dest = _copy_notify_dest(answers)
+    if dest in ("", CopyNotifyDestination.KEEP.value):
+        return options
+    for field in _NOTIFY_FIELDS.get(dest, ()):
+        suffix = "" if field.required else " (optional -- leave blank to skip)"
+        options.append(
+            _freetext_option(
+                field.option_id,
+                field.prompt,
+                f"Maps to the Databricks SDK {dest} config field `{field.sdk_arg}`.{suffix}",
+                affected,
+            )
+        )
+    options.append(
+        _freetext_option(
+            OPTION_COPY_NOTIFY_DESTINATION_NAME,
+            "Display name for the notification destination? (optional; default derived)",
+            "Reused if a destination with this name already exists, so prepare is idempotent.",
+            affected,
+        )
+    )
+    options.append(_build_copy_notify_events_option(affected))
+    return options
+
+
+def collect_copy_notify_args(answers: dict[str, str]) -> dict[str, str]:
+    """Collect the per-field notification answers into ``{sdk_arg: value}``.
+
+    Reads only the fields belonging to the chosen destination so that, e.g., the
+    Slack ``url`` answer and a Webhook ``url`` answer never collide.
+    """
+    dest = answers.get(OPTION_COPY_NOTIFY_DESTINATION, "")
+    args: dict[str, str] = {}
+    for field in _NOTIFY_FIELDS.get(dest, ()):
+        value = answers.get(field.option_id)
+        if value:
+            args[field.sdk_arg] = value
+    return args
+
+
 def _notification_spec(config: TranslationConfiguration) -> dict[str, Any]:
-    """Builds the notification spec dict stamped onto the collapsed Copy task."""
+    """Builds the notification spec stamped onto the collapsed Copy task.
+
+    ``args`` carries the resolved SDK config kwargs for the destination; email
+    ``addresses`` is split into a list, other fields pass through as strings.
+    """
     dest = config.copy_notify_destination.value
     spec: dict[str, Any] = {
         "destination": dest,
         "destination_name": config.copy_notify_destination_name or f"orchestra-{dest}",
+        "args": {},
     }
-    if dest == CopyNotifyDestination.EMAIL.value:
-        spec["email_recipients"] = [e.strip() for e in config.copy_notify_email_recipients.split(",") if e.strip()]
-    elif dest in _COPY_NOTIFY_WEBHOOK_DESTS:
-        spec["webhook_url"] = config.copy_notify_webhook_url
-    elif dest == CopyNotifyDestination.PAGERDUTY.value:
-        spec["pagerduty_integration_key"] = config.copy_notify_pagerduty_integration_key
+    for field in _NOTIFY_FIELDS.get(dest, ()):
+        raw = config.copy_notify_args.get(field.sdk_arg, "")
+        if not raw:
+            continue
+        spec["args"][field.sdk_arg] = (
+            [item.strip() for item in raw.split(",") if item.strip()] if field.is_list else raw
+        )
     return spec
 
 

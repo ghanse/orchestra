@@ -240,13 +240,30 @@ notification Web activities, the adapter raises `copy_notify_destination`:
 collapsed. Any other value (`email`, `slack`, `teams`, `pagerduty`, `webhook`)
 collapses the pattern: the Copy becomes the task and the notifications become
 Databricks job-task `on_success`/`on_failure` notifications routed to that
-destination (the ADF Web activity URL/body is not used). Chained follow-ups
-gather the destination arguments — `copy_notify_email_recipients` (email),
-`copy_notify_webhook_url` (slack/teams/webhook), `copy_notify_pagerduty_integration_key`
-(pagerduty), an optional `copy_notify_destination_name`, and `copy_notify_events`
-(both/on_failure/on_success). For non-email destinations the prepare phase
-creates (or reuses) a Databricks notification destination via the SDK and wires
-its id into the task's `webhook_notifications`; email uses raw `email_notifications`.
+destination (the ADF Web activity URL/body is not used). Once a non-`keep`
+destination is chosen, the adapter chains **one follow-up per Databricks-SDK
+field** of that destination, required fields first, so each is prompted
+sequentially (re-run `inspect --answers` after each answer to surface the next):
+
+| Destination | Chained field options (SDK arg) |
+|-------------|---------------------------------|
+| `email`     | `copy_notify_email_recipients` (`addresses`, comma-separated) |
+| `slack`     | `copy_notify_slack_url` (`url`), `copy_notify_slack_channel_id` (`channel_id`, optional), `copy_notify_slack_oauth_token` (`oauth_token`, optional) |
+| `teams`     | `copy_notify_teams_url` (`url`) |
+| `pagerduty` | `copy_notify_pagerduty_integration_key` (`integration_key`) |
+| `webhook`   | `copy_notify_webhook_url` (`url`), `copy_notify_webhook_username` (`username`, optional), `copy_notify_webhook_password` (`password`, optional) |
+
+All destinations also take an optional `copy_notify_destination_name` and
+`copy_notify_events` (both/on_failure/on_success). Optional fields left blank are
+omitted so the SDK applies its defaults. For **non-email** destinations, the
+`modify` phase creates (or reuses by display name) the Databricks notification
+destination via the SDK **as soon as you submit the answers** — it validates the
+config immediately and bakes the resolved destination id into the modified report,
+so prepare just wires `webhook_notifications` to that id (no further SDK call).
+This requires workspace auth at `modify` time; if creation fails there, the id is
+left unresolved and prepare retries or emits a `notification_destination` setup task.
+**Email** needs no destination — it uses raw `email_notifications` and is never
+created via the SDK.
 
 When the metadata-driven flow ends with `metadata_driven_lookup_tool=have`
 and the agent has a database tool (Genie, MCP SQL, or a workspace SDK),
