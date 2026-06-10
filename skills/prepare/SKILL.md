@@ -261,3 +261,5 @@ Recommend running `databricks bundle validate` first to catch any configuration 
 | `src/notebooks/*.py` | Generated notebooks |
 | `setup/*.py` | Infrastructure setup scripts |
 | `tests/*.py` | Skeleton test files |
+
+> **Notification destinations.** When a `copy_and_notify` motif was opted into a Slack/Teams/PagerDuty/Generic-Webhook destination, the prepare phase creates (or reuses by display name) the Databricks notification destination via the SDK and wires its id into the task's `webhook_notifications`. This needs workspace auth at prepare time; without it, a `notification_destination` setup task is emitted in SETUP.md instead and the task ships without notifications.

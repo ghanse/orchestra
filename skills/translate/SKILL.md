@@ -185,13 +185,36 @@ Invoke `adf-to-databricks:adf-trigger-converter` with:
 
 ### Step 5 — Collect agentic results
 
-Each agentic skill invocation produces a translation result. Collect all results into `<output_dir>/agentic_results/`:
-- Save each result as `<pipeline>__<activity>.json`
-- Include the generated IR, any notebooks, and metadata
+Each resolved agentic gap produces one translation result. Write them into
+`<output_dir>/agentic_results/` as one JSON file per activity (the filename is
+arbitrary, e.g. `<pipeline>__<activity>.json`). Each file MUST use this schema:
+
+```json
+{
+  "activity_name": "<the placeholder activity name, exactly as in the report>",
+  "pipeline": "<pipeline name>",
+  "task": {
+    "type": "NotebookActivity",
+    "name": "<activity name>",
+    "task_key": "<task key>",
+    "notebook_path": "/Workspace/.../your_translated_notebook"
+  }
+}
+```
+
+- `activity_name` (required) — matches the `name` of the placeholder task in the
+  report (the merge locates it by name, recursing into IfCondition / ForEach /
+  Switch containers, so nested gaps like an `Until` are found).
+- `pipeline` (optional) — only needed to disambiguate multi-pipeline reports.
+- `task` (required) — the replacement IR task. The most portable form is a
+  `NotebookActivity` whose `notebook_path` points at a notebook you have written
+  to the workspace; the prepare phase references it directly. `task_key` and
+  `depends_on` are inherited from the placeholder when omitted, so dependency
+  edges are preserved.
 
 ### Step 6 — Merge agentic results
 
-Run the merge step to combine deterministic and agentic translations:
+Fold the results into the translation report (placeholders are replaced in place):
 
 ```bash
 python3 <plugin_dir>/src/orchestra/translator/engine.py \
@@ -199,6 +222,8 @@ python3 <plugin_dir>/src/orchestra/translator/engine.py \
   --report <translation_report_path> \
   --agentic-results <agentic_results_dir>
 ```
+
+Equivalently via the unified runner: `python -m orchestra.adapter translate --merge-agentic --report <report> --agentic-results <dir>`. Add `--output <path>` to write a copy instead of overwriting the report. The command exits non-zero if any result could not be matched to a placeholder.
 
 This updates `translation_report.json` with the agentic results merged in, changing their status from `pending` to `translated` (or `failed` if the agentic skill could not produce a result).
 
@@ -208,6 +233,20 @@ The adapter raises several configuration options plus a chained set for
 metadata-driven motifs. Every time the user answers a option whose value 
 gates further prompts, re-run `inspect --answers <answers.json>` to surface 
 the next batch.
+
+**Copy→Notify (`copy_and_notify`) motifs.** When a Copy activity is followed by
+notification Web activities, the adapter raises `copy_notify_destination`:
+`keep` (default) leaves the Web activities to translate directly — nothing is
+collapsed. Any other value (`email`, `slack`, `teams`, `pagerduty`, `webhook`)
+collapses the pattern: the Copy becomes the task and the notifications become
+Databricks job-task `on_success`/`on_failure` notifications routed to that
+destination (the ADF Web activity URL/body is not used). Chained follow-ups
+gather the destination arguments — `copy_notify_email_recipients` (email),
+`copy_notify_webhook_url` (slack/teams/webhook), `copy_notify_pagerduty_integration_key`
+(pagerduty), an optional `copy_notify_destination_name`, and `copy_notify_events`
+(both/on_failure/on_success). For non-email destinations the prepare phase
+creates (or reuses) a Databricks notification destination via the SDK and wires
+its id into the task's `webhook_notifications`; email uses raw `email_notifications`.
 
 When the metadata-driven flow ends with `metadata_driven_lookup_tool=have`
 and the agent has a database tool (Genie, MCP SQL, or a workspace SDK),

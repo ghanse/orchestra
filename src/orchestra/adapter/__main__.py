@@ -23,6 +23,7 @@ from orchestra.adapter.constants import MOTIF_CONSOLIDATE_OPTION_PREFIX
 from orchestra.adapter.models import (
     DEFAULT_CONFIGURATION,
     CopyActivityParadigm,
+    CopyNotifyDestination,
     LakeflowConnectorType,
     MetadataDrivenAccess,
     MetadataDrivenConsolidate,
@@ -30,6 +31,7 @@ from orchestra.adapter.models import (
     MetadataDrivenSize,
     MotifConsolidate,
     NonDatabricksTaskCompute,
+    NotifyEvents,
     PendingOptions,
     TranslationConfiguration,
     TranslationOption,
@@ -574,6 +576,14 @@ def _configuration_from_answers(answers: dict[str, str]) -> TranslationConfigura
         metadata_driven_lookup_tool=MetadataDrivenLookupTool(
             validated.get("metadata_driven_lookup_tool", DEFAULT_CONFIGURATION.metadata_driven_lookup_tool)
         ),
+        copy_notify_destination=CopyNotifyDestination(
+            validated.get("copy_notify_destination", DEFAULT_CONFIGURATION.copy_notify_destination)
+        ),
+        copy_notify_events=NotifyEvents(validated.get("copy_notify_events", DEFAULT_CONFIGURATION.copy_notify_events)),
+        copy_notify_email_recipients=validated.get("copy_notify_email_recipients", ""),
+        copy_notify_webhook_url=validated.get("copy_notify_webhook_url", ""),
+        copy_notify_pagerduty_integration_key=validated.get("copy_notify_pagerduty_integration_key", ""),
+        copy_notify_destination_name=validated.get("copy_notify_destination_name", ""),
         motif_consolidations=motif_consolidations,
     )
 

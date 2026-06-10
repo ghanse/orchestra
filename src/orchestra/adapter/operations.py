@@ -25,6 +25,12 @@ from orchestra.adapter.constants import (
     METADATA_DRIVEN_MOTIF_ID,
     MOTIF_CONSOLIDATE_OPTION_PREFIX,
     OPTION_COPY_ACTIVITY_PARADIGM,
+    OPTION_COPY_NOTIFY_DESTINATION,
+    OPTION_COPY_NOTIFY_DESTINATION_NAME,
+    OPTION_COPY_NOTIFY_EMAIL_RECIPIENTS,
+    OPTION_COPY_NOTIFY_EVENTS,
+    OPTION_COPY_NOTIFY_PAGERDUTY_KEY,
+    OPTION_COPY_NOTIFY_WEBHOOK_URL,
     OPTION_METADATA_DRIVEN_ACCESS,
     OPTION_METADATA_DRIVEN_CONSOLIDATE,
     OPTION_METADATA_DRIVEN_LOOKUP_TOOL,
@@ -35,6 +41,7 @@ from orchestra.adapter.constants import (
 from orchestra.adapter.models import (
     FIELD_TO_ENUM,
     CopyActivityParadigm,
+    CopyNotifyDestination,
     LakeflowConnectorType,
     MetadataDrivenAccess,
     MetadataDrivenConsolidate,
@@ -42,6 +49,7 @@ from orchestra.adapter.models import (
     MetadataDrivenSize,
     MotifConsolidate,
     NonDatabricksTaskCompute,
+    NotifyEvents,
     OptionChoice,
     PendingOptions,
     TranslationConfiguration,
@@ -59,12 +67,14 @@ from orchestra.adapter.predicates import (
 from orchestra.models.ir import (
     Activity,
     CopyActivity,
+    Dependency,
     ForEachActivity,
     IfConditionActivity,
     MotifActivity,
     Pipeline,
     SwitchActivity,
     SwitchCase,
+    WebActivity,
 )
 from orchestra.models.motifs import MOTIF_LAKEFLOW_CONNECT_DATABASE
 
@@ -246,6 +256,12 @@ def gather_options(
         _build_metadata_driven_access_option,
         _build_metadata_driven_size_option,
         _build_metadata_driven_lookup_tool_option,
+        _build_copy_notify_destination_option,
+        _build_copy_notify_email_recipients_option,
+        _build_copy_notify_webhook_url_option,
+        _build_copy_notify_pagerduty_key_option,
+        _build_copy_notify_destination_name_option,
+        _build_copy_notify_events_option,
     )
     candidates = (builder(pipeline, motif_list, answers=answer_map) for builder in builders)
     pending = [
@@ -293,11 +309,262 @@ def apply_configuration(pipeline: Pipeline, pipeline_configuration: TranslationC
         The input pipeline is not mutated.
     """
     stamped_tasks = [_stamp_activity(activity, pipeline_configuration) for activity in pipeline.tasks]
-    return dataclasses.replace(
+    stamped = dataclasses.replace(
         pipeline,
         tasks=stamped_tasks,
         translation_configuration=pipeline_configuration,
     )
+    if pipeline_configuration.copy_notify_destination is not CopyNotifyDestination.KEEP:
+        stamped = _collapse_copy_notify(stamped, pipeline_configuration)
+    return stamped
+
+
+_COPY_NOTIFY_WEBHOOK_DESTS: frozenset[str] = frozenset({"slack", "teams", "webhook"})
+_COPY_NOTIFY_NAMED_DESTS: frozenset[str] = frozenset({"slack", "teams", "pagerduty", "webhook"})
+
+
+def _find_copy_notify_groups(tasks: list) -> dict[str, list[tuple[Any, str]]]:
+    """Find Copy->Notify groups in the IR: a Copy with WebActivity dependents.
+
+    Returns a mapping of ``copy_task_key`` -> list of ``(web_activity, outcome)``
+    where outcome is the dependency condition (``Succeeded`` / ``Failed`` / ...).
+    Mirrors the copy_and_notify motif on the (non-collapsed) IR.
+    """
+    copies = {t.task_key for t in tasks if isinstance(t, CopyActivity)}
+    groups: dict[str, list[tuple[Any, str]]] = {}
+    for task in tasks:
+        if isinstance(task, WebActivity) and task.depends_on:
+            for dep in task.depends_on:
+                if dep.task_key in copies:
+                    groups.setdefault(dep.task_key, []).append((task, dep.outcome or "Succeeded"))
+                    break
+    return groups
+
+
+def _copy_notify_present(pipeline: Pipeline) -> tuple[str, ...]:
+    """Task keys of Copy activities that have notify WebActivity dependents."""
+    return tuple(sorted(_find_copy_notify_groups(pipeline.tasks).keys()))
+
+
+def _copy_notify_dest(answers: dict[str, str] | None) -> str:
+    return (answers or {}).get(OPTION_COPY_NOTIFY_DESTINATION, "")
+
+
+def _build_copy_notify_destination_option(
+    pipeline: Pipeline, motifs: list, answers: dict[str, str] | None = None
+) -> TranslationOption | None:
+    """Asks whether/how to route a Copy->Notify motif to a Databricks destination."""
+    affected = _copy_notify_present(pipeline)
+    if not affected:
+        return None
+    return TranslationOption(
+        option_id=OPTION_COPY_NOTIFY_DESTINATION,
+        prompt="A Copy is followed by notification Web activities. Route these to a Databricks destination?",
+        rationale=(
+            "Choosing a destination collapses the pattern: the Copy becomes the task and the "
+            "downstream notifications become Databricks job-task success/failure notifications "
+            "(email_notifications or webhook_notifications). The ADF Web activity's own URL/body "
+            "is not used. Keeping preserves the current per-activity Web activity translation."
+        ),
+        options=(
+            OptionChoice(
+                value=CopyNotifyDestination.KEEP.value,
+                label="Keep current behavior",
+                description="Do not collapse; translate the Web activities directly.",
+            ),
+            OptionChoice(
+                value=CopyNotifyDestination.EMAIL.value,
+                label="Email",
+                description="Wire email_notifications with recipient addresses.",
+            ),
+            OptionChoice(
+                value=CopyNotifyDestination.SLACK.value,
+                label="Slack",
+                description="Create a Slack notification destination and wire webhook_notifications.",
+            ),
+            OptionChoice(
+                value=CopyNotifyDestination.TEAMS.value,
+                label="Microsoft Teams",
+                description="Create a Teams notification destination and wire webhook_notifications.",
+            ),
+            OptionChoice(
+                value=CopyNotifyDestination.PAGERDUTY.value,
+                label="PagerDuty",
+                description="Create a PagerDuty notification destination and wire webhook_notifications.",
+            ),
+            OptionChoice(
+                value=CopyNotifyDestination.WEBHOOK.value,
+                label="Generic Webhook",
+                description="Create a generic webhook destination and wire webhook_notifications.",
+            ),
+        ),
+        affected_task_keys=affected,
+        default=CopyNotifyDestination.KEEP.value,
+    )
+
+
+def _freetext_option(option_id: str, prompt: str, rationale: str, affected: tuple[str, ...]) -> TranslationOption:
+    """Builds a free-text option (no enum choices)."""
+    return TranslationOption(
+        option_id=option_id,
+        prompt=prompt,
+        rationale=rationale,
+        options=(),
+        affected_task_keys=affected,
+        default="",
+    )
+
+
+def _build_copy_notify_email_recipients_option(
+    pipeline: Pipeline, motifs: list, answers: dict[str, str] | None = None
+) -> TranslationOption | None:
+    affected = _copy_notify_present(pipeline)
+    if not affected or _copy_notify_dest(answers) != CopyNotifyDestination.EMAIL.value:
+        return None
+    return _freetext_option(
+        OPTION_COPY_NOTIFY_EMAIL_RECIPIENTS,
+        "Recipient email address(es)? (comma-separated)",
+        "Addresses wired into the task's email_notifications for the chosen events.",
+        affected,
+    )
+
+
+def _build_copy_notify_webhook_url_option(
+    pipeline: Pipeline, motifs: list, answers: dict[str, str] | None = None
+) -> TranslationOption | None:
+    affected = _copy_notify_present(pipeline)
+    if not affected or _copy_notify_dest(answers) not in _COPY_NOTIFY_WEBHOOK_DESTS:
+        return None
+    return _freetext_option(
+        OPTION_COPY_NOTIFY_WEBHOOK_URL,
+        "Incoming webhook URL for the destination?",
+        "Used to create the Slack/Teams/Generic-Webhook notification destination via the Databricks SDK.",
+        affected,
+    )
+
+
+def _build_copy_notify_pagerduty_key_option(
+    pipeline: Pipeline, motifs: list, answers: dict[str, str] | None = None
+) -> TranslationOption | None:
+    affected = _copy_notify_present(pipeline)
+    if not affected or _copy_notify_dest(answers) != CopyNotifyDestination.PAGERDUTY.value:
+        return None
+    return _freetext_option(
+        OPTION_COPY_NOTIFY_PAGERDUTY_KEY,
+        "PagerDuty integration key?",
+        "Used to create the PagerDuty notification destination via the Databricks SDK.",
+        affected,
+    )
+
+
+def _build_copy_notify_destination_name_option(
+    pipeline: Pipeline, motifs: list, answers: dict[str, str] | None = None
+) -> TranslationOption | None:
+    affected = _copy_notify_present(pipeline)
+    if not affected or _copy_notify_dest(answers) not in _COPY_NOTIFY_NAMED_DESTS:
+        return None
+    return _freetext_option(
+        OPTION_COPY_NOTIFY_DESTINATION_NAME,
+        "Display name for the notification destination? (optional; default derived)",
+        "Reused if a destination with this name already exists, so prepare is idempotent.",
+        affected,
+    )
+
+
+def _build_copy_notify_events_option(
+    pipeline: Pipeline, motifs: list, answers: dict[str, str] | None = None
+) -> TranslationOption | None:
+    affected = _copy_notify_present(pipeline)
+    dest = _copy_notify_dest(answers)
+    if not affected or dest in ("", CopyNotifyDestination.KEEP.value):
+        return None
+    return TranslationOption(
+        option_id=OPTION_COPY_NOTIFY_EVENTS,
+        prompt="Which events should notify?",
+        rationale="Defaults to both (whatever the source notify activities covered). Restrict if desired.",
+        options=(
+            OptionChoice(
+                value=NotifyEvents.BOTH.value,
+                label="Both success and failure",
+                description="Wire on_success and on_failure (as the source activities had).",
+            ),
+            OptionChoice(
+                value=NotifyEvents.ON_FAILURE.value, label="On failure only", description="Only wire on_failure."
+            ),
+            OptionChoice(
+                value=NotifyEvents.ON_SUCCESS.value, label="On success only", description="Only wire on_success."
+            ),
+        ),
+        affected_task_keys=affected,
+        default=NotifyEvents.BOTH.value,
+    )
+
+
+def _notification_spec(config: TranslationConfiguration) -> dict[str, Any]:
+    """Builds the notification spec dict stamped onto the collapsed Copy task."""
+    dest = config.copy_notify_destination.value
+    spec: dict[str, Any] = {
+        "destination": dest,
+        "destination_name": config.copy_notify_destination_name or f"orchestra-{dest}",
+    }
+    if dest == CopyNotifyDestination.EMAIL.value:
+        spec["email_recipients"] = [e.strip() for e in config.copy_notify_email_recipients.split(",") if e.strip()]
+    elif dest in _COPY_NOTIFY_WEBHOOK_DESTS:
+        spec["webhook_url"] = config.copy_notify_webhook_url
+    elif dest == CopyNotifyDestination.PAGERDUTY.value:
+        spec["pagerduty_integration_key"] = config.copy_notify_pagerduty_integration_key
+    return spec
+
+
+def _collapse_copy_notify(pipeline: Pipeline, config: TranslationConfiguration) -> Pipeline:
+    """Collapse Copy->Notify groups: drop the notify Web activities and stamp a
+    notification spec (events + chosen destination) onto each Copy task.
+
+    Dependents of a dropped notify activity are rewired to the Copy so the DAG
+    stays connected. The destination is created (and its id resolved) later, at
+    prepare time, by the Copy activity preparer.
+    """
+    groups = _find_copy_notify_groups(pipeline.tasks)
+    if not groups:
+        return pipeline
+    spec_base = _notification_spec(config)
+    notify_to_copy: dict[str, str] = {}
+    copy_events: dict[str, list[str]] = {}
+    drop: set[str] = set()
+    for copy_key, web_list in groups.items():
+        events: set[str] = set()
+        for web, outcome in web_list:
+            events.add("on_failure" if outcome == "Failed" else "on_success")
+            drop.add(web.task_key)
+            notify_to_copy[web.task_key] = copy_key
+        chosen = config.copy_notify_events
+        if chosen is NotifyEvents.ON_FAILURE:
+            events &= {"on_failure"}
+        elif chosen is NotifyEvents.ON_SUCCESS:
+            events &= {"on_success"}
+        copy_events[copy_key] = sorted(events) or ["on_failure"]
+
+    new_tasks: list = []
+    for task in pipeline.tasks:
+        if task.task_key in drop:
+            continue
+        deps = task.depends_on
+        if deps:
+            rewired: list = []
+            seen: set[str] = set()
+            for dep in deps:
+                key = notify_to_copy.get(dep.task_key, dep.task_key)
+                if key not in seen:
+                    seen.add(key)
+                    rewired.append(Dependency(task_key=key, outcome=dep.outcome))
+            deps = rewired
+        if isinstance(task, CopyActivity) and task.task_key in copy_events:
+            spec = {**spec_base, "events": copy_events[task.task_key]}
+            task = dataclasses.replace(task, depends_on=deps, notifications=spec)
+        else:
+            task = dataclasses.replace(task, depends_on=deps)
+        new_tasks.append(task)
+    return dataclasses.replace(pipeline, tasks=new_tasks)
 
 
 def _build_copy_activity_paradigm_option(

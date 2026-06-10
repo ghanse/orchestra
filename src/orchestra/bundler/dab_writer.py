@@ -1614,6 +1614,7 @@ def _common_activity_kwargs(task_ir: dict[str, Any]) -> dict[str, Any]:
         "parameter_approximations": list(task_ir.get("parameter_approximations") or []),
         "required_parameters": dict(task_ir.get("required_parameters") or {}),
         "compute_mode": task_ir.get("compute_mode"),
+        "notifications": task_ir.get("notifications"),
     }
 
 

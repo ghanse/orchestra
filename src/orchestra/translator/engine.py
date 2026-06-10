@@ -239,6 +239,9 @@ def translate_pipeline(
     )
 
 
+_OPT_IN_ONLY_MOTIFS: frozenset[str] = frozenset({"copy_and_notify"})
+
+
 def _filter_motifs_for_collapse(
     detected_motifs: list,
     motif_consolidations: dict[str, str] | None,
@@ -256,8 +259,11 @@ def _filter_motifs_for_collapse(
         The subset of motifs to pass to
         :func:`orchestra.motifs.collapser.collapse_motifs`.
     """
+    # copy_and_notify is destructive (it drops the notify activities in favour
+    # of Databricks job-task notifications), so it is never collapsed implicitly
+    # -- only when the user explicitly opts into a notification destination.
     if motif_consolidations is None:
-        return list(detected_motifs)
+        return [m for m in detected_motifs if m.definition.motif_id not in _OPT_IN_ONLY_MOTIFS]
     return [m for m in detected_motifs if motif_consolidations.get(m.definition.motif_id) == "consolidate"]
 
 
@@ -1366,6 +1372,8 @@ def _activity_to_dict(task: Activity) -> dict[str, Any]:
         task_dict["existing_cluster_id"] = task.existing_cluster_id
     if task.compute_mode:
         task_dict["compute_mode"] = task.compute_mode
+    if task.notifications:
+        task_dict["notifications"] = task.notifications
     if task.libraries:
         task_dict["libraries"] = task.libraries
     if task.parameter_approximations:
@@ -1621,9 +1629,90 @@ def _pipeline_to_debug_dict(pipeline: Pipeline) -> dict[str, Any]:
     }
 
 
+def _find_and_replace_task(tasks: list[dict[str, Any]], activity_name: str, replacement: dict[str, Any]) -> bool:
+    """Replace the task named *activity_name* with *replacement*, recursing into containers.
+
+    Searches top-level tasks and the nested activity lists of IfCondition /
+    ForEach / Switch containers.  Preserves the placeholder's ``task_key`` and
+    ``depends_on`` when the replacement omits them so downstream dependency
+    edges stay intact.  Returns True when a match was replaced.
+    """
+    nested_keys = ("inner_activities", "if_true_activities", "if_false_activities", "default_activities")
+    for index, task in enumerate(tasks):
+        if task.get("name") == activity_name:
+            replacement.setdefault("task_key", task.get("task_key"))
+            replacement.setdefault("name", activity_name)
+            if "depends_on" not in replacement and task.get("depends_on"):
+                replacement["depends_on"] = task["depends_on"]
+            tasks[index] = replacement
+            return True
+        for key in nested_keys:
+            child = task.get(key)
+            if isinstance(child, list) and _find_and_replace_task(child, activity_name, replacement):
+                return True
+        for case in task.get("cases") or []:
+            if isinstance(case, dict) and isinstance(case.get("activities"), list):
+                if _find_and_replace_task(case["activities"], activity_name, replacement):
+                    return True
+    return False
+
+
+def merge_agentic_results(report_path: Path, results_dir: Path, output_path: Path | None = None) -> tuple[int, int]:
+    """Merge agent-produced per-activity translations into a translation report.
+
+    Each ``*.json`` file in *results_dir* describes one resolved agentic gap::
+
+        {
+          "activity_name": "<placeholder activity name>",   # required
+          "pipeline": "<pipeline name>",                    # optional; for multi-pipeline reports
+          "task": { ...IR task dict... }                    # required; replacement task
+        }
+
+    The matching placeholder task (located by ``name``, recursing into
+    IfCondition / ForEach / Switch containers) is replaced by ``task``.  Use a
+    ``NotebookActivity`` whose ``notebook_path`` points at a notebook the agent
+    wrote to the workspace; the prepare phase then references it directly.
+
+    Args:
+        report_path: ``translation_report.json`` produced by the translate phase.
+        results_dir: Directory of per-activity result JSON files.
+        output_path: Where to write the merged report; defaults to overwriting
+            *report_path*.
+
+    Returns:
+        ``(merged, unmatched)`` counts.
+    """
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    pipelines = report["pipelines"] if isinstance(report, dict) and "pipelines" in report else [report]
+
+    merged = 0
+    unmatched = 0
+    for result_file in sorted(results_dir.glob("*.json")):
+        data = json.loads(result_file.read_text(encoding="utf-8"))
+        activity_name = data.get("activity_name") or data.get("activity")
+        task = data.get("task") or data.get("ir")
+        if not activity_name or not isinstance(task, dict):
+            logger.warning("Skipping %s: missing 'activity_name' or 'task'.", result_file.name)
+            unmatched += 1
+            continue
+        wanted = data.get("pipeline")
+        candidates = [p for p in pipelines if not wanted or p.get("name") == wanted]
+        if any(_find_and_replace_task(p.get("tasks", []), activity_name, dict(task)) for p in candidates):
+            merged += 1
+            logger.info("Merged agentic result for '%s' from %s", activity_name, result_file.name)
+        else:
+            logger.warning("No placeholder named '%s' found for %s", activity_name, result_file.name)
+            unmatched += 1
+
+    destination = output_path or report_path
+    destination.write_text(json.dumps(report, indent=2, default=str), encoding="utf-8")
+    logger.info("Wrote merged report to %s (%d merged, %d unmatched)", destination, merged, unmatched)
+    return merged, unmatched
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Translate ADF pipelines to Databricks IR.")
-    parser.add_argument("--source-dir", required=True, type=Path, help="Root directory containing ADF JSON exports.")
+    parser.add_argument("--source-dir", required=False, type=Path, help="Root directory containing ADF JSON exports.")
     parser.add_argument(
         "--output-dir",
         type=Path,
@@ -1641,9 +1730,45 @@ if __name__ == "__main__":
         action="store_true",
         help="Write a full debug IR dump alongside the normal output.",
     )
+    parser.add_argument(
+        "--merge-agentic",
+        action="store_true",
+        help="Merge agent-produced results from --agentic-results into --report instead of translating.",
+    )
+    parser.add_argument(
+        "--report",
+        type=Path,
+        default=None,
+        help="Translation report to merge agentic results into (with --merge-agentic).",
+    )
+    parser.add_argument(
+        "--agentic-results",
+        type=Path,
+        default=None,
+        help="Directory of per-activity agentic result JSON files (with --merge-agentic).",
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help="Where to write the merged report (default: overwrite --report).",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+
+    if args.merge_agentic:
+        if not args.report or not args.agentic_results:
+            parser.error("--merge-agentic requires --report and --agentic-results")
+        merged_count, unmatched_count = merge_agentic_results(args.report, args.agentic_results, args.output)
+        print("\nAgentic Merge Summary")
+        print("=====================")
+        print(f"Merged:    {merged_count}")
+        print(f"Unmatched: {unmatched_count}")
+        raise SystemExit(0 if unmatched_count == 0 else 1)
+
+    if not args.source_dir:
+        parser.error("--source-dir is required (unless using --merge-agentic)")
 
     definitions = load_adf_definitions(args.source_dir)
     logger.info("Loaded %d pipeline(s) from %s", len(definitions.pipelines), args.source_dir)

@@ -121,6 +121,15 @@ def prepare(activity: CopyActivity, *, scope: str = "") -> PreparedActivity:
     secrets = _build_secrets(activity, source_type, scope_name)
     setup_tasks = _build_setup_tasks(activity, source_type, volume_binding)
 
+    # Collapsed copy_and_notify: wire the chosen Databricks notification
+    # destination onto this task (creating it via the SDK for webhook types).
+    if activity.notifications:
+        from orchestra.preparer.notifications import resolve_task_notifications
+
+        notification_keys, notification_setup = resolve_task_notifications(activity.notifications)
+        task.update(notification_keys)
+        setup_tasks = setup_tasks + notification_setup
+
     return PreparedActivity(task=task, notebooks=notebooks, secrets=secrets, setup_tasks=setup_tasks)
 
 

@@ -91,6 +91,32 @@ class MotifConsolidate(StrEnum):
     CONSOLIDATE = "consolidate"
 
 
+class CopyNotifyDestination(StrEnum):
+    """How a Copy->Notify (copy_and_notify) motif's notifications are handled.
+
+    ``KEEP`` preserves the current behaviour (the WebActivity notify
+    activities translate directly; the motif is not collapsed).  Any other
+    value collapses the motif: the Copy becomes the task and the downstream
+    notifications become Databricks job-task notifications routed to the
+    chosen destination.
+    """
+
+    KEEP = "keep"
+    EMAIL = "email"
+    SLACK = "slack"
+    TEAMS = "teams"
+    PAGERDUTY = "pagerduty"
+    WEBHOOK = "webhook"
+
+
+class NotifyEvents(StrEnum):
+    """Which job-task events fire the collapsed notification."""
+
+    ON_FAILURE = "on_failure"
+    ON_SUCCESS = "on_success"
+    BOTH = "both"
+
+
 FIELD_TO_ENUM: Final[MappingProxyType[str, type[StrEnum]]] = MappingProxyType(
     {
         "copy_activity_paradigm": CopyActivityParadigm,
@@ -101,6 +127,8 @@ FIELD_TO_ENUM: Final[MappingProxyType[str, type[StrEnum]]] = MappingProxyType(
         "metadata_driven_access": MetadataDrivenAccess,
         "metadata_driven_size": MetadataDrivenSize,
         "metadata_driven_lookup_tool": MetadataDrivenLookupTool,
+        "copy_notify_destination": CopyNotifyDestination,
+        "copy_notify_events": NotifyEvents,
     }
 )
 
@@ -137,6 +165,12 @@ class TranslationConfiguration:
     metadata_driven_access: MetadataDrivenAccess = MetadataDrivenAccess.NO
     metadata_driven_size: MetadataDrivenSize = MetadataDrivenSize.LARGE
     metadata_driven_lookup_tool: MetadataDrivenLookupTool = MetadataDrivenLookupTool.NONE
+    copy_notify_destination: CopyNotifyDestination = CopyNotifyDestination.KEEP
+    copy_notify_events: NotifyEvents = NotifyEvents.BOTH
+    copy_notify_email_recipients: str = ""
+    copy_notify_webhook_url: str = ""
+    copy_notify_pagerduty_integration_key: str = ""
+    copy_notify_destination_name: str = ""
     motif_consolidations: dict[str, MotifConsolidate] = field(default_factory=dict)
     per_task: dict[str, dict[str, str]] = field(default_factory=dict)
 
