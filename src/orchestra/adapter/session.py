@@ -264,9 +264,13 @@ _PROFILE_OPTIONS: tuple[MigrationInputOption, ...] = (
     ),
     MigrationInputOption(
         option_id=INPUT_OUTPUT_DIR,
-        prompt="Where should orchestra write the profile output?",
-        description="Directory the profile phase writes ``inventory.json`` and ``ast/`` into.",
-        default="./orchestra_output/profile",
+        prompt="Which migration output directory should orchestra use?",
+        description=(
+            "Single shared migration directory used by every phase (default ``./orchestra_output``). "
+            "Profile writes ``metadata/inventory.json``, ``metadata/profile_report.csv``, and the "
+            "verbatim ``metadata/<pipeline>.arm.json`` into it."
+        ),
+        default="./orchestra_output",
         required=False,
     ),
 )
@@ -275,8 +279,8 @@ _TRANSLATE_OPTIONS: tuple[MigrationInputOption, ...] = (
     MigrationInputOption(
         option_id=INPUT_INVENTORY_PATH,
         prompt="Path to the inventory.json from the profile phase?",
-        description="Inventory produced by the profile phase that the translator consumes.",
-        default="./orchestra_output/profile/inventory.json",
+        description="Inventory produced by the profile phase (under the shared migration dir's metadata/).",
+        default="./orchestra_output/metadata/inventory.json",
         required=False,
     ),
     MigrationInputOption(
@@ -287,9 +291,12 @@ _TRANSLATE_OPTIONS: tuple[MigrationInputOption, ...] = (
     ),
     MigrationInputOption(
         option_id=INPUT_OUTPUT_DIR,
-        prompt="Where should orchestra write the translate output?",
-        description="Directory the translate phase writes the report and IR into.",
-        default="./orchestra_output/translate",
+        prompt="Which migration output directory should orchestra use?",
+        description=(
+            "The same shared migration directory the profile phase used (default ``./orchestra_output``). "
+            "Translate writes its transient report and IR to the directory's ``.work/`` subfolder."
+        ),
+        default="./orchestra_output",
         required=False,
     ),
 )
@@ -302,14 +309,17 @@ _PREPARE_OPTIONS: tuple[MigrationInputOption, ...] = (
             "Configuration-stamped report from `python -m orchestra.adapter modify`, "
             "or the raw translate-phase report when no configuration were applied."
         ),
-        default="./orchestra_output/translate/translation_report.stamped.json",
+        default="./orchestra_output/.work/translation_report.stamped.json",
         required=False,
     ),
     MigrationInputOption(
         option_id=INPUT_OUTPUT_BUNDLE_PATH,
-        prompt="Where should the generated DAB bundle be written?",
-        description="Root directory for the emitted Databricks Declarative Automation Bundle.",
-        default="./dab_output",
+        prompt="Which migration output directory should orchestra use?",
+        description=(
+            "The same shared migration directory used by profile/translate (default ``./orchestra_output``). "
+            "Prepare writes the DAB bundle at its top level and prunes the transient ``.work/`` folder."
+        ),
+        default="./orchestra_output",
         required=False,
     ),
     MigrationInputOption(

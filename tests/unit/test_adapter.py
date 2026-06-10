@@ -583,7 +583,7 @@ class TestMigrationInputSession:
         session = MigrationInputSession(phase="profile")
         collected = session.collected()
         assert "adf_source_path" not in collected
-        assert collected["output_dir"] == "./orchestra_output/profile"
+        assert collected["output_dir"] == "./orchestra_output"
 
 
 class TestWorkspacePathsCli:
