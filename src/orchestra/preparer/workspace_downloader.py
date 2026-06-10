@@ -17,10 +17,60 @@ logger = logging.getLogger(__name__)
 # Databricks runtime detection and auto-configuration
 # ---------------------------------------------------------------------------
 
+_WORKSPACE_ROOT = Path("/Workspace")
+
+# Common notebook file extensions on the Databricks workspace filesystem.
+_NOTEBOOK_EXTENSIONS = (".py", ".sql", ".scala", ".r", ".R", ".ipynb")
+
 
 def _is_databricks_runtime() -> bool:
     """Returns True if running inside a Databricks cluster or serverless compute."""
     return os.environ.get("DATABRICKS_RUNTIME_VERSION") is not None
+
+
+def _local_workspace_accessible() -> bool:
+    """Returns True if the /Workspace filesystem is mounted and readable."""
+    return _WORKSPACE_ROOT.is_dir()
+
+
+def _try_local_workspace_read(workspace_path: str) -> str | None:
+    """Attempts to read a notebook directly from the local /Workspace filesystem.
+
+    On Databricks compute (classic or serverless), workspace files are mounted
+    at ``/Workspace/<path>``.  Notebooks are stored with a language extension
+    (e.g. ``.py``, ``.sql``).  This function probes the path with each known
+    extension and returns the source if found — no SDK auth required.
+
+    Args:
+        workspace_path: Logical workspace path (e.g. ``"/Shared/ETL/transform"``).
+
+    Returns:
+        Notebook source as a string, or ``None`` if not found locally.
+    """
+    if not _local_workspace_accessible():
+        return None
+
+    base = _WORKSPACE_ROOT / workspace_path.lstrip("/")
+
+    # Try the exact path first (already has an extension or is a plain file)
+    if base.is_file():
+        try:
+            return base.read_text(encoding="utf-8")
+        except OSError as exc:
+            logger.debug("Local read failed for %s: %s", base, exc)
+
+    # Probe with common notebook extensions
+    for ext in _NOTEBOOK_EXTENSIONS:
+        candidate = base.with_suffix(ext)
+        if candidate.is_file():
+            try:
+                content = candidate.read_text(encoding="utf-8")
+                logger.info("Read notebook from local filesystem: %s", candidate)
+                return content
+            except OSError as exc:
+                logger.debug("Local read failed for %s: %s", candidate, exc)
+
+    return None
 
 
 def _ensure_databricks_runtime_auth() -> bool:
@@ -54,7 +104,7 @@ def _ensure_databricks_runtime_auth() -> bool:
         logger.info("Auto-configured Databricks auth from runtime context -> %s", cfg_path)
         return True
     except ImportError:
-        logger.warning("dbruntime not available; cannot auto-configure auth")
+        logger.debug("dbruntime not available; cannot auto-configure auth via REPL context")
         return False
     except Exception as exc:
         logger.warning("Failed to auto-configure Databricks runtime auth: %s", exc)
@@ -224,12 +274,22 @@ def _get_workspace_client():
 def download_notebook(workspace_path: str) -> str | None:
     """Downloads a notebook from Databricks workspace.
 
+    Attempts local filesystem access first (zero-auth, works on any
+    Databricks compute where /Workspace is mounted).  Falls back to the
+    Databricks SDK export API when local access is unavailable.
+
     Args:
         workspace_path: Workspace path (e.g., ``"/Shared/orchestra/transform"``).
 
     Returns:
         Notebook source code as a string, or ``None`` if download failed.
     """
+    # Fast path: read directly from /Workspace mount (no auth needed)
+    local_content = _try_local_workspace_read(workspace_path)
+    if local_content is not None:
+        return local_content
+
+    # Slow path: SDK-based export (requires auth)
     try:
         from databricks.sdk.service.workspace import ExportFormat  # type: ignore[import-not-found]
 
@@ -288,13 +348,15 @@ def auth_available() -> bool:
 
     A resolvable ``.databrickscfg`` profile, ``DATABRICKS_CONFIG_PROFILE``, or
     the standard ``DATABRICKS_HOST`` + ``DATABRICKS_TOKEN`` env-var pair will
-    all satisfy this check.  When running inside a Databricks cluster or
-    serverless compute, the runtime context is auto-configured into
-    ``~/.databrickscfg`` on first call.
+    all satisfy this check.  Local /Workspace filesystem access (available on
+    any Databricks compute) also satisfies the check since notebooks can be
+    read directly without API auth.
 
     This is a pre-flight signal — it does not validate that the credentials
     actually authorize against any specific workspace.
     """
+    if _local_workspace_accessible():
+        return True
     if os.environ.get("DATABRICKS_CONFIG_PROFILE"):
         return True
     if os.environ.get("DATABRICKS_HOST") and os.environ.get("DATABRICKS_TOKEN"):

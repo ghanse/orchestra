@@ -436,8 +436,13 @@ def _extract_pipeline_dicts(raw: Any) -> list[dict[str, Any]]:
         produces.  Empty when *raw* does not contain a recognisable
         pipeline payload.
     """
+    # Single pipeline IR dict (has both "tasks" and "name" at top level)
     if isinstance(raw, dict) and "tasks" in raw and "name" in raw:
         return [raw]
+    # Multi-pipeline wrapper written by engine.py ({"pipelines": [...]})
+    if isinstance(raw, dict) and "pipelines" in raw and isinstance(raw["pipelines"], list):
+        return [p for p in raw["pipelines"] if isinstance(p, dict) and "tasks" in p and "name" in p]
+    # Legacy aggregated translation report shape
     if isinstance(raw, dict) and "translations" in raw:
         return [
             {"name": entry["pipeline"], **entry["ir"]}

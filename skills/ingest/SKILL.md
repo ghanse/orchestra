@@ -97,18 +97,22 @@ Set the working source directory to the local temp path for subsequent steps.
 
 ### Step 3 — Run the deterministic parser
 
-Execute the ADF loader to parse all JSON files and produce the inventory:
+Execute the ADF loader to parse JSON files and produce the inventory:
 
 ```bash
 python3 <plugin_dir>/src/orchestra/parser/adf_loader.py \
   --source-dir <source_path> \
-  --output-dir <output_path>
+  --output-dir <output_path> \
+  [--pipeline <pipeline_name>]
 ```
 
 Where:
 - `<plugin_dir>` is the root of the orchestra plugin (the directory containing `src/`)
 - `<source_path>` is the local directory containing ADF JSON files
 - `<output_path>` is where to write the parsed output (default: `./orchestra_output/ingest/`)
+- `<pipeline_name>` (optional) — when provided, filters the inventory to include only the named pipeline. When omitted, all pipelines in the source directory are included.
+
+**Always pass `--pipeline` when the user has specified a specific pipeline to migrate.** This ensures the inventory and all downstream phases are scoped to only that pipeline.
 
 This produces:
 - `inventory.json` — the classified activity inventory
@@ -202,6 +206,7 @@ Tell the user where the inventory and AST files were written, and confirm they c
 - "Parse ADF definitions from ./tests/resources/json/"
 - "Load the ADF pipeline JSON files and show me the inventory"
 - "Import pipelines from /tmp/customer_adf_export"
+- "Ingest only the pl_demo_01 pipeline from /Volumes/main/default/adf_export"
 
 ## Output Artifacts
 

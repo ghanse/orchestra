@@ -1590,6 +1590,7 @@ if __name__ == "__main__":
     total_agentic = 0
     total_unsupported = 0
     all_gaps: list[dict[str, Any]] = []
+    all_pipeline_dicts: list[dict[str, Any]] = []
 
     for pipeline in definitions.pipelines:
         if args.pipeline and pipeline.name != args.pipeline:
@@ -1604,6 +1605,7 @@ if __name__ == "__main__":
         pipeline_dict = _pipeline_to_dict(report.pipeline)
         pipeline_file.write_text(json.dumps(pipeline_dict, indent=2, default=str), encoding="utf-8")
         logger.info("Wrote pipeline IR to %s", pipeline_file)
+        all_pipeline_dicts.append(pipeline_dict)
 
         # Write debug IR if requested
         if args.debug:
@@ -1618,6 +1620,17 @@ if __name__ == "__main__":
         if report.warnings:
             for warning in report.warnings:
                 logger.warning(warning)
+
+    # Write canonical translation_report.json so downstream tools (adapter
+    # inspect, workspace-paths, dab_writer) can always reference a well-known
+    # filename regardless of whether --pipeline was specified.
+    report_file = output_dir / "translation_report.json"
+    if len(all_pipeline_dicts) == 1:
+        report_payload = all_pipeline_dicts[0]
+    else:
+        report_payload = {"pipelines": all_pipeline_dicts}
+    report_file.write_text(json.dumps(report_payload, indent=2, default=str), encoding="utf-8")
+    logger.info("Wrote translation_report.json to %s", report_file)
 
     if all_gaps:
         gaps_file = output_dir / "gaps.json"

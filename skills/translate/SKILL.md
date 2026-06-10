@@ -79,19 +79,19 @@ Execute the translation engine on all deterministic activities:
 
 ```bash
 python3 <plugin_dir>/src/orchestra/translator/engine.py \
-  --inventory <inventory_path> \
   --source-dir <adf_source_dir> \
-  --output-dir <output_dir>
+  --output-dir <output_dir> \
+  [--pipeline <pipeline_name>]
 ```
 
 Where:
 - `<plugin_dir>` is the root of the orchestra plugin
-- `<inventory_path>` is the path to `inventory.json`
 - `<adf_source_dir>` is the original ADF JSON directory (from the ingest phase)
 - `<output_dir>` is the translation output path (default: `./orchestra_output/translate/`)
+- `<pipeline_name>` (optional) — when provided, translates only the named pipeline. **Always pass `--pipeline` when the user has specified a specific pipeline to migrate**, matching the value passed to the ingest phase.
 
 This produces:
-- `translation_report.json` — results for deterministic activities + placeholders for agentic gaps
+- `<pipeline_name>.json` — the pipeline IR (one file per translated pipeline)
 - `ir/` directory — Databricks IR for each translated activity
 - `notebooks/` directory — generated helper notebooks
 
@@ -276,7 +276,7 @@ python3 -m orchestra.adapter modify \
 ```
 
 The prepare phase (next skill) must be pointed at the stamped report.
-When no questions are raised, the inspect output is `{"pipelines": [{"pipeline_name": "...", "questions": []}, ...]}` — skip the modify step and pass the original report straight through.
+When no questions are raised, the inspect output is `{"pipelines": [{"pipeline_name": "...", "questions": []},...]}` — skip the modify step and pass the original report straight through.
 
 ### Step 7 — Present translation summary
 
@@ -318,6 +318,7 @@ See `references/activity-mapping.md` for the complete mapping between ADF activi
 - "Convert ADF to Databricks"
 - "Run the translation on the inventory from the ingest step"
 - "Translate the parsed pipelines using deterministic + agentic"
+- "Translate only the pl_demo_01 pipeline"
 
 ## Output Artifacts
 
