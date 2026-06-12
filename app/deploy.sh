@@ -34,7 +34,22 @@ fi
 # directory or any parent (e.g. a generated orchestra_output/databricks.yml), `sync` /
 # `apps deploy` load it and fail with "Error: please specify target". Running from the
 # (databricks.yml-free) staging dir avoids that too. All CLI paths are absolute.
-STAGE_DIR="$(mktemp -d)"
+#
+# Create the staging dir in a guaranteed-writable LOCAL location. On Databricks
+# (Genie web terminal / serverless) the default $TMPDIR can be unset or point at the
+# read-only /Workspace FUSE mount, so a bare `mktemp -d` fails with
+# "mkdir: cannot create directory ...: Permission denied". Probe a list of writable
+# bases instead, and never stage under /Workspace or inside the repo.
+STAGE_DIR=""
+for _base in "${TMPDIR:-}" /tmp /local_disk0/tmp "$HOME/.cache" "$HOME"; do
+  [ -n "$_base" ] && [ -d "$_base" ] && [ -w "$_base" ] || continue
+  STAGE_DIR="$(mktemp -d "${_base%/}/mcp-orchestra.XXXXXX" 2>/dev/null)" && break
+done
+if [ -z "$STAGE_DIR" ]; then
+  echo "ERROR: could not create a writable staging directory (tried \$TMPDIR, /tmp, /local_disk0/tmp, \$HOME)." >&2
+  echo "       Set TMPDIR to a writable local path and re-run." >&2
+  exit 1
+fi
 trap 'rm -rf "$STAGE_DIR"' EXIT
 dbx() { (cd "$STAGE_DIR" && databricks "${PROFILE_FLAG[@]}" "$@"); }
 

@@ -98,6 +98,13 @@ MCP access is capped at **20 tools** across all servers (orchestra exposes 11).
 
 ## Troubleshooting
 
+**`mkdir: cannot create directory ...: Permission denied`** — The deploy script stages
+the bundle in a local temp directory. On Databricks (Genie web terminal / serverless) the
+default `$TMPDIR` can be unset or point at the read-only `/Workspace` mount, so temp-dir
+creation fails. `deploy.sh` probes `$TMPDIR`, `/tmp`, `/local_disk0/tmp`, then `$HOME` for a
+writable base; if all fail, set `TMPDIR` to a writable local path (e.g. `export TMPDIR=/tmp`)
+and re-run.
+
 **`Error: please specify target`** — The Databricks CLI (v0.298+) makes `sync` and
 `apps deploy` bundle-aware: if a `databricks.yml` is discoverable in the working
 directory or any parent (for example a generated `orchestra_output/databricks.yml`,
