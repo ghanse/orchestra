@@ -64,6 +64,17 @@ endpoint. The app authenticates to the workspace as its own service principal,
 so grant that principal access to the catalogs/schemas/volumes the migration
 needs (and to any SQL warehouse used by `record-results` / `install-dashboard`).
 
+## Troubleshooting
+
+**`Error: please specify target`** — The Databricks CLI (v0.298+) makes `sync` and
+`apps deploy` bundle-aware: if a `databricks.yml` is discoverable in the working
+directory or any parent (for example a generated `orchestra_output/databricks.yml`,
+or one in your workspace home), the CLI loads that bundle and—when it has multiple
+targets with no default—aborts with this error before deploying. `deploy.sh` already
+runs every CLI call from a throwaway directory to avoid this; if you invoke the CLI
+manually, do the same (or pass `--target <name>`), and don't run it from inside a
+generated bundle directory.
+
 ## Known constraints / follow-ups
 
 - **Source/output locations.** Tools pass `adf_source_path` and `output_dir`
