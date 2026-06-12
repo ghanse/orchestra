@@ -45,8 +45,12 @@ def _phase_result(result: runner.AdapterResult, output_dir: Path, **extra: Any) 
 
 
 def build_server() -> FastMCP:
-    """Construct and return the orchestra :class:`FastMCP` server with all tools registered."""
-    mcp = FastMCP("orchestra", instructions=_INSTRUCTIONS)
+    """Construct and return the orchestra :class:`FastMCP` server with all tools registered.
+
+    ``stateless_http=True`` is required by Databricks Genie Code: it only connects to custom
+    MCP servers that do not rely on a persistent session (no ``Mcp-Session-Id`` round-trip).
+    """
+    mcp = FastMCP("orchestra", instructions=_INSTRUCTIONS, stateless_http=True)
 
     @mcp.tool()
     def orchestra_phase_inputs(phase: str) -> dict[str, Any]:
@@ -330,8 +334,13 @@ def build_http_app() -> Any:
 
     Mounts the MCP streamable-HTTP transport at ``/mcp`` and adds a ``/`` health
     endpoint so the platform's health check succeeds.
+
+    Adds CORS so a browser client (Genie Code) on the workspace origin can reach the
+    server. Allowed origins default to ``*``; set ``ORCHESTRA_ALLOWED_ORIGINS`` to a
+    comma-separated list (e.g. your workspace URL) to restrict it and enable credentials.
     """
     from starlette.applications import Starlette
+    from starlette.middleware.cors import CORSMiddleware
     from starlette.responses import JSONResponse
     from starlette.routing import Mount, Route
 
@@ -340,13 +349,27 @@ def build_http_app() -> Any:
     async def health(_request: Any) -> JSONResponse:
         return JSONResponse({"status": "ok", "service": "orchestra-mcp"})
 
-    return Starlette(
+    raw_origins = os.environ.get("ORCHESTRA_ALLOWED_ORIGINS", "*")
+    allow_origins = [origin.strip() for origin in raw_origins.split(",") if origin.strip()]
+    # Credentialed requests cannot use the "*" wildcard per the CORS spec.
+    allow_credentials = allow_origins != ["*"]
+
+    app = Starlette(
         routes=[
             Route("/", health, methods=["GET"]),
             Route("/health", health, methods=["GET"]),
             Mount("/", app=mcp.streamable_http_app()),
         ]
     )
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=allow_origins,
+        allow_credentials=allow_credentials,
+        allow_methods=["*"],
+        allow_headers=["*"],
+        expose_headers=["Mcp-Session-Id"],
+    )
+    return app
 
 
 def serve() -> None:

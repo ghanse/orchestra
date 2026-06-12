@@ -80,14 +80,21 @@ End-to-end, to use it from Genie Code:
    grant that principal access to the catalogs / schemas / Unity Catalog volumes
    the migration reads/writes (and any SQL warehouse used by `record-results` /
    `install-dashboard`).
-4. **Use it in Genie Code:** the server appears under **AI Gateway → MCPs**; select
-   it and call the `orchestra_*` tools. Verify via the health endpoint `<app-url>/`
-   or by asking Genie which orchestra MCP tools are available.
+4. **Add it in Genie Code (Agent mode):** open Genie Code **Settings → MCP Servers →
+   Add Server**, choose **Custom MCP server**, select the `mcp-orchestra` app, and
+   **Save**. The `orchestra_*` tools become available immediately. Verify via the
+   health endpoint `<app-url>/`.
+
+Genie Code requires a custom MCP app to be (1) in the **same workspace**, (2) reachable
+at `https://<app-url>/mcp`, and (3) **stateless** — this server sets
+`stateless_http=True` and adds CORS, so it qualifies. If a browser CORS error appears,
+set the app env var `ORCHESTRA_ALLOWED_ORIGINS` to your workspace URL and redeploy.
+MCP access is capped at **20 tools** across all servers (orchestra exposes 11).
 
 > Run `./app/deploy.sh` from a Databricks CLI session (workspace web terminal or a
 > local machine) — `databricks apps` deploy is not available from serverless
-> notebook Python. See [Databricks: host a custom MCP server](https://docs.databricks.com/aws/en/generative-ai/mcp/custom-mcp)
-> and [connect to it](https://docs.databricks.com/aws/en/generative-ai/mcp/custom-mcp-usage).
+> notebook Python. See [Connect Genie Code to MCP servers](https://learn.microsoft.com/en-us/azure/databricks/genie-code/mcp)
+> and [host a custom MCP server](https://docs.databricks.com/aws/en/generative-ai/mcp/custom-mcp).
 
 ## Troubleshooting
 

@@ -169,9 +169,12 @@ After it deploys, relay these follow-up steps to the user (the script also print
    call it (Apps UI → *Permissions*, or `databricks apps set-permissions mcp-orchestra ...`).
 2. **Data access:** grant the app's service principal access to the catalogs, schemas, and volumes
    the migration touches (plus any SQL warehouse used by the reporting tools).
-3. **Use it:** in Genie Code the server appears under **AI Gateway → MCPs**; select it and call the
-   `orchestra_*` tools. Verify with the health endpoint `<app-url>/` or by asking which orchestra
-   MCP tools are available.
+3. **Add it in Genie Code (Agent mode):** open Genie Code **Settings → MCP Servers → Add Server**,
+   choose **Custom MCP server**, select the `mcp-orchestra` app, and **Save**. The `orchestra_*`
+   tools then appear (MCP needs Agent mode; access is capped at 20 tools across all servers).
+   The orchestra server is already **stateless** (`stateless_http=True`) with CORS, as Genie Code
+   requires. If a browser CORS error appears, set the app env var `ORCHESTRA_ALLOWED_ORIGINS` to the
+   workspace URL and redeploy. Verify via the health endpoint `<app-url>/`.
 
 > **Note:** `databricks apps` deploy commands require a Databricks CLI session (workspace web
 > terminal or a local machine), not serverless notebook Python. If the Genie session can't shell
