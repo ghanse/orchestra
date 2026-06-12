@@ -19,30 +19,29 @@ set -euo pipefail
 APP_NAME="${APP_NAME:-mcp-orchestra}"
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$APP_DIR/.." && pwd)"
-BUILD_DIR="$APP_DIR/.build"
 
 PROFILE_FLAG=()
 if [ -n "${DATABRICKS_PROFILE:-}" ]; then
   PROFILE_FLAG=(--profile "$DATABRICKS_PROFILE")
 fi
 
-# The v0.298+ CLI makes `sync` / `apps deploy` bundle-aware: if a databricks.yml
-# is discoverable in the current directory or any parent (e.g. a generated
-# orchestra_output/databricks.yml, or one in your workspace home), the command
-# loads that bundle and fails with "Error: please specify target". Run every CLI
-# call from a throwaway directory with no databricks.yml in its tree so the
-# bundle loader can't attach. All paths passed to the CLI are absolute, so the
-# working directory does not otherwise matter.
-CLEAN_DIR="$(mktemp -d)"
-trap 'rm -rf "$CLEAN_DIR"' EXIT
-dbx() { (cd "$CLEAN_DIR" && databricks "${PROFILE_FLAG[@]}" "$@"); }
+# Stage the bundle OUTSIDE the repo. `databricks sync` is git-aware and applies the
+# enclosing repo's .gitignore: a staging dir inside the repo (e.g. app/.build, which
+# .gitignore lists) gets its files excluded, so the deployed source is missing app.py
+# and orchestra/. A temp dir has no enclosing git repo / .gitignore, so every file syncs.
+#
+# The CLI is also bundle-aware: if a databricks.yml is discoverable in the working
+# directory or any parent (e.g. a generated orchestra_output/databricks.yml), `sync` /
+# `apps deploy` load it and fail with "Error: please specify target". Running from the
+# (databricks.yml-free) staging dir avoids that too. All CLI paths are absolute.
+STAGE_DIR="$(mktemp -d)"
+trap 'rm -rf "$STAGE_DIR"' EXIT
+dbx() { (cd "$STAGE_DIR" && databricks "${PROFILE_FLAG[@]}" "$@"); }
 
-echo "==> Staging self-contained app bundle in $BUILD_DIR"
-rm -rf "$BUILD_DIR"
-mkdir -p "$BUILD_DIR"
-cp "$APP_DIR/app.py" "$APP_DIR/app.yaml" "$APP_DIR/requirements.txt" "$BUILD_DIR/"
-cp -R "$REPO_ROOT/src/orchestra" "$BUILD_DIR/orchestra"
-find "$BUILD_DIR/orchestra" -type d -name '__pycache__' -prune -exec rm -rf {} + 2>/dev/null || true
+echo "==> Staging self-contained app bundle in $STAGE_DIR (outside the repo so sync includes every file)"
+cp "$APP_DIR/app.py" "$APP_DIR/app.yaml" "$APP_DIR/requirements.txt" "$STAGE_DIR/"
+cp -R "$REPO_ROOT/src/orchestra" "$STAGE_DIR/orchestra"
+find "$STAGE_DIR/orchestra" -type d -name '__pycache__' -prune -exec rm -rf {} + 2>/dev/null || true
 
 # Deploy the source from a location the app's service principal can read. A user's
 # private /Workspace/Users/<me> home is NOT readable by the app SP, so default to
@@ -56,7 +55,7 @@ if ! dbx apps get "$APP_NAME" >/dev/null 2>&1; then
 fi
 
 echo "==> Syncing bundle to $SOURCE_PATH"
-dbx sync "$BUILD_DIR" "$SOURCE_PATH"
+dbx sync --full "$STAGE_DIR" "$SOURCE_PATH"
 
 echo "==> Deploying app"
 dbx apps deploy "$APP_NAME" --source-code-path "$SOURCE_PATH"

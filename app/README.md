@@ -55,7 +55,7 @@ Register the stdio server with a local MCP client, e.g.:
 ./app/deploy.sh
 ```
 
-`deploy.sh` stages a self-contained bundle in `app/.build/` (the app entrypoint
+`deploy.sh` stages a self-contained bundle in a temporary directory outside the repo (the app entrypoint
 plus a vendored copy of the pure-Python `orchestra` package), syncs it to your
 workspace, and creates/deploys the app (default name **`mcp-orchestra`**).
 
