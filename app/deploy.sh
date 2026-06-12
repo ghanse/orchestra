@@ -35,18 +35,20 @@ fi
 # `apps deploy` load it and fail with "Error: please specify target". Running from the
 # (databricks.yml-free) staging dir avoids that too. All CLI paths are absolute.
 #
-# Create the staging dir in a guaranteed-writable LOCAL location. On Databricks
-# (Genie web terminal / serverless) the default $TMPDIR can be unset or point at the
-# read-only /Workspace FUSE mount, so a bare `mktemp -d` fails with
-# "mkdir: cannot create directory ...: Permission denied". Probe a list of writable
-# bases instead, and never stage under /Workspace or inside the repo.
+# Create the staging dir in a writable location, trying the repo's PARENT first. On
+# Databricks (Genie web terminal / serverless) the repo lives on the writable /Workspace
+# filesystem while /tmp and $TMPDIR are often unwritable — a bare `mktemp -d` there fails
+# with "mkdir: cannot create directory ...: Permission denied". The repo's parent
+# (e.g. /Workspace/Shared) is writable AND outside the git repo, so staging there both
+# succeeds and avoids the repo's .gitignore (which would otherwise make `databricks sync`
+# drop staged files). $TMPDIR/tmp/$HOME are fallbacks for local (non-Databricks) runs.
 STAGE_DIR=""
-for _base in "${TMPDIR:-}" /tmp /local_disk0/tmp "$HOME/.cache" "$HOME"; do
+for _base in "$(dirname "$REPO_ROOT")" "${TMPDIR:-}" /tmp /local_disk0/tmp "$HOME"; do
   [ -n "$_base" ] && [ -d "$_base" ] && [ -w "$_base" ] || continue
-  STAGE_DIR="$(mktemp -d "${_base%/}/mcp-orchestra.XXXXXX" 2>/dev/null)" && break
+  STAGE_DIR="$(mktemp -d "${_base%/}/mcp-orchestra-build.XXXXXX" 2>/dev/null)" && break
 done
 if [ -z "$STAGE_DIR" ]; then
-  echo "ERROR: could not create a writable staging directory (tried \$TMPDIR, /tmp, /local_disk0/tmp, \$HOME)." >&2
+  echo "ERROR: could not create a writable staging directory (tried the repo parent, \$TMPDIR, /tmp, \$HOME)." >&2
   echo "       Set TMPDIR to a writable local path and re-run." >&2
   exit 1
 fi
