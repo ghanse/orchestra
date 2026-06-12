@@ -5,13 +5,14 @@ description: Install orchestra in Databricks Genie Code, Claude Code, or other a
 
 import { Tabs, Tab } from 'fumadocs-ui/components/tabs';
 import { Callout } from 'fumadocs-ui/components/callout';
+import { Steps, Step } from 'fumadocs-ui/components/steps';
 
 Orchestra is a set of [agent skills](https://github.com/ghanse/orchestra/tree/main/skills) that can be installed and used with AI coding assistants.
 To use these skills, install orchestra as a plugin using your AI assistant's preferred installation method.
 
 <Tabs items={['Databricks Genie Code', 'Claude Code', 'Other AI tools']}>
 <Tab value="Databricks Genie Code">
-Clone the orchestra repo into your workspace using a [Git folder](https://docs.databricks.com/aws/en/repos/git-operations-with-repos), then copy the `skills/` directory into a user-level skills folder:
+Clone the orchestra repo into your workspace using a [Git folder](https://docs.databricks.com/aws/en/repos/git-operations-with-repos). Clone it under **`/Workspace/Shared`** (e.g. `/Workspace/Shared/orchestra`) rather than your private `/Workspace/Users/<you>` home — when you later deploy the MCP server, the app's service principal must be able to read the source, and it has no access to private user folders by default. Then copy the `skills/` directory into a user-level skills folder:
 
 ```bash
 databricks workspace import-dir skills /Users/<your-email>/.assistant/skills
@@ -140,17 +141,58 @@ If you prefer an installed package over `PYTHONPATH`, run `pip install -e ".[mcp
 </Tab>
 
 <Tab value="Databricks Genie Code">
-Genie Code connects to a **hosted** MCP endpoint, so deploy the server as a Databricks App:
+Genie Code connects to a **hosted** MCP endpoint, so the orchestra tools run as a Databricks App that Genie Code discovers under **AI Gateway → MCPs**. End to end:
+
+<Steps>
+<Step>
+### Clone orchestra into a shared workspace folder and install the skills
+
+Follow the **Databricks Genie Code** install steps above to clone the repo and copy `skills/` into your skills folder. Clone into **`/Workspace/Shared`** (e.g. `/Workspace/Shared/orchestra`) — `<plugin_dir>` below refers to that path.
+
+<Callout type="warn" title="Use a shared location, not your user home">
+The MCP app's service principal cannot read private `/Workspace/Users/<you>` folders by default, and `deploy.sh` deploys the source from `/Workspace/Shared/<app-name>`. Cloning into `/Workspace/Shared` keeps the repo, the deployed source, and team access all in a location every user and the app's service principal can reach. If your workspace restricts `/Workspace/Shared`, use any other folder all users (and the app SP) can read and pass it via `APP_SOURCE_PATH`.
+</Callout>
+</Step>
+
+<Step>
+### Run the setup skill
+
+Ask your agent to **"set up the orchestra environment"** (or run `bash <plugin_dir>/scripts/bootstrap.sh`). On Databricks the `setup` skill detects the environment and, after creating the venv, runs the app deployment in the next step for you. Run it from a workspace **web terminal** if your Genie session can't shell out to the Databricks CLI.
+</Step>
+
+<Step>
+### Deploy the MCP server as a Databricks App
 
 ```bash
 bash <plugin_dir>/app/deploy.sh
 ```
 
-`deploy.sh` stages a self-contained bundle (the app entrypoint plus a vendored copy of the orchestra source), syncs it to your workspace, and creates/deploys the `orchestra-mcp` app. The MCP endpoint is `<app-url>/mcp` — point Genie Code at it. Grant the app's service principal access to the catalogs, schemas, and volumes the migration touches (and to any SQL warehouse used by the reporting tools).
+`deploy.sh` stages a self-contained bundle (the app entrypoint plus a vendored copy of the orchestra source), syncs it to **`/Workspace/Shared/mcp-orchestra`** (a location the app's service principal can read — override with `APP_SOURCE_PATH`), and creates/deploys the app. The app is named **`mcp-orchestra`** — the `mcp-` prefix is required for Databricks to surface it under **AI Gateway → MCPs**. The script prints the app URL; the MCP endpoint is **`<app-url>/mcp`**.
 
 <Callout type="warn" title="Deploy from a CLI session">
-`databricks apps` deploy commands require a Databricks CLI session (workspace web terminal or a local machine); they are **not** available from serverless notebook Python — the same constraint as `databricks bundle deploy`. Run `app/deploy.sh` from the web terminal if your Genie session can't shell out to the CLI directly.
+`databricks apps` deploy commands require a Databricks CLI session (workspace web terminal or a local machine); they are **not** available from serverless notebook Python — the same constraint as `databricks bundle deploy`. If "Error: please specify target" appears, the CLI picked up a stray `databricks.yml` from your working directory; `deploy.sh` already isolates against this, so re-run it as-is.
 </Callout>
+</Step>
+
+<Step>
+### Grant access
+
+- **App access:** grant **Can use** on the `mcp-orchestra` app to the users / service principals that will call it (Apps UI → *Permissions*, or `databricks apps set-permissions`).
+- **Data access:** grant the app's own service principal access to the catalogs, schemas, and Unity Catalog volumes the migration reads/writes, plus any SQL warehouse used by the reporting tools (`orchestra_record_results` / `orchestra_install_dashboard`).
+</Step>
+
+<Step>
+### Use it in Genie Code
+
+Because the app is named `mcp-orchestra`, it appears in the workspace under **AI Gateway → MCPs**. In Genie Code, select the orchestra MCP server and call its `orchestra_*` tools (start with `orchestra_phase_inputs` or `orchestra_migrate`). See the Databricks docs on [hosting](https://docs.databricks.com/aws/en/generative-ai/mcp/custom-mcp) and [connecting to](https://docs.databricks.com/aws/en/generative-ai/mcp/custom-mcp-usage) custom MCP servers for workspace-specific details.
+</Step>
+
+<Step>
+### Verify
+
+Open the health endpoint `<app-url>/` (returns `{"status":"ok"}`), or ask Genie Code **"what orchestra MCP tools are available?"** — you should see the eleven `orchestra_*` tools.
+</Step>
+</Steps>
 </Tab>
 </Tabs>
 

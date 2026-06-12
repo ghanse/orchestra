@@ -65,7 +65,7 @@ Each tool represents an adapter subcommand: `orchestra_phase_inputs`, `orchestra
 The MCP server runs in whichever transport fits the calling tool. This is chosen when the `setup` skill is invoked:
 
 - **Local / Claude Code:** `setup` installs `mcp` + `uvicorn` + `starlette` into the venv; the server runs over **stdio** and is registered with the MCP client.
-- **Databricks Genie Code:** `setup` runs `app/deploy.sh`, which stages a self-contained bundle (app entrypoint + a vendored copy of the pure-Python orchestra source), syncs it to the workspace, and creates/deploys the **`orchestra-mcp` Databricks App**. The app serves the MCP streamable-HTTP transport at `<app-url>/mcp` (health at `/`) via `uvicorn` → `Starlette` → `FastMCP`. Genie connects over OAuth; the app authenticates to the workspace as its own service principal.
+- **Databricks Genie Code:** `setup` runs `app/deploy.sh`, which stages a self-contained bundle (app entrypoint + a vendored copy of the pure-Python orchestra source), syncs it to the workspace, and creates/deploys the **`mcp-orchestra` Databricks App** (the `mcp-` prefix is what makes Databricks surface it under **AI Gateway → MCPs**). The app serves the MCP streamable-HTTP transport at `<app-url>/mcp` (health at `/`) via `uvicorn` → `Starlette` → `FastMCP`. Genie connects over OAuth; access is governed by the app's Databricks Apps permissions, and the app authenticates to the workspace as its own service principal.
 
 ```text
   Local (Claude Code / other agents)        Databricks Genie Code

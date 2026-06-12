@@ -48,21 +48,46 @@ Register the stdio server with a local MCP client, e.g.:
 { "mcpServers": { "orchestra": { "command": "python", "args": ["-m", "orchestra.mcp"] } } }
 ```
 
-## Deploy as a Databricks App
+## Deploy as a Databricks App (for Genie Code)
 
 ```bash
 # Authenticated Databricks CLI (v0.230+) required.
-APP_NAME=orchestra-mcp ./app/deploy.sh
+./app/deploy.sh
 ```
 
 `deploy.sh` stages a self-contained bundle in `app/.build/` (the app entrypoint
 plus a vendored copy of the pure-Python `orchestra` package), syncs it to your
-workspace, and creates/deploys the app. The MCP endpoint is `<app-url>/mcp`.
+workspace, and creates/deploys the app (default name **`mcp-orchestra`**).
 
-Point Genie Code (or any MCP client that supports Databricks OAuth) at that
-endpoint. The app authenticates to the workspace as its own service principal,
-so grant that principal access to the catalogs/schemas/volumes the migration
-needs (and to any SQL warehouse used by `record-results` / `install-dashboard`).
+> **Clone into `/Workspace/Shared`.** `deploy.sh` deploys the app source from
+> `/Workspace/Shared/<app-name>` because the app's service principal **cannot read
+> private `/Workspace/Users/<you>` folders** by default. Clone orchestra into a Git
+> folder under `/Workspace/Shared` (e.g. `/Workspace/Shared/orchestra`); if that
+> folder is restricted in your workspace, use another all-users location and pass it
+> via `APP_SOURCE_PATH`.
+
+End-to-end, to use it from Genie Code:
+
+1. **Deploy** with `./app/deploy.sh`. The app is named `mcp-orchestra` — the
+   **`mcp-` prefix is required** for Databricks to surface it under **AI Gateway →
+   MCPs**. It deploys the source from `/Workspace/Shared/mcp-orchestra`
+   (override with `APP_SOURCE_PATH`). The script prints the app URL; the MCP
+   endpoint is `<app-url>/mcp`.
+2. **Grant app access:** give **Can use** on `mcp-orchestra` to the users / service
+   principals that will call it (Apps UI → *Permissions*, or
+   `databricks apps set-permissions mcp-orchestra ...`).
+3. **Grant data access:** the app authenticates as its own service principal, so
+   grant that principal access to the catalogs / schemas / Unity Catalog volumes
+   the migration reads/writes (and any SQL warehouse used by `record-results` /
+   `install-dashboard`).
+4. **Use it in Genie Code:** the server appears under **AI Gateway → MCPs**; select
+   it and call the `orchestra_*` tools. Verify via the health endpoint `<app-url>/`
+   or by asking Genie which orchestra MCP tools are available.
+
+> Run `./app/deploy.sh` from a Databricks CLI session (workspace web terminal or a
+> local machine) — `databricks apps` deploy is not available from serverless
+> notebook Python. See [Databricks: host a custom MCP server](https://docs.databricks.com/aws/en/generative-ai/mcp/custom-mcp)
+> and [connect to it](https://docs.databricks.com/aws/en/generative-ai/mcp/custom-mcp-usage).
 
 ## Troubleshooting
 

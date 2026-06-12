@@ -151,14 +151,33 @@ PYTHONPATH="<plugin_dir>/src" "$PY" -m orchestra.mcp        # stdio (default)
 #### Databricks Genie Code (`DATABRICKS_RUNTIME_VERSION` set)
 
 `app/deploy.sh` stages a self-contained bundle (the app entrypoint plus a vendored copy of the
-orchestra source), syncs it to the workspace, and creates/deploys the `orchestra-mcp` Databricks
-App. The MCP endpoint is `<app-url>/mcp` — point Genie Code at it. Grant the app's service
-principal access to the catalogs, schemas, and volumes the migration touches.
+orchestra source), syncs it to **`/Workspace/Shared/mcp-orchestra`**, and creates/deploys the
+**`mcp-orchestra`** Databricks App. The `mcp-` prefix is required — Databricks only surfaces apps
+named `mcp-*` under **AI Gateway → MCPs**. The script prints the app URL; the MCP endpoint is
+`<app-url>/mcp`.
+
+> **Clone into a shared location.** The app's service principal cannot read private
+> `/Workspace/Users/<you>` folders by default, so `deploy.sh` deploys the source from
+> `/Workspace/Shared/<app-name>`. For this to work, clone orchestra into a Git folder under
+> **`/Workspace/Shared`** (e.g. `/Workspace/Shared/orchestra`), not your user home. If the
+> workspace restricts `/Workspace/Shared`, use another all-users location and pass it via
+> `APP_SOURCE_PATH`.
+
+After it deploys, relay these follow-up steps to the user (the script also prints them):
+
+1. **App access:** grant **Can use** on `mcp-orchestra` to the users / service principals that will
+   call it (Apps UI → *Permissions*, or `databricks apps set-permissions mcp-orchestra ...`).
+2. **Data access:** grant the app's service principal access to the catalogs, schemas, and volumes
+   the migration touches (plus any SQL warehouse used by the reporting tools).
+3. **Use it:** in Genie Code the server appears under **AI Gateway → MCPs**; select it and call the
+   `orchestra_*` tools. Verify with the health endpoint `<app-url>/` or by asking which orchestra
+   MCP tools are available.
 
 > **Note:** `databricks apps` deploy commands require a Databricks CLI session (workspace web
 > terminal or a local machine), not serverless notebook Python. If the Genie session can't shell
 > out to the CLI, run `app/deploy.sh` from the web terminal. (Same constraint as `databricks
-> bundle deploy`.)
+> bundle deploy`.) If you see `Error: please specify target`, the CLI attached to a stray
+> `databricks.yml`; `deploy.sh` already isolates against this, so re-run it as-is.
 
 ## Output
 
@@ -168,7 +187,7 @@ principal access to the catalogs, schemas, and volumes the migration touches.
 | `<plugin_dir>/.migration-venv` | Marker file holding the resolved interpreter path |
 | `requirements.txt` | The dependency list installed into the venv |
 | MCP server (local) | `mcp` / `uvicorn` / `starlette` installed into the venv; run with `python -m orchestra.mcp` |
-| MCP server (Databricks Genie Code) | `orchestra-mcp` Databricks App serving the tools at `<app-url>/mcp` |
+| MCP server (Databricks Genie Code) | `mcp-orchestra` Databricks App (discoverable under AI Gateway → MCPs) serving the tools at `<app-url>/mcp` |
 
 ## Examples
 

@@ -7,12 +7,16 @@
 # Requirements: Databricks CLI v0.230+ authenticated to the target workspace.
 #
 # Env overrides:
-#   APP_NAME            App name (default: orchestra-mcp)
-#   APP_SOURCE_PATH     Workspace source path (default: /Workspace/Users/<me>/<APP_NAME>)
+#   APP_NAME            App name (default: mcp-orchestra). Keep the `mcp-` prefix —
+#                       Databricks only surfaces apps named `mcp-*` under AI Gateway > MCPs.
+#   APP_SOURCE_PATH     Workspace source path the app deploys from (default:
+#                       /Workspace/Shared/<APP_NAME>). It MUST be readable by the app's
+#                       service principal, so it defaults to /Workspace/Shared — NOT a user's
+#                       private /Workspace/Users/<me> home, which the app SP cannot read.
 #   DATABRICKS_PROFILE  CLI profile to use (default: env/DEFAULT auth)
 set -euo pipefail
 
-APP_NAME="${APP_NAME:-orchestra-mcp}"
+APP_NAME="${APP_NAME:-mcp-orchestra}"
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$APP_DIR/.." && pwd)"
 BUILD_DIR="$APP_DIR/.build"
@@ -40,9 +44,11 @@ cp "$APP_DIR/app.py" "$APP_DIR/app.yaml" "$APP_DIR/requirements.txt" "$BUILD_DIR
 cp -R "$REPO_ROOT/src/orchestra" "$BUILD_DIR/orchestra"
 find "$BUILD_DIR/orchestra" -type d -name '__pycache__' -prune -exec rm -rf {} + 2>/dev/null || true
 
-ME="$(dbx current-user me --output json \
-  | python3 -c 'import sys, json; print(json.load(sys.stdin)["userName"])')"
-SOURCE_PATH="${APP_SOURCE_PATH:-/Workspace/Users/$ME/$APP_NAME}"
+# Deploy the source from a location the app's service principal can read. A user's
+# private /Workspace/Users/<me> home is NOT readable by the app SP, so default to
+# the shared workspace folder. Override with APP_SOURCE_PATH if you use a different
+# all-users location.
+SOURCE_PATH="${APP_SOURCE_PATH:-/Workspace/Shared/$APP_NAME}"
 
 echo "==> Ensuring app '$APP_NAME' exists"
 if ! dbx apps get "$APP_NAME" >/dev/null 2>&1; then
@@ -56,6 +62,17 @@ echo "==> Deploying app"
 dbx apps deploy "$APP_NAME" --source-code-path "$SOURCE_PATH"
 
 echo "==> Deployed. App details:"
-dbx apps get "$APP_NAME" --output json \
-  | python3 -c 'import sys, json; d = json.load(sys.stdin); print("  name:", d.get("name")); print("  url: ", d.get("url", "(pending)"))'
-echo "==> MCP endpoint will be: <app-url>/mcp"
+APP_URL="$(dbx apps get "$APP_NAME" --output json \
+  | python3 -c 'import sys, json; print(json.load(sys.stdin).get("url", ""))')"
+echo "  name: $APP_NAME"
+echo "  url:  ${APP_URL:-(pending — re-run 'databricks apps get $APP_NAME')}"
+echo
+echo "==> Next steps to use it in Genie Code:"
+echo "  1. MCP endpoint:  ${APP_URL:-<app-url>}/mcp"
+echo "  2. The app is named '$APP_NAME' (mcp- prefix), so it appears in the workspace"
+echo "     under AI Gateway > MCPs."
+echo "  3. Grant 'Can use' on the app to the users / service principals that will call it"
+echo "     (Apps UI > Permissions, or: databricks apps set-permissions $APP_NAME ...)."
+echo "  4. Grant that app's service principal access to the catalogs/schemas/volumes the"
+echo "     migration touches (and any SQL warehouse used by the reporting tools)."
+echo "  5. In Genie Code, select the orchestra MCP server and use its orchestra_* tools."
