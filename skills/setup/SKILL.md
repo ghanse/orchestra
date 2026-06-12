@@ -2,7 +2,9 @@
 name: setup
 description: >
   Setup the Python environment for the orchestra plugin. Creates a virtual environment
-  and installs the Python dependencies (from requirements.txt via pip) needed for each phase.
+  and installs the Python dependencies (from requirements.txt via pip) needed for each phase,
+  then makes the phases available as MCP tools — installing the MCP server locally for
+  Claude Code / other agents, or deploying it as a Databricks App for Genie Code.
   Run this once before any other orchestra skill, or whenever dependencies are missing.
 triggers:
   - "setup orchestra"
@@ -11,6 +13,8 @@ triggers:
   - "orchestra environment"
   - "create orchestra venv"
   - "ModuleNotFoundError orchestra"
+  - "install orchestra mcp"
+  - "deploy orchestra mcp"
 ---
 
 # Create the Python Environment
@@ -106,6 +110,56 @@ PY="$(cat <plugin_dir>/.migration-venv)"
 `<plugin_dir>/.venv/bin/python` locally. Use `"$PY"` anywhere the other skills show `python3` or the
 interpreter. (On Windows the local interpreter is `<plugin_dir>\.venv\Scripts\python.exe`.)
 
+### Step 4 — Make the orchestra phases available as MCP tools
+
+The phases are also packaged as MCP tools (see `src/orchestra/mcp/`) so an agent can invoke
+them directly instead of shelling out to the CLI. **How they are exposed depends on the
+environment** — branch on the same `DATABRICKS_RUNTIME_VERSION` signal `bootstrap.sh` uses:
+
+```bash
+PY="$(cat <plugin_dir>/.migration-venv)"
+if [ -n "${DATABRICKS_RUNTIME_VERSION:-}" ]; then
+  # Databricks Genie Code → host the tools as a Databricks App (Genie connects to its URL)
+  bash <plugin_dir>/app/deploy.sh
+else
+  # Claude Code / other local agents → install the MCP server for local (stdio) hosting
+  "$PY" -m pip install "mcp>=1.12" "uvicorn>=0.30" "starlette>=0.40"
+fi
+```
+
+#### Local / Claude Code / other agents (`DATABRICKS_RUNTIME_VERSION` unset)
+
+The `pip install` above adds the MCP server stack to the venv. Run the server over stdio and
+register it with the MCP client. Resolve `command` from the marker file:
+
+```bash
+PYTHONPATH="<plugin_dir>/src" "$PY" -m orchestra.mcp        # stdio (default)
+```
+
+```json
+{
+  "mcpServers": {
+    "orchestra": {
+      "command": "<interpreter from .migration-venv>",
+      "args": ["-m", "orchestra.mcp"],
+      "env": { "PYTHONPATH": "<plugin_dir>/src" }
+    }
+  }
+}
+```
+
+#### Databricks Genie Code (`DATABRICKS_RUNTIME_VERSION` set)
+
+`app/deploy.sh` stages a self-contained bundle (the app entrypoint plus a vendored copy of the
+orchestra source), syncs it to the workspace, and creates/deploys the `orchestra-mcp` Databricks
+App. The MCP endpoint is `<app-url>/mcp` — point Genie Code at it. Grant the app's service
+principal access to the catalogs, schemas, and volumes the migration touches.
+
+> **Note:** `databricks apps` deploy commands require a Databricks CLI session (workspace web
+> terminal or a local machine), not serverless notebook Python. If the Genie session can't shell
+> out to the CLI, run `app/deploy.sh` from the web terminal. (Same constraint as `databricks
+> bundle deploy`.)
+
 ## Output
 
 | Artifact | Description |
@@ -113,9 +167,12 @@ interpreter. (On Windows the local interpreter is `<plugin_dir>\.venv\Scripts\py
 | venv (`<plugin_dir>/.venv` or `/Workspace/Users/<user>/.migration-skills`) | Virtual environment containing the installed dependencies |
 | `<plugin_dir>/.migration-venv` | Marker file holding the resolved interpreter path |
 | `requirements.txt` | The dependency list installed into the venv |
+| MCP server (local) | `mcp` / `uvicorn` / `starlette` installed into the venv; run with `python -m orchestra.mcp` |
+| MCP server (Databricks Genie Code) | `orchestra-mcp` Databricks App serving the tools at `<app-url>/mcp` |
 
 ## Examples
 
 - "Set up the orchestra environment"
 - "Bootstrap orchestra so I can run a migration"
 - "I got a ModuleNotFoundError running profile — fix the environment"
+- "Install the orchestra MCP server" (local) / "Deploy the orchestra MCP server to Databricks" (Genie Code)

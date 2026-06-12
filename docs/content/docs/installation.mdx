@@ -106,6 +106,54 @@ PY="$(cat <plugin_dir>/.migration-venv)"
 
 The marker file points at `<plugin_dir>/.venv` locally or `/Workspace/Users/<user>/.migration-skills` on Databricks. The agent normally runs these commands for you; they are handy for troubleshooting a `ModuleNotFoundError`.
 
+## Running orchestra as an MCP server
+
+Orchestra's phases are also packaged as [Model Context Protocol](https://modelcontextprotocol.io) tools (in [`src/orchestra/mcp/`](https://github.com/ghanse/orchestra/tree/main/src/orchestra/mcp)) so an agent can invoke them directly instead of shelling out to the CLI. The `setup` skill wires this up automatically based on your environment; you can also do it manually. See [Architecture](/docs/architecture) for how the tool layer maps onto the phases.
+
+<Tabs items={['Claude Code / local agents', 'Databricks Genie Code']}>
+<Tab value="Claude Code / local agents">
+Install the MCP server stack into the venv and run it over stdio:
+
+```bash
+PY="$(cat <plugin_dir>/.migration-venv)"
+"$PY" -m pip install "mcp>=1.12" "uvicorn>=0.30" "starlette>=0.40"
+PYTHONPATH="<plugin_dir>/src" "$PY" -m orchestra.mcp
+```
+
+Register it with your MCP client (use the interpreter path from the marker file for `command`):
+
+```json
+{
+  "mcpServers": {
+    "orchestra": {
+      "command": "<plugin_dir>/.venv/bin/python",
+      "args": ["-m", "orchestra.mcp"],
+      "env": { "PYTHONPATH": "<plugin_dir>/src" }
+    }
+  }
+}
+```
+
+<Callout type="info" title="Editable install alternative">
+If you prefer an installed package over `PYTHONPATH`, run `pip install -e ".[mcp]"` from the plugin root; then `python -m orchestra.mcp` works without setting `PYTHONPATH`.
+</Callout>
+</Tab>
+
+<Tab value="Databricks Genie Code">
+Genie Code connects to a **hosted** MCP endpoint, so deploy the server as a Databricks App:
+
+```bash
+bash <plugin_dir>/app/deploy.sh
+```
+
+`deploy.sh` stages a self-contained bundle (the app entrypoint plus a vendored copy of the orchestra source), syncs it to your workspace, and creates/deploys the `orchestra-mcp` app. The MCP endpoint is `<app-url>/mcp` — point Genie Code at it. Grant the app's service principal access to the catalogs, schemas, and volumes the migration touches (and to any SQL warehouse used by the reporting tools).
+
+<Callout type="warn" title="Deploy from a CLI session">
+`databricks apps` deploy commands require a Databricks CLI session (workspace web terminal or a local machine); they are **not** available from serverless notebook Python — the same constraint as `databricks bundle deploy`. Run `app/deploy.sh` from the web terminal if your Genie session can't shell out to the CLI directly.
+</Callout>
+</Tab>
+</Tabs>
+
 ## Verifying the installation
 
 Open your agent and ask:

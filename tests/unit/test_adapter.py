@@ -839,6 +839,41 @@ class TestCli:
         # Missing '=' -> validation error -> exit 2.
         assert adapter_cli_main(["inspect", str(report_path), "--answer", "no_equals_sign"]) == 2
 
+    def test_record_results_subcommand(self, tmp_path: Path, monkeypatch, capsys: pytest.CaptureFixture[str]):
+        import orchestra.reporting.results as rr
+
+        md = tmp_path / "metadata"
+        md.mkdir()
+        (md / "inventory.json").write_text("{}")
+        monkeypatch.setattr(rr, "write_results", lambda *a, **k: ("run-xyz", 3))
+        rc = adapter_cli_main(["record-results", "--output-dir", str(tmp_path), "--results-table", "c.s.t"])
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "run-xyz" in out and "3 pipeline" in out
+
+    def test_record_results_requires_inventory(self, tmp_path: Path):
+        rc = adapter_cli_main(["record-results", "--output-dir", str(tmp_path), "--results-table", "c.s.t"])
+        assert rc == 1  # no metadata/inventory.json
+
+    def test_install_dashboard_subcommand(self, monkeypatch, capsys: pytest.CaptureFixture[str]):
+        import orchestra.reporting.dashboard as dd
+
+        monkeypatch.setattr(dd, "install_dashboard", lambda *a, **k: ("dash-1", "https://x/sql/dashboardsv3/dash-1"))
+        rc = adapter_cli_main(["install-dashboard", "--results-table", "c.s.t"])
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "dash-1" in out
+
+    def test_install_dashboard_failure_returns_1(self, monkeypatch):
+        import orchestra.reporting.dashboard as dd
+
+        def _boom(*a, **k):
+            raise RuntimeError("no auth")
+
+        monkeypatch.setattr(dd, "install_dashboard", _boom)
+        rc = adapter_cli_main(["install-dashboard", "--results-table", "c.s.t"])
+        assert rc == 1
+
 
 class TestBundleOutput:
     def test_classic_copy_compute_emits_two_node_multi_node_cluster(self, tmp_path: Path):

@@ -105,3 +105,23 @@ The weighted score is `sum(activity weights) + #datasets + #linked_services + #c
 - Databricks-native (notebook/jar/python/job) = **1** (simplest)
 - control-flow / parameter-setting (ForEach/If/Switch/SetVariable/AppendVariable/Filter/Wait/Until) = **2**
 - all other activities (Copy/Web/Lookup/etc.) = **3** (hardest)
+
+## Coverage results table & dashboard (Genie Code)
+
+When running with workspace auth (Genie Code, or a configured Databricks profile) the `prepare`
+phase surfaces three optional inputs — `results_table`, `results_warehouse_id`, and
+`install_dashboard` — to persist coverage and visualize it:
+
+- **`record-results`** writes one row **per pipeline per run** to the supplied Unity Catalog
+  table (`catalog.schema.table`), combining the complexity columns above with the
+  deterministic/agentic/unsupported coverage breakdown. Every row is stamped with a shared
+  **`run_id`** (UUID), **`run_date`** (`CURRENT_TIMESTAMP()`), and **`run_by`**
+  (`CURRENT_USER()`), so coverage is trackable across runs and users.
+- **`install-dashboard`** creates and publishes an AI/BI (Lakeview) dashboard over that table —
+  KPI counters (pipelines, coverage %, deterministic/agentic/unsupported activity totals), a
+  pipelines-by-complexity bar chart, a coverage-over-runs line, and a per-pipeline coverage
+  table.
+
+The SQL warehouse is auto-detected (preferring a running serverless warehouse) when
+`results_warehouse_id` is left blank. Both run via the Databricks SDK and degrade gracefully
+when workspace auth or a warehouse is unavailable.

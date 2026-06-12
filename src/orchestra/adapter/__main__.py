@@ -89,8 +89,58 @@ def main(argv: list[str] | None = None) -> int:
         return _run_inputs(args)
     if args.command == "workspace-paths":
         return _run_workspace_paths(args)
+    if args.command == "record-results":
+        return _run_record_results(args)
+    if args.command == "install-dashboard":
+        return _run_install_dashboard(args)
     parser.print_help(sys.stderr)
     return 2
+
+
+def _run_record_results(args: argparse.Namespace) -> int:
+    """Implements ``record-results``: write per-pipeline coverage to a UC table.
+
+    Returns 0 on success, 1 when the metadata cannot be read or the write fails.
+    """
+    from orchestra.reporting.results import write_results
+
+    metadata_dir = args.output_dir / "metadata"
+    if not (metadata_dir / "inventory.json").exists():
+        print(f"No inventory.json under {metadata_dir}; run the profile phase first.", file=sys.stderr)
+        return 1
+    try:
+        run_id, rows = write_results(metadata_dir, args.results_table, warehouse_id=args.warehouse_id)
+    except Exception as error:  # noqa: BLE001 - surface an actionable message to the agent
+        print(f"Failed to record results to {args.results_table}: {error}", file=sys.stderr)
+        return 1
+    if not rows:
+        print("No pipelines found to record.", file=sys.stderr)
+        return 1
+    print(f"Recorded {rows} pipeline row(s) to {args.results_table} (run_id={run_id}).")
+    return 0
+
+
+def _run_install_dashboard(args: argparse.Namespace) -> int:
+    """Implements ``install-dashboard``: create + publish the coverage dashboard.
+
+    Returns 0 on success, 1 when the dashboard could not be created.
+    """
+    from orchestra.reporting.dashboard import install_dashboard
+
+    try:
+        dashboard_id, url = install_dashboard(
+            args.results_table,
+            warehouse_id=args.warehouse_id,
+            display_name=args.dashboard_name,
+            parent_path=args.parent_path,
+        )
+    except Exception as error:  # noqa: BLE001 - surface an actionable message to the agent
+        print(f"Failed to install dashboard for {args.results_table}: {error}", file=sys.stderr)
+        return 1
+    print(f"Installed coverage dashboard (id={dashboard_id}).")
+    if url:
+        print(f"  {url}")
+    return 0
 
 
 def _run_workspace_paths(args: argparse.Namespace) -> int:
@@ -291,6 +341,58 @@ def _build_parser() -> argparse.ArgumentParser:
         type=Path,
         required=True,
         help="Destination path for the lookup-values JSON list.",
+    )
+
+    record = subparsers.add_parser(
+        "record-results",
+        help="Write per-pipeline migration coverage for this run to a Unity Catalog table.",
+    )
+    record.add_argument(
+        "--output-dir",
+        type=Path,
+        required=True,
+        help="Migration output directory (reads metadata/inventory.json + metadata/profile_report.csv).",
+    )
+    record.add_argument(
+        "--results-table",
+        type=str,
+        required=True,
+        help="Target UC table as catalog.schema.table.",
+    )
+    record.add_argument(
+        "--warehouse-id",
+        type=str,
+        default=None,
+        help="SQL warehouse id for the write. Auto-detected (prefers running serverless) when omitted.",
+    )
+
+    dashboard = subparsers.add_parser(
+        "install-dashboard",
+        help="Create and publish an AI/BI dashboard visualizing coverage from the results table.",
+    )
+    dashboard.add_argument(
+        "--results-table",
+        type=str,
+        required=True,
+        help="UC table the dashboard reads (catalog.schema.table).",
+    )
+    dashboard.add_argument(
+        "--warehouse-id",
+        type=str,
+        default=None,
+        help="SQL warehouse backing the dashboard. Auto-detected when omitted.",
+    )
+    dashboard.add_argument(
+        "--dashboard-name",
+        type=str,
+        default=None,
+        help="Dashboard display name (defaults to 'Migration Coverage \u2014 <table>').",
+    )
+    dashboard.add_argument(
+        "--parent-path",
+        type=str,
+        default=None,
+        help="Workspace folder for the dashboard (defaults to the current user's home).",
     )
 
     # Unified phase runners: `python -m orchestra.adapter <phase> -- <flags>`

@@ -47,3 +47,6 @@ tmp_adf_ingest_*/
 *.key
 credentials.json
 /fixlog/
+
+# Databricks App build bundle (vendored orchestra source)
+app/.build/

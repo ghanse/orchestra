@@ -267,6 +267,32 @@ Invoke the `orchestra:prepare` skill with:
 Prepare prunes the transient `<output_dir>/.work/` after a successful build, leaving the
 bundle (databricks.yml, resources/, src/, SETUP.md) plus the kept `metadata/` folder.
 
+### Step 7.5 — (Optional) Persist coverage results and install a dashboard
+
+When running with workspace auth (Genie Code or a configured profile), offer to record this
+run's migration coverage to a Unity Catalog table and optionally install a coverage dashboard.
+The `inputs prepare` prompts surface `results_table`, `results_warehouse_id`, and
+`install_dashboard`.
+
+If the user supplies a `results_table`:
+
+```bash
+"$PY" -m orchestra.adapter record-results \
+  --output-dir <output_dir> --results-table <catalog.schema.table> [--warehouse-id <id>]
+```
+
+Writes one row per pipeline (counts, complexity size, deterministic/agentic/unsupported
+coverage), each stamped with a UUID `run_id`, `run_date` (`CURRENT_TIMESTAMP()`), and `run_by`
+(`CURRENT_USER()`). If `install_dashboard = yes`:
+
+```bash
+"$PY" -m orchestra.adapter install-dashboard --results-table <catalog.schema.table> [--warehouse-id <id>]
+```
+
+Creates and publishes an AI/BI coverage dashboard over the table and prints its URL. Both
+auto-detect a SQL warehouse when `--warehouse-id` is omitted and degrade gracefully without
+workspace auth. See the `prepare` skill (Step 8) for details.
+
 ### Step 8 — Present final summary
 
 Display the complete migration summary:

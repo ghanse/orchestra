@@ -19,9 +19,12 @@ from orchestra.adapter.constants import (
     INPUT_BUNDLE_NAME,
     INPUT_CATALOG,
     INPUT_DATABRICKS_PROFILE,
+    INPUT_INSTALL_DASHBOARD,
     INPUT_INVENTORY_PATH,
     INPUT_OUTPUT_BUNDLE_PATH,
     INPUT_OUTPUT_DIR,
+    INPUT_RESULTS_TABLE,
+    INPUT_RESULTS_WAREHOUSE,
     INPUT_SCHEMA,
     INPUT_TRANSLATION_REPORT_PATH,
     PHASE_PREPARE,
@@ -352,6 +355,37 @@ _PREPARE_OPTIONS: tuple[MigrationInputOption, ...] = (
             "``~/.databrickscfg`` or the active ``DATABRICKS_*`` env vars."
         ),
         default="",
+        required=False,
+    ),
+    MigrationInputOption(
+        option_id=INPUT_RESULTS_TABLE,
+        prompt="Record migration coverage to a Unity Catalog table? If so, the table (catalog.schema.table)?",
+        description=(
+            "Optional. When set, the prepare phase writes one coverage row per pipeline to this UC "
+            "table, stamped with a UUID run_id, run_date (CURRENT_TIMESTAMP()), and run_by "
+            "(CURRENT_USER()). Leave blank to skip. Requires workspace auth (Genie Code / a profile)."
+        ),
+        default="",
+        required=False,
+    ),
+    MigrationInputOption(
+        option_id=INPUT_RESULTS_WAREHOUSE,
+        prompt="SQL warehouse id for writing the results table / backing the dashboard?",
+        description=(
+            "Optional. Warehouse used to run the CREATE/INSERT and back the dashboard. Leave blank to "
+            "auto-detect (prefers a running, serverless warehouse)."
+        ),
+        default="",
+        required=False,
+    ),
+    MigrationInputOption(
+        option_id=INPUT_INSTALL_DASHBOARD,
+        prompt="Install a published AI/BI coverage dashboard over the results table? (yes/no)",
+        description=(
+            "Optional. When 'yes' (and a results table is set), installs and publishes a Lakeview "
+            "dashboard that visualizes migration coverage from the table."
+        ),
+        default="no",
         required=False,
     ),
 )

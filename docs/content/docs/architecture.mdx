@@ -1,0 +1,84 @@
+---
+title: Architecture
+description: How orchestra is structured as a set of agent skills and MCP tools.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+Orchestra translates data pipelines into Databricks Lakeflow Jobs packaged as Declarative Automation Bundles (DABs). A set of Python functions is exposed through two surfaces: **agent skills** invoked through a CLI and **MCP tools** called by an agent session.
+
+## Three-phase pipeline
+
+```text
+ADF JSON ──▶ profile ──▶ translate ──▶ prepare ──▶ databricks.yml (DAB)
+            (parse +     (activities    (IR → jobs,
+             classify)    → IR)          notebooks, setup)
+```
+
+All three phases share one `output_dir` (default `./orchestra_output`):
+
+| Phase         | Module                  | Reads                  | Writes                                                                                   |
+|---------------|-------------------------|------------------------|------------------------------------------------------------------------------------------|
+| **profile**   | `parser/adf_loader.py`  | ADF JSON exports       | `metadata/inventory.json`, `metadata/profile_report.csv`, `metadata/<pipeline>.arm.json` |
+| **translate** | `translator/engine.py`  | inventory + ADF source | `.work/translation_report.json` (transient IR)                                           |
+| **prepare**   | `bundler/dab_writer.py` | translation report     | `databricks.yml`, `resources/`, `src/`, `setup/` (and prunes `.work/`)                   |
+
+Each activity is classified with a `TranslationStrategy`:
+* `DETERMINISTIC` (in-process translators)
+* `AGENTIC` (LLM-assisted gaps)
+* `UNSUPPORTED`
+
+The reporting layer (`reporting/`) can write per-run coverage to a Unity Catalog table and publish an AI/BI dashboard.
+
+## Two surfaces over one core
+
+```text
+                    ┌─────────────────────────────┐
+   Agent skills ───▶│  python -m orchestra.adapter │───▶ phase modules (profile/
+   (profile/...,    │  (unified CLI entry point)   │     translate/prepare) +
+    setup, migrate) └─────────────────────────────┘     adapter operations
+                                  ▲
+                                  │ subprocess (same contract)
+                    ┌─────────────────────────────┐
+   MCP tools ──────▶│  orchestra.mcp (FastMCP)     │
+   (Claude / Genie) │  11 tools → adapter bridge   │
+                    └─────────────────────────────┘
+```
+
+The unified `orchestra.adapter` CLI is the single contract. Both surfaces go through it:
+
+- **Agent skills** (`skills/`) shell out to `python -m orchestra.adapter <phase|op> …` directly.
+- **MCP tools** (`src/orchestra/mcp/`) are a thin bridge: each tool builds the same adapter arguments, runs them as a subprocess via `orchestra.mcp.runner`, then reads back the JSON/CSV artifacts and returns a structured result. No phase logic is duplicated, so the tool surface can't drift from the tested CLI.
+
+### MCP tool layer
+
+| Module            | Purpose                                                                                                                   |
+|-------------------|---------------------------------------------------------------------------------------------------------------------------|
+| `mcp/server.py`   | `FastMCP` server; registers tools and builds the stdio / streamable-HTTP apps                                             |
+| `mcp/runner.py`   | Subprocess bridge to `orchestra.adapter` with artifact summarizers (for running translation without the `mcp` dependency) |
+| `mcp/__main__.py` | `python -m orchestra.mcp` entry point (stdio default, `--http` for hosting)                                               |
+
+Each tool represents an adapter subcommand: `orchestra_phase_inputs`, `orchestra_profile`, `orchestra_translate`, `orchestra_inspect_report`, `orchestra_apply_answers`, `orchestra_materialize_lookup`, `orchestra_workspace_paths`, `orchestra_prepare`, `orchestra_migrate`, `orchestra_record_results`, and `orchestra_install_dashboard`.
+
+## Deployment topology
+
+The MCP server runs in whichever transport fits the calling tool. This is chosen when the `setup` skill is invoked:
+
+- **Local / Claude Code:** `setup` installs `mcp` + `uvicorn` + `starlette` into the venv; the server runs over **stdio** and is registered with the MCP client.
+- **Databricks Genie Code:** `setup` runs `app/deploy.sh`, which stages a self-contained bundle (app entrypoint + a vendored copy of the pure-Python orchestra source), syncs it to the workspace, and creates/deploys the **`orchestra-mcp` Databricks App**. The app serves the MCP streamable-HTTP transport at `<app-url>/mcp` (health at `/`) via `uvicorn` → `Starlette` → `FastMCP`. Genie connects over OAuth; the app authenticates to the workspace as its own service principal.
+
+```text
+  Local (Claude Code / other agents)        Databricks Genie Code
+  ───────────────────────────────────       ─────────────────────────────────
+  agent ◀── stdio ──▶ python -m              Genie ◀── HTTPS /mcp ──▶ Databricks App
+                      orchestra.mcp                                   (uvicorn → Starlette
+                      (in the venv)                                    → FastMCP streamable-HTTP)
+                                                                       app authenticates as its
+                                                                       own service principal
+```
+
+See [Installation](/docs/installation#running-orchestra-as-an-mcp-server) for the exact commands and the [app README](https://github.com/ghanse/orchestra/tree/main/app) for deployment details.
+
+<Callout type="warn" title="Source/output locations on Databricks Apps">
+MCP tools pass `adf_source_path` and `output_dir` straight to orchestra, which uses local filesystem paths. Databricks Apps do **not** auto-mount Unity Catalog Volumes (`/Volumes/...`), so for hosted use, stage ADF exports onto a path the app can read (or extend `orchestra.mcp.runner` to fetch volume inputs via the SDK Files API into a temp dir). Locally hosted, ordinary paths and mounted volumes work as-is.
+</Callout>

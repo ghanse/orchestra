@@ -257,6 +257,46 @@ Next Steps
 
 Recommend running `databricks bundle validate` first to catch any configuration issues before deployment.
 
+### Step 8 — (Optional) Persist coverage results and install a dashboard
+
+This step only applies when running with workspace auth (Genie Code, or a configured
+Databricks CLI profile). The `inputs prepare` options surface three optional prompts:
+`results_table`, `results_warehouse_id`, and `install_dashboard`.
+
+**Persist results.** When the user provides a `results_table` (a UC `catalog.schema.table`),
+write one migration-coverage row **per pipeline** for this run:
+
+```bash
+"$PY" -m orchestra.adapter record-results \
+  --output-dir <output_dir> \
+  --results-table <catalog.schema.table> \
+  [--warehouse-id <sql_warehouse_id>]
+```
+
+It reads `<output_dir>/metadata/{inventory.json, profile_report.csv}`, creates the table if
+needed, and inserts a row per pipeline with the activity/dataset/linked-service counts,
+collapsible-pattern count, complexity size, and the deterministic/agentic/unsupported coverage
+breakdown. Every row is stamped with a shared **`run_id`** (UUID for this run),
+**`run_date`** (`CURRENT_TIMESTAMP()`), and **`run_by`** (`CURRENT_USER()`). The warehouse is
+auto-detected (prefers a running serverless warehouse) when `--warehouse-id` is omitted. The
+command prints the `run_id` and row count.
+
+**Install the dashboard.** When the user answers `install_dashboard = yes`, create and publish
+an AI/BI (Lakeview) coverage dashboard over that table:
+
+```bash
+"$PY" -m orchestra.adapter install-dashboard \
+  --results-table <catalog.schema.table> \
+  [--warehouse-id <sql_warehouse_id>] \
+  [--dashboard-name "<name>"] [--parent-path "/Workspace/Users/<you>"]
+```
+
+It builds the dashboard from a template (KPI counters for pipelines / coverage % /
+deterministic-agentic-unsupported activity totals, a complexity-size bar chart, a
+coverage-over-runs line, and a per-pipeline coverage table), publishes it, and prints the URL.
+Both commands degrade gracefully with an actionable message when workspace auth or a warehouse
+is unavailable.
+
 ## Examples
 
 - "Prepare the bundles"

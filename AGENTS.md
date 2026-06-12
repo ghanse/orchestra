@@ -83,6 +83,9 @@ intermediates under `.work/` (pruned by `prepare`).
 | `bundler/dab_writer.py` | Generates databricks.yml, job YAML, resources |
 | `bundler/notebook_writer.py` | Writes generated notebooks to bundle |
 | `bundler/setup_generator.py` | Setup scripts for UC volumes, secrets, connections |
+| `reporting/coverage.py` | Builds per-pipeline coverage rows from `metadata/` |
+| `reporting/results.py` | Writes per-run coverage to a UC table (run_id/run_date/run_by) via the SDK |
+| `reporting/dashboard.py` | Installs + publishes an AI/BI coverage dashboard over the results table |
 
 ## Activity Types
 
