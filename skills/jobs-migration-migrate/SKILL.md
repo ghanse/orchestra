@@ -56,9 +56,10 @@ orchestra(command="migrate", parameters={
 > reference: either stage the ADF export to a **UC Volume** and pass
 > `"adf_volume_path": "/Volumes/cat/sch/adf_export"` (read via the SDK Files API), or pass
 > `"adf_workspace_path": "/Workspace/Shared/adf_export"` for an ADF Git folder already in the workspace
-> (read via the SDK Workspace API). Pass `"output_volume_path": "/Volumes/cat/sch/dab"` so the generated bundle is
-> written back to a volume (returned as `bundle_uploaded` instead of inline `bundle`). Grant the
-> `mcp-orchestra` app's service principal read on the source volume and write on the output volume.
+> (read via the SDK Workspace API). For output, pass `"output_volume_path": "/Volumes/cat/sch/dab"`
+> **or** `"output_workspace_path": "/Workspace/Shared/dab"` so the generated bundle is written to that
+> target via the SDK (returned as `bundle_uploaded` instead of inline `bundle`). Grant the
+> `mcp-orchestra` app's service principal read on the source and write on the output target.
 
 For step-by-step control, run the commands in order (the app reuses `output_dir` across calls, so
 only `discover` needs `adf_definitions`):
@@ -74,11 +75,13 @@ orchestra(command="package", parameters={"output_dir": ..., "catalog": ..., "sch
 orchestra(command="record_results", parameters={...}) / orchestra(command="install_dashboard", parameters={...})
 ```
 
-`migrate` and `package` return the generated bundle inline as `bundle = {"files": {relpath: text,…},
-"truncated": [...]}` (the server's `output_dir` is ephemeral and not reachable from your workspace).
-**Write those `bundle.files` to the target workspace/volume** so the user has the DAB to validate and
-deploy. Each call returns a structured result (summaries / file trees); use those in place of reading
-files. Wherever a step below shows `"$PY" -m orchestra.adapter <cmd> …`, call
+The server's `output_dir` is ephemeral and not reachable from your workspace, so **have `migrate`/
+`package` write the DAB to the target via the SDK** — pass `"output_volume_path": "/Volumes/…"` or
+`"output_workspace_path": "/Workspace/…"` and the bundle is uploaded there (returned as
+`bundle_uploaded`). Only when neither is set is the bundle returned inline as `bundle = {"files":
+{relpath: text,…}, "truncated": [...]}` (small bundles), which you must then persist yourself. Either
+way the user ends up with the DAB to validate and deploy. Each call returns a structured result
+(summaries / file trees); use those in place of reading files. Wherever a step below shows `"$PY" -m orchestra.adapter <cmd> …`, call
 `orchestra(command="<cmd>", parameters={...})` instead.
 
 > `databricks bundle validate` / `deploy` of the *generated* bundle is still a user-driven CLI step

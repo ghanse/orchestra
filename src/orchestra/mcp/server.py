@@ -98,11 +98,20 @@ def _resolve_source(p: dict[str, Any], path_key: str = "adf_source_path") -> tup
     return p.get(path_key), (lambda: None)
 
 
-def _bundle_output(out: Path, output_volume_path: str | None) -> dict[str, Any]:
-    """Deliver the generated bundle: upload to a UC Volume when ``output_volume_path`` is set
-    (scales; contents bypass the agent), otherwise return the contents inline."""
-    if output_volume_path:
-        return {"bundle_uploaded": runner.upload_tree_to_volume(out, output_volume_path)}
+def _bundle_output(p: dict[str, Any], out: Path) -> dict[str, Any]:
+    """Deliver the generated bundle to a location the user can reach.
+
+    The server's ``output_dir`` is local/ephemeral, so the bundle is written to the target via the
+    SDK (contents bypass the agent and it scales), in priority order:
+
+    1. ``output_volume_path`` — upload to a UC Volume via the SDK Files API.
+    2. ``output_workspace_path`` — upload to a ``/Workspace`` directory via the SDK Workspace API.
+    3. neither — return the contents inline as ``bundle`` for the agent to persist (small bundles).
+    """
+    if p.get("output_volume_path"):
+        return {"bundle_uploaded": runner.upload_tree_to_volume(out, p["output_volume_path"])}
+    if p.get("output_workspace_path"):
+        return {"bundle_uploaded": runner.upload_tree_to_workspace(out, p["output_workspace_path"])}
     return {"bundle": runner.read_tree(out)}
 
 
@@ -217,7 +226,7 @@ def _cmd_package(p: dict[str, Any]) -> dict[str, Any]:
     result = runner.run_adapter(args)
     out = Path(output_dir)
     setup_md = runner.read_text(out / "SETUP.md") or runner.read_text(out / "setup" / "SETUP.md")
-    extra = _bundle_output(out, p.get("output_volume_path")) if result.ok else {}
+    extra = _bundle_output(p, out) if result.ok else {}
     return _phase_result(result, out, bundle_files=runner.list_tree(out), setup_md=setup_md, **extra)
 
 
@@ -251,7 +260,7 @@ def _cmd_migrate(p: dict[str, Any]) -> dict[str, Any]:
         package_res = runner.run_adapter(
             ["package", "--output-dir", output_dir, "--catalog", catalog, "--schema", schema]
         )
-        extra = _bundle_output(out, p.get("output_volume_path")) if package_res.ok else {}
+        extra = _bundle_output(p, out) if package_res.ok else {}
         steps["package"] = _phase_result(package_res, out, bundle_files=runner.list_tree(out), **extra)
         return {"ok": package_res.ok, "failed_phase": None if package_res.ok else "package", "steps": steps}
     finally:
@@ -333,10 +342,12 @@ def build_server() -> FastMCP:
         - "materialize_lookup": source(req: CSV path or literal CSV), out(req: destination JSON path).
         - "workspace_paths": report_path(req), (adf_volume_path | adf_workspace_path | adf_definitions
           | source_dir).
-        - "package": output_dir, output_volume_path, report_path, catalog(default "main"),
-          schema(default "default"), bundle_name, profile, download_workspace_files(bool), keep_intermediates(bool).
+        - "package": output_dir, output_volume_path, output_workspace_path, report_path,
+          catalog(default "main"), schema(default "default"), bundle_name, profile,
+          download_workspace_files(bool), keep_intermediates(bool).
         - "migrate": one of adf_volume_path | adf_workspace_path | adf_definitions | adf_source_path
-          (req), output_dir, output_volume_path, catalog, schema, pipeline — runs discover→convert→package.
+          (req), output_dir, output_volume_path, output_workspace_path, catalog, schema, pipeline —
+          runs discover→convert→package.
         - "record_results": output_dir(req), results_table(req: catalog.schema.table), warehouse_id.
         - "install_dashboard": results_table(req), warehouse_id, dashboard_name, parent_path.
 
@@ -352,10 +363,14 @@ def build_server() -> FastMCP:
           through the agent's context — over the cap, switch to ``adf_volume_path``.
         - ``adf_source_path`` / ``source_dir``: a path the server itself can read (local hosting / mounted volume).
 
-        Delivering the generated DAB (the server's output_dir is local/ephemeral):
-        - Set ``output_volume_path`` so "package"/"migrate" upload the bundle to a UC Volume and return
-          ``bundle_uploaded`` = {"output_volume_path", "files":[...], "count"}. **Preferred for large bundles.**
-        - Otherwise they return ``bundle`` = {"files": {relpath: text, ...}, "truncated": [...]} inline.
+        Delivering the generated DAB (the server's output_dir is local/ephemeral, so "package"/"migrate"
+        write it to the target via the SDK — the contents bypass the agent):
+        - Set ``output_volume_path`` to upload the bundle to a UC Volume (SDK Files API), or
+          ``output_workspace_path`` to upload it to a ``/Workspace`` directory (SDK Workspace API, files
+          written verbatim). Either returns ``bundle_uploaded`` = {"output_volume_path" or
+          "output_workspace_path", "files":[...], "count"}. **Preferred** — required for large bundles.
+        - With neither set, they return ``bundle`` = {"files": {relpath: text, ...}, "truncated": [...]}
+          inline for the agent to persist (small bundles only; capped).
 
         Returns a dict ``{"ok": bool, ...}`` with per-command summaries (inventory / translation /
         bundle_files / questions / result) and a "process" block (stdout/stderr/returncode). An unknown

@@ -38,18 +38,26 @@ This phase runs one of two ways; run the **`setup`** skill first if you haven't.
   ```
   orchestra(command="package", parameters={"output_dir": "<dir>", "report_path": "<optional>", "catalog": "<catalog>",
                                             "schema": "<schema>", "bundle_name": "<optional>", "profile": "<optional>",
-                                            "download_workspace_files": true})
+                                            "download_workspace_files": true,
+                                            "output_volume_path": "<optional /Volumes/... target>",
+                                            "output_workspace_path": "<optional /Workspace/... target>"})
   orchestra(command="workspace_paths", parameters={"report_path": "...", "source_dir": "<optional ADF source>"})
   orchestra(command="record_results", parameters={"output_dir": "<dir>", "results_table": "catalog.schema.table", "warehouse_id": "<optional>"})
   orchestra(command="install_dashboard", parameters={"results_table": "catalog.schema.table", "warehouse_id": "<optional>"})
   ```
 
-  The server's `output_dir` is ephemeral and not reachable from your workspace, so the result returns
-  the bundle for you to persist. For **large bundles**, pass `"output_volume_path":
-  "/Volumes/cat/sch/dab"` so `package` uploads the DAB to that UC Volume via the SDK Files API and
-  returns `bundle_uploaded = {"output_volume_path", "files", "count"}`. Otherwise the result includes
-  the contents inline as `bundle = {"files": {relpath: text, …}, "truncated": [...]}` — **write
-  `bundle.files` to the target workspace/volume**. Skip the `"$PY" -m …` commands below.
+  The server's `output_dir` is ephemeral and not reachable from your workspace, so **have `package`
+  write the bundle to the target itself via the SDK** — don't try to persist files yourself. Pass one
+  of:
+  - `"output_volume_path": "/Volumes/cat/sch/dab"` — uploads the DAB to that UC Volume (SDK Files API).
+  - `"output_workspace_path": "/Workspace/Shared/dab"` — uploads it to that workspace folder (SDK
+    Workspace API; files written verbatim, not imported as notebooks).
+
+  Either returns `bundle_uploaded = {"output_volume_path"|"output_workspace_path", "files", "count"}`.
+  Only when **neither** is given does `package` return the contents inline as
+  `bundle = {"files": {relpath: text, …}, "truncated": [...]}` (small bundles only) for you to persist.
+  Prefer an output path so the bundle lands durably and large bundles aren't capped. Skip the
+  `"$PY" -m …` commands below.
 
 - **venv CLI (local, no MCP server):** ensure the venv exists (`setup` Path B / `bootstrap.sh`), then
   run the commands below with the venv interpreter (from the marker file `<plugin_dir>/.migration-venv`)

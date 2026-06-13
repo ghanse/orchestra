@@ -331,3 +331,36 @@ def upload_tree_to_volume(local_root: Path, volume_path: str) -> dict[str, Any]:
         client.files.upload(f"{root}/{rel}", io.BytesIO(path.read_bytes()), overwrite=True)
         uploaded.append(rel)
     return {"output_volume_path": root, "files": uploaded, "count": len(uploaded)}
+
+
+def upload_tree_to_workspace(local_root: Path, workspace_path: str) -> dict[str, Any]:
+    """Upload a local directory tree to a ``/Workspace`` directory via the SDK Workspace API.
+
+    The output counterpart to :func:`download_workspace_dir`: the generated DAB lands in a workspace
+    folder the user can reach without the contents passing back through the agent. Files are imported
+    with ``ImportFormat.RAW`` so each one (``databricks.yml``, ``*.py``, ``*.yml``, ``SETUP.md``, …) is
+    stored verbatim as a workspace **file** rather than being interpreted as a notebook (which
+    ``AUTO`` would do to ``.py`` files, corrupting the bundle source tree).
+
+    Returns:
+        ``{"output_workspace_path": <root>, "files": [relpath, ...], "count": n}``.
+    """
+    from databricks.sdk import WorkspaceClient
+    from databricks.sdk.service.workspace import ImportFormat
+
+    client = WorkspaceClient()
+    root = workspace_path.rstrip("/")
+    uploaded: list[str] = []
+    made_dirs: set[str] = set()
+    for path in sorted(local_root.rglob("*")):
+        if not path.is_file():
+            continue
+        rel = str(path.relative_to(local_root))
+        dest = f"{root}/{rel}"
+        parent = dest.rsplit("/", 1)[0]
+        if parent not in made_dirs:
+            client.workspace.mkdirs(parent)
+            made_dirs.add(parent)
+        client.workspace.upload(dest, path.read_bytes(), format=ImportFormat.RAW, overwrite=True)
+        uploaded.append(rel)
+    return {"output_workspace_path": root, "files": uploaded, "count": len(uploaded)}

@@ -174,11 +174,13 @@ by passing data **inline** through the tool, since the calling agent *can* read 
 
   Grant the app's service principal read on whichever path you use. (`adf_source_path` / `source_dir`
   remain for paths the server itself can read — local hosting or a mounted volume.)
-- **Output — large bundles (recommended):** pass `output_volume_path`; `package`/`migrate` upload the
-  DAB to that UC Volume via the SDK Files API and return `bundle_uploaded` (location + file list).
-  Grant the service principal write on it.
-- **Output — small bundles:** without `output_volume_path`, `package`/`migrate` return the DAB inline
-  as `bundle = {"files": {relpath: text, …}, "truncated": [...]}` (capped ~2 MB) for the caller to persist.
+- **Output — large bundles (recommended):** `package`/`migrate` write the DAB to the target via the
+  SDK so the contents bypass the agent. Pass `output_volume_path` (uploaded to a UC Volume via the SDK
+  Files API) **or** `output_workspace_path` (uploaded to a `/Workspace` directory via the SDK Workspace
+  API, with `ImportFormat.RAW` so files land verbatim rather than as notebooks). Either returns
+  `bundle_uploaded` (location + file list). Grant the service principal write on the target.
+- **Output — small bundles:** without an output path, `package`/`migrate` return the DAB inline as
+  `bundle = {"files": {relpath: text, …}, "truncated": [...]}` (capped ~2 MB) for the caller to persist.
 
 ## Known constraints / follow-ups
 

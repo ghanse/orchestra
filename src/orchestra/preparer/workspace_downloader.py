@@ -346,20 +346,34 @@ def workspace_downloads_enabled() -> bool:
 def auth_available() -> bool:
     """Returns True iff there is any usable Databricks authentication on this host.
 
-    A resolvable ``.databrickscfg`` profile, ``DATABRICKS_CONFIG_PROFILE``, or
-    the standard ``DATABRICKS_HOST`` + ``DATABRICKS_TOKEN`` env-var pair will
-    all satisfy this check.  Local /Workspace filesystem access (available on
-    any Databricks compute) also satisfies the check since notebooks can be
-    read directly without API auth.
+    A resolvable ``.databrickscfg`` profile, ``DATABRICKS_CONFIG_PROFILE``, the
+    standard ``DATABRICKS_HOST`` + ``DATABRICKS_TOKEN`` pair, or OAuth
+    machine-to-machine creds (``DATABRICKS_HOST`` + ``DATABRICKS_CLIENT_ID`` +
+    ``DATABRICKS_CLIENT_SECRET`` — what a Databricks App injects for its service
+    principal) all satisfy this check.  Local /Workspace filesystem access
+    (available on any Databricks compute) also satisfies it since notebooks can
+    be read directly without API auth.
 
     This is a pre-flight signal — it does not validate that the credentials
-    actually authorize against any specific workspace.
+    actually authorize against any specific workspace (the SDK call does that,
+    falling back to a placeholder on failure). It deliberately avoids
+    constructing an SDK ``Config``/client, since OAuth resolution can trigger a
+    network round-trip.
     """
     if _local_workspace_accessible():
         return True
     if os.environ.get("DATABRICKS_CONFIG_PROFILE"):
         return True
     if os.environ.get("DATABRICKS_HOST") and os.environ.get("DATABRICKS_TOKEN"):
+        return True
+    # OAuth M2M — e.g. the MCP path: orchestra hosted as a Databricks App, which
+    # injects the service principal's client id/secret. ``WorkspaceClient()`` picks
+    # these up from the environment automatically.
+    if (
+        os.environ.get("DATABRICKS_HOST")
+        and os.environ.get("DATABRICKS_CLIENT_ID")
+        and os.environ.get("DATABRICKS_CLIENT_SECRET")
+    ):
         return True
     if _list_profiles():
         return True
