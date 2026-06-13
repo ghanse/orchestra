@@ -147,15 +147,32 @@ runs every CLI call from a throwaway directory to avoid this; if you invoke the 
 manually, do the same (or pass `--target <name>`), and don't run it from inside a
 generated bundle directory.
 
+## Inputs and outputs on a hosted app
+
+A Databricks App can't read the user's workspace / UC Volume files (only the container's
+ephemeral disk is local; `/Volumes/...` is **not** auto-mounted). The MCP surface handles this
+by passing data **inline** through the tool, since the calling agent *can* read those files:
+
+- **Input — small jobs:** pass the ADF JSON via `adf_definitions` — a mapping of relative path → JSON
+  content mirroring the ADF Git-export layout (`pipeline/…`, `dataset/…`, `linkedService/…`,
+  `trigger/…`); a single ARM-template object is also accepted. The server materializes it to a temp
+  dir. Capped at ~5 MB (`ORCHESTRA_MAX_INLINE_BYTES`) since it flows through the agent's context.
+- **Input — large factories (recommended):** point the server at the source by reference, so the
+  bytes bypass the agent and it scales to thousands of pipelines:
+  - `adf_volume_path` — a UC Volume directory, downloaded via the SDK **Files API**.
+  - `adf_workspace_path` — a `/Workspace` directory (e.g. an ADF Git folder), listed and downloaded
+    via the SDK **Workspace API** (workspace files use the Workspace API, *not* the Files API).
+
+  Grant the app's service principal read on whichever path you use. (`adf_source_path` / `source_dir`
+  remain for paths the server itself can read — local hosting or a mounted volume.)
+- **Output — large bundles (recommended):** pass `output_volume_path`; `prepare`/`migrate` upload the
+  DAB to that UC Volume via the SDK Files API and return `bundle_uploaded` (location + file list).
+  Grant the service principal write on it.
+- **Output — small bundles:** without `output_volume_path`, `prepare`/`migrate` return the DAB inline
+  as `bundle = {"files": {relpath: text, …}, "truncated": [...]}` (capped ~2 MB) for the caller to persist.
+
 ## Known constraints / follow-ups
 
-- **Source/output locations.** Tools pass `adf_source_path` and `output_dir`
-  straight to orchestra, which reads/writes via local filesystem paths. In a
-  Databricks App, only the container's ephemeral disk is local; Unity Catalog
-  Volume paths (`/Volumes/...`) are **not** auto-mounted. For hosted use, stage
-  ADF exports onto a path the app can read (or extend `orchestra.mcp.runner` to
-  fetch volume inputs via the SDK Files API into a temp dir before each phase).
-  Locally hosted, ordinary paths and mounted volumes work as-is.
 - **`databricks bundle validate/deploy`** of the *generated* DAB is a separate,
   user-driven step (run from a CLI session); it is intentionally not invoked by
   these tools.

@@ -34,13 +34,28 @@ This phase runs one of two ways; run the **`setup`** skill first if you haven't.
   commands. The `"$PY" -m …` snippets in the steps below are the **local-CLI fallback only** — ignore
   them on this path.
 
+  The hosted server **cannot read your workspace/volume files**, so pass the ADF JSON **inline** as
+  `adf_definitions` — a mapping of relative path → JSON content mirroring the ADF Git-export layout.
+  You (the agent) read the ARM JSON files from the source and supply them:
+
   ```
-  orchestra(command="profile",
-            parameters={"adf_source_path": "<ADF source path>", "output_dir": "<output dir>", "pipeline": "<optional>"})
+  orchestra(command="profile", parameters={
+    "adf_definitions": {
+      "pipeline/Foo.json": { ...ARM JSON... },
+      "dataset/Bar.json": { ... },
+      "linkedService/Baz.json": { ... },
+      "trigger/Qux.json": { ... }
+    },
+    "output_dir": "<output dir>", "pipeline": "<optional>"})
   ```
 
-  The tool returns the inventory summary (pipeline/activity counts by strategy and coverage); use it
-  in place of reading the files directly.
+  For **large factories** (hundreds–thousands of pipelines), don't inline — reference the source
+  instead (inline `adf_definitions` is capped at ~5 MB): pass `"adf_volume_path":
+  "/Volumes/cat/sch/adf_export"` for a UC Volume (read via the SDK Files API) or
+  `"adf_workspace_path": "/Workspace/Shared/adf_export"` for an ADF Git folder in the workspace (read
+  via the SDK Workspace API). Locally, where the server can read
+  the path, you may instead pass `adf_source_path`. The tool returns the inventory summary
+  (pipeline/activity counts by strategy and coverage); use it in place of reading the files directly.
 
 - **venv CLI (local, no MCP server):** ensure the venv exists (`setup` Path B / `bootstrap.sh`), then
   run the commands below with the venv interpreter and `src/` on `PYTHONPATH`. The interpreter path is

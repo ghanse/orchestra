@@ -39,10 +39,34 @@ there is **no venv, no `bootstrap.sh`, and no `.migration-venv`**. Run **no** `p
 commands on this path; the `"$PY" -m …` snippets in the steps below are the **local-CLI fallback
 only**. Everything goes through the single **`orchestra`** tool, one `command` per step:
 
+The hosted server **cannot read your workspace/volume files**, so pass the ADF JSON **inline** as
+`adf_definitions` (a mapping of relative path → ARM JSON content mirroring the Git-export layout —
+`pipeline/…`, `dataset/…`, `linkedService/…`, `trigger/…`). You read those files and supply them.
+The **recommended Genie path is a single `migrate` call**, which avoids re-sending the payload per
+phase:
+
+```
+orchestra(command="migrate", parameters={
+  "adf_definitions": {"pipeline/Foo.json": {...}, "linkedService/Bar.json": {...}, ...},
+  "output_dir": ..., "catalog": ..., "schema": ..., "pipeline": "<optional>"})
+```
+
+> **Large factories (hundreds–thousands of pipelines): do not inline.** Inline `adf_definitions`
+> passes through your context window and is capped (~5 MB). Instead point the server at the source by
+> reference: either stage the ADF export to a **UC Volume** and pass
+> `"adf_volume_path": "/Volumes/cat/sch/adf_export"` (read via the SDK Files API), or pass
+> `"adf_workspace_path": "/Workspace/Shared/adf_export"` for an ADF Git folder already in the workspace
+> (read via the SDK Workspace API). Pass `"output_volume_path": "/Volumes/cat/sch/dab"` so the generated bundle is
+> written back to a volume (returned as `bundle_uploaded` instead of inline `bundle`). Grant the
+> `mcp-orchestra` app's service principal read on the source volume and write on the output volume.
+
+For step-by-step control, run the commands in order (the app reuses `output_dir` across calls, so
+only `profile` needs `adf_definitions`):
+
 ```
 orchestra(command="inputs", parameters={"phase": "profile" | "translate" | "prepare"})  # learn each phase's inputs
-orchestra(command="profile", parameters={"adf_source_path": ..., "output_dir": ..., "pipeline": ...})
-orchestra(command="translate", parameters={"output_dir": ..., "adf_source_path": ..., "pipeline": ...})
+orchestra(command="profile", parameters={"adf_definitions": {...}, "output_dir": ..., "pipeline": ...})
+orchestra(command="translate", parameters={"output_dir": ..., "pipeline": ...})
 orchestra(command="merge_agentic", parameters={"report_path": ..., "agentic_results_dir": ..., "output_path": ...})  # if agentic results
 orchestra(command="inspect", parameters={"report_path": ...})
 orchestra(command="apply_answers", parameters={"report_path": ..., "answers": [...], "output_dir": ...})
@@ -50,11 +74,12 @@ orchestra(command="prepare", parameters={"output_dir": ..., "catalog": ..., "sch
 orchestra(command="record_results", parameters={...}) / orchestra(command="install_dashboard", parameters={...})
 ```
 
-Or run the whole thing non-interactively with `orchestra(command="migrate", parameters={"adf_source_path": ...,
-"output_dir": ..., "catalog": ..., "schema": ..., "pipeline": ...})` (uses default translation options — for
-control over options, chain `command="inspect"` / `command="apply_answers"`). Each call returns a structured
-result (summaries / file trees); use those in place of reading files. Wherever a step below shows
-`"$PY" -m orchestra.adapter <cmd> …`, call `orchestra(command="<cmd>", parameters={...})` instead.
+`migrate` and `prepare` return the generated bundle inline as `bundle = {"files": {relpath: text,…},
+"truncated": [...]}` (the server's `output_dir` is ephemeral and not reachable from your workspace).
+**Write those `bundle.files` to the target workspace/volume** so the user has the DAB to validate and
+deploy. Each call returns a structured result (summaries / file trees); use those in place of reading
+files. Wherever a step below shows `"$PY" -m orchestra.adapter <cmd> …`, call
+`orchestra(command="<cmd>", parameters={...})` instead.
 
 > `databricks bundle validate` / `deploy` of the *generated* bundle is still a user-driven CLI step
 > (web terminal / local / CI-CD); present the bundle for review.

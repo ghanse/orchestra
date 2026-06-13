@@ -34,7 +34,9 @@ This phase runs one of two ways; run the **`setup`** skill first if you haven't.
   them on this path. Map the steps to:
 
   ```
-  orchestra(command="translate", parameters={"output_dir": "<dir>", "adf_source_path": "<optional>", "pipeline": "<optional>"})
+  orchestra(command="translate", parameters={"output_dir": "<dir>", "pipeline": "<optional>"})
+  # translate reuses the profiled output_dir on the server; only pass "adf_definitions" (inline ARM
+  # JSON) if you are translating without a prior profile on this server.
   orchestra(command="inspect", parameters={"report_path": "<dir>/.work/translation_report.json", "answers": [...]})
   orchestra(command="apply_answers", parameters={"report_path": "...", "answers": ["id=value", ...], "output_dir": "<dir>", "lookup_csv": "<optional>"})
   orchestra(command="merge_agentic", parameters={"report_path": "...", "agentic_results_dir": "<dir>", "output_path": "<optional>"})

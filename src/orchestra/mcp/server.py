@@ -70,6 +70,42 @@ def _phase_result(result: runner.AdapterResult, output_dir: Path, **extra: Any) 
     return payload
 
 
+def _resolve_source(p: dict[str, Any], path_key: str = "adf_source_path") -> tuple[str | None, Callable[[], None]]:
+    """Resolve the ADF source for a command into a local path the adapter can read.
+
+    Input modes, in priority order — a hosted app can't read the user's files directly, so it relies
+    on the first three:
+
+    1. ``adf_volume_path`` — a UC Volume directory; the server downloads it via the SDK Files API.
+    2. ``adf_workspace_path`` — a ``/Workspace`` directory (e.g. an ADF Git folder); the server
+       downloads it via the SDK Workspace API.
+       Both (1) and (2) scale to large factories — the bytes bypass the agent. Each returns a temp
+       dir + cleanup.
+    3. ``adf_definitions`` — an inline ARM-JSON payload (small jobs); materialized to a temp dir.
+    4. ``path_key`` (``adf_source_path`` / ``source_dir``) — a path the server itself can read
+       (local hosting or a mounted volume).
+    """
+    if p.get("adf_volume_path"):
+        src = runner.download_volume_dir(p["adf_volume_path"])
+        return src, lambda: runner.cleanup_materialized(src)
+    if p.get("adf_workspace_path"):
+        src = runner.download_workspace_dir(p["adf_workspace_path"])
+        return src, lambda: runner.cleanup_materialized(src)
+    definitions = p.get("adf_definitions")
+    if definitions:
+        src = runner.materialize_adf_definitions(definitions)
+        return src, lambda: runner.cleanup_materialized(src)
+    return p.get(path_key), (lambda: None)
+
+
+def _bundle_output(out: Path, output_volume_path: str | None) -> dict[str, Any]:
+    """Deliver the generated bundle: upload to a UC Volume when ``output_volume_path`` is set
+    (scales; contents bypass the agent), otherwise return the contents inline."""
+    if output_volume_path:
+        return {"bundle_uploaded": runner.upload_tree_to_volume(out, output_volume_path)}
+    return {"bundle": runner.read_tree(out)}
+
+
 # --- command handlers (one per adapter operation) -------------------------------------------------
 # Each takes the tool's `parameters` dict and returns a structured result. Required keys are accessed
 # with `p[...]` so a missing one raises KeyError, which the dispatcher turns into a clear error.
@@ -82,24 +118,34 @@ def _cmd_inputs(p: dict[str, Any]) -> dict[str, Any]:
 
 def _cmd_profile(p: dict[str, Any]) -> dict[str, Any]:
     output_dir = p.get("output_dir", "./orchestra_output")
-    args = ["profile", "--adf-source-path", p["adf_source_path"], "--output-dir", output_dir]
-    if p.get("pipeline"):
-        args += ["--pipeline", p["pipeline"]]
-    result = runner.run_adapter(args)
-    out = Path(output_dir)
-    return _phase_result(result, out, inventory=runner.summarize_inventory(out))
+    source, cleanup = _resolve_source(p)
+    if not source:
+        return {"ok": False, "error": "Provide 'adf_definitions' (inline ARM JSON) or 'adf_source_path'."}
+    try:
+        args = ["profile", "--adf-source-path", source, "--output-dir", output_dir]
+        if p.get("pipeline"):
+            args += ["--pipeline", p["pipeline"]]
+        result = runner.run_adapter(args)
+        out = Path(output_dir)
+        return _phase_result(result, out, inventory=runner.summarize_inventory(out))
+    finally:
+        cleanup()
 
 
 def _cmd_translate(p: dict[str, Any]) -> dict[str, Any]:
     output_dir = p.get("output_dir", "./orchestra_output")
-    args = ["translate", "--output-dir", output_dir]
-    if p.get("adf_source_path"):
-        args += ["--adf-source-path", p["adf_source_path"]]
-    if p.get("pipeline"):
-        args += ["--pipeline", p["pipeline"]]
-    result = runner.run_adapter(args)
-    out = Path(output_dir)
-    return _phase_result(result, out, translation=runner.summarize_translation(out))
+    source, cleanup = _resolve_source(p)
+    try:
+        args = ["translate", "--output-dir", output_dir]
+        if source:
+            args += ["--adf-source-path", source]
+        if p.get("pipeline"):
+            args += ["--pipeline", p["pipeline"]]
+        result = runner.run_adapter(args)
+        out = Path(output_dir)
+        return _phase_result(result, out, translation=runner.summarize_translation(out))
+    finally:
+        cleanup()
 
 
 def _cmd_merge_agentic(p: dict[str, Any]) -> dict[str, Any]:
@@ -137,10 +183,14 @@ def _cmd_materialize_lookup(p: dict[str, Any]) -> dict[str, Any]:
 
 def _cmd_workspace_paths(p: dict[str, Any]) -> dict[str, Any]:
     args: list[Any] = ["workspace-paths", p["report_path"]]
-    if p.get("source_dir"):
-        args += ["--source-dir", p["source_dir"]]
-    result = runner.run_adapter(args)
-    return {"ok": result.ok, "result": runner.parse_stdout_json(result), "process": result.as_dict()}
+    source, cleanup = _resolve_source(p, path_key="source_dir")
+    try:
+        if source:
+            args += ["--source-dir", source]
+        result = runner.run_adapter(args)
+        return {"ok": result.ok, "result": runner.parse_stdout_json(result), "process": result.as_dict()}
+    finally:
+        cleanup()
 
 
 def _cmd_prepare(p: dict[str, Any]) -> dict[str, Any]:
@@ -167,37 +217,45 @@ def _cmd_prepare(p: dict[str, Any]) -> dict[str, Any]:
     result = runner.run_adapter(args)
     out = Path(output_dir)
     setup_md = runner.read_text(out / "SETUP.md") or runner.read_text(out / "setup" / "SETUP.md")
-    return _phase_result(result, out, bundle_files=runner.list_tree(out), setup_md=setup_md)
+    extra = _bundle_output(out, p.get("output_volume_path")) if result.ok else {}
+    return _phase_result(result, out, bundle_files=runner.list_tree(out), setup_md=setup_md, **extra)
 
 
 def _cmd_migrate(p: dict[str, Any]) -> dict[str, Any]:
-    adf_source_path = p["adf_source_path"]
     output_dir = p.get("output_dir", "./orchestra_output")
     catalog = p.get("catalog", "main")
     schema = p.get("schema", "default")
     pipeline = p.get("pipeline")
+    source, cleanup = _resolve_source(p)
+    if not source:
+        return {"ok": False, "error": "Provide 'adf_definitions' (inline ARM JSON) or 'adf_source_path'."}
     out = Path(output_dir)
     steps: dict[str, Any] = {}
+    try:
+        profile_args = ["profile", "--adf-source-path", source, "--output-dir", output_dir]
+        if pipeline:
+            profile_args += ["--pipeline", pipeline]
+        profile_res = runner.run_adapter(profile_args)
+        steps["profile"] = _phase_result(profile_res, out, inventory=runner.summarize_inventory(out))
+        if not profile_res.ok:
+            return {"ok": False, "failed_phase": "profile", "steps": steps}
 
-    profile_args = ["profile", "--adf-source-path", adf_source_path, "--output-dir", output_dir]
-    if pipeline:
-        profile_args += ["--pipeline", pipeline]
-    profile_res = runner.run_adapter(profile_args)
-    steps["profile"] = _phase_result(profile_res, out, inventory=runner.summarize_inventory(out))
-    if not profile_res.ok:
-        return {"ok": False, "failed_phase": "profile", "steps": steps}
+        translate_args = ["translate", "--output-dir", output_dir, "--adf-source-path", source]
+        if pipeline:
+            translate_args += ["--pipeline", pipeline]
+        translate_res = runner.run_adapter(translate_args)
+        steps["translate"] = _phase_result(translate_res, out, translation=runner.summarize_translation(out))
+        if not translate_res.ok:
+            return {"ok": False, "failed_phase": "translate", "steps": steps}
 
-    translate_args = ["translate", "--output-dir", output_dir, "--adf-source-path", adf_source_path]
-    if pipeline:
-        translate_args += ["--pipeline", pipeline]
-    translate_res = runner.run_adapter(translate_args)
-    steps["translate"] = _phase_result(translate_res, out, translation=runner.summarize_translation(out))
-    if not translate_res.ok:
-        return {"ok": False, "failed_phase": "translate", "steps": steps}
-
-    prepare_res = runner.run_adapter(["prepare", "--output-dir", output_dir, "--catalog", catalog, "--schema", schema])
-    steps["prepare"] = _phase_result(prepare_res, out, bundle_files=runner.list_tree(out))
-    return {"ok": prepare_res.ok, "failed_phase": None if prepare_res.ok else "prepare", "steps": steps}
+        prepare_res = runner.run_adapter(
+            ["prepare", "--output-dir", output_dir, "--catalog", catalog, "--schema", schema]
+        )
+        extra = _bundle_output(out, p.get("output_volume_path")) if prepare_res.ok else {}
+        steps["prepare"] = _phase_result(prepare_res, out, bundle_files=runner.list_tree(out), **extra)
+        return {"ok": prepare_res.ok, "failed_phase": None if prepare_res.ok else "prepare", "steps": steps}
+    finally:
+        cleanup()
 
 
 def _cmd_record_results(p: dict[str, Any]) -> dict[str, Any]:
@@ -260,23 +318,44 @@ def build_server() -> FastMCP:
         ``parameters`` keys (req = required; phases share ``output_dir``, default "./orchestra_output"):
 
         - "inputs": phase(req: "profile"|"translate"|"prepare") — list a phase's input prompts.
-        - "profile": adf_source_path(req), output_dir, pipeline — parse ADF JSON, classify activities.
-        - "translate": output_dir, adf_source_path, pipeline — ADF activities → Databricks IR.
+        - "profile": one of adf_volume_path | adf_workspace_path | adf_definitions | adf_source_path
+          (req), output_dir, pipeline — parse ADF JSON, classify activities.
+        - "translate": output_dir, (adf_volume_path | adf_workspace_path | adf_definitions |
+          adf_source_path), pipeline.
         - "merge_agentic": report_path(req), agentic_results_dir(req), output_path — merge agent results.
         - "inspect": report_path(req), answers(list of "ID=VALUE") — list pending translation options.
         - "apply_answers": report_path(req), answers(req, list of "ID=VALUE"), output_dir, lookup_csv.
         - "materialize_lookup": source(req: CSV path or literal CSV), out(req: destination JSON path).
-        - "workspace_paths": report_path(req), source_dir — detect workspace paths / suggest hosts.
-        - "prepare": output_dir, report_path, catalog(default "main"), schema(default "default"),
-          bundle_name, profile, download_workspace_files(bool, default true), keep_intermediates(bool).
-        - "migrate": adf_source_path(req), output_dir, catalog, schema, pipeline — runs
-          profile→translate→prepare with default translation options.
+        - "workspace_paths": report_path(req), (adf_volume_path | adf_workspace_path | adf_definitions
+          | source_dir).
+        - "prepare": output_dir, output_volume_path, report_path, catalog(default "main"),
+          schema(default "default"), bundle_name, profile, download_workspace_files(bool), keep_intermediates(bool).
+        - "migrate": one of adf_volume_path | adf_workspace_path | adf_definitions | adf_source_path
+          (req), output_dir, output_volume_path, catalog, schema, pipeline — runs profile→translate→prepare.
         - "record_results": output_dir(req), results_table(req: catalog.schema.table), warehouse_id.
         - "install_dashboard": results_table(req), warehouse_id, dashboard_name, parent_path.
 
+        Providing the ADF source (a hosted app can't read the user's workspace/volume files directly):
+        - ``adf_volume_path``: a UC Volume directory the server reads via the SDK Files API. **Preferred
+          for large factories** — the bytes never pass through the agent. Requires the app's service
+          principal to have read on the volume.
+        - ``adf_workspace_path``: a ``/Workspace`` directory (e.g. an ADF Git folder) the server reads
+          via the SDK Workspace API. Also scales (bytes bypass the agent); needs SP read on that path.
+        - ``adf_definitions``: an inline mapping of relative path → JSON content mirroring the ADF
+          Git-export layout, e.g. {"pipeline/Foo.json": {...}, "linkedService/Bar.json": {...}} (a single
+          ARM-template object is also accepted). Convenient for small jobs; capped (~5 MB) since it flows
+          through the agent's context — over the cap, switch to ``adf_volume_path``.
+        - ``adf_source_path`` / ``source_dir``: a path the server itself can read (local hosting / mounted volume).
+
+        Delivering the generated DAB (the server's output_dir is local/ephemeral):
+        - Set ``output_volume_path`` so "prepare"/"migrate" upload the bundle to a UC Volume and return
+          ``bundle_uploaded`` = {"output_volume_path", "files":[...], "count"}. **Preferred for large bundles.**
+        - Otherwise they return ``bundle`` = {"files": {relpath: text, ...}, "truncated": [...]} inline.
+
         Returns a dict ``{"ok": bool, ...}`` with per-command summaries (inventory / translation /
         bundle_files / questions / result) and a "process" block (stdout/stderr/returncode). An unknown
-        command or a missing required parameter returns ``{"ok": false, "error": ...}``.
+        command, missing required parameter, or an oversized inline payload returns
+        ``{"ok": false, "error": ...}``.
 
         Args:
             command: The operation to run (see the list above).
@@ -289,6 +368,8 @@ def build_server() -> FastMCP:
             return handler(parameters or {})
         except KeyError as missing:
             return {"ok": False, "error": f"Missing required parameter {missing} for command {command!r}."}
+        except ValueError as error:
+            return {"ok": False, "error": str(error)}
 
     return mcp
 

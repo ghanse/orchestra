@@ -12,14 +12,21 @@ import csv
 import io
 import json
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 # Phases can take a while on large factories; allow generous default headroom.
 DEFAULT_TIMEOUT = int(os.environ.get("ORCHESTRA_MCP_TIMEOUT", "1800"))
+
+# Inline `adf_definitions` payloads pass through the calling agent's context, so they don't scale to
+# large factories. Above this many bytes, callers should stage to a UC Volume and use a path/volume
+# reference instead. Configurable via ORCHESTRA_MAX_INLINE_BYTES.
+MAX_INLINE_BYTES = int(os.environ.get("ORCHESTRA_MAX_INLINE_BYTES", str(5_000_000)))
 
 
 @dataclass
@@ -145,3 +152,182 @@ def materialize_lookup_rows(source: str) -> list[dict[str, str]]:
     text = Path(source).read_text() if Path(source).exists() else source
     reader = csv.DictReader(io.StringIO(text))
     return [dict(row) for row in reader]
+
+
+def materialize_adf_definitions(definitions: dict[str, Any]) -> str:
+    """Write an inline ADF-definitions payload to a temp dir and return a source path.
+
+    A hosted MCP server (Databricks App) cannot read the user's workspace / UC Volume files, so
+    the caller (which can) passes the ADF JSON inline and the server materializes it locally.
+
+    ``definitions`` maps relative file paths — mirroring the ADF Git-export layout, e.g.
+    ``"pipeline/Foo.json"``, ``"dataset/Bar.json"``, ``"linkedService/Baz.json"``,
+    ``"trigger/Qux.json"`` — to JSON content (a dict, or a JSON string). The files are written
+    under a fresh temp directory whose path is returned (the loader reads it as a tree).
+
+    Special case: a single entry whose content is an ARM template (a dict with a top-level
+    ``resources`` list) is written as one file and that file path is returned, so the loader
+    parses it in ARM-template mode.
+
+    Raises:
+        ValueError: if the payload is empty or a key escapes the temp directory.
+    """
+    if not definitions:
+        raise ValueError("adf_definitions is empty")
+
+    total_bytes = sum(len(v if isinstance(v, str) else json.dumps(v)) for v in definitions.values())
+    if total_bytes > MAX_INLINE_BYTES:
+        raise ValueError(
+            f"adf_definitions is ~{total_bytes} bytes (limit {MAX_INLINE_BYTES}); inline payloads pass "
+            "through the agent's context and do not scale. Stage the ADF export to a UC Volume and pass "
+            "'adf_volume_path' instead (the server reads it directly via the SDK Files API)."
+        )
+
+    base = Path(tempfile.mkdtemp(prefix="orchestra-adf-"))
+
+    if len(definitions) == 1:
+        (only_value,) = definitions.values()
+        content = json.loads(only_value) if isinstance(only_value, str) else only_value
+        if isinstance(content, dict) and isinstance(content.get("resources"), list):
+            file_path = base / "arm_template.json"
+            file_path.write_text(json.dumps(content), encoding="utf-8")
+            return str(file_path)
+
+    base_resolved = base.resolve()
+    for rel_path, content in definitions.items():
+        dest = (base / rel_path).resolve()
+        if base_resolved not in dest.parents and dest != base_resolved:
+            shutil.rmtree(base, ignore_errors=True)
+            raise ValueError(f"unsafe path in adf_definitions: {rel_path!r}")
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        text = content if isinstance(content, str) else json.dumps(content)
+        dest.write_text(text, encoding="utf-8")
+    return str(base)
+
+
+def cleanup_materialized(source: str) -> None:
+    """Remove a temp tree created by :func:`materialize_adf_definitions`.
+
+    Accepts either the returned directory or the single-file path (whose parent temp dir is
+    removed). Only paths under the system temp dir are deleted, as a safety guard.
+    """
+    path = Path(source)
+    target = path if path.is_dir() else path.parent
+    if str(target.resolve()).startswith(str(Path(tempfile.gettempdir()).resolve())):
+        shutil.rmtree(target, ignore_errors=True)
+
+
+def read_tree(root: Path, *, max_total_bytes: int = 2_000_000) -> dict[str, Any]:
+    """Return the text contents of files under *root* so a caller can persist them.
+
+    The hosted app writes the generated bundle to ephemeral local disk that the user cannot
+    reach, so the bundle contents are returned inline. Binary/unreadable files are skipped, and
+    once the cumulative size passes *max_total_bytes* further files are listed under ``truncated``
+    instead of being included.
+
+    Returns:
+        ``{"files": {relpath: text, ...}, "truncated": [relpath, ...]}`` ("truncated" omitted when empty).
+    """
+    files: dict[str, str] = {}
+    truncated: list[str] = []
+    total = 0
+    if root.exists():
+        for path in sorted(root.rglob("*")):
+            if not path.is_file():
+                continue
+            rel = str(path.relative_to(root))
+            try:
+                data = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            if total + len(data) > max_total_bytes:
+                truncated.append(rel)
+                continue
+            files[rel] = data
+            total += len(data)
+    result: dict[str, Any] = {"files": files}
+    if truncated:
+        result["truncated"] = truncated
+    return result
+
+
+def download_volume_dir(volume_path: str) -> str:
+    """Download a Unity Catalog Volume directory tree to a local temp dir via the SDK Files API.
+
+    This is the scalable input path for large factories: the bytes are pulled by the server (which
+    can read the volume as its service principal) and never pass through the calling agent. Returns
+    the local temp-dir path (clean up with :func:`cleanup_materialized`).
+    """
+    from databricks.sdk import WorkspaceClient
+
+    client = WorkspaceClient()
+    base = Path(tempfile.mkdtemp(prefix="orchestra-vol-"))
+    root = volume_path.rstrip("/")
+
+    def _recurse(directory: str) -> None:
+        for entry in client.files.list_directory_contents(directory):
+            entry_path = entry.path or ""
+            if entry.is_directory:
+                _recurse(entry_path)
+                continue
+            rel = entry_path[len(root) :].lstrip("/")
+            dest = base / rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            contents = client.files.download(entry_path).contents
+            dest.write_bytes(contents.read() if contents is not None else b"")
+
+    _recurse(root)
+    return str(base)
+
+
+def download_workspace_dir(workspace_path: str) -> str:
+    """Download a ``/Workspace`` directory tree to a local temp dir via the SDK Workspace API.
+
+    Workspace files (e.g. an ADF Git folder cloned under ``/Workspace``) use the Workspace API
+    (``w.workspace.list`` / ``w.workspace.download``), which is distinct from the Files API used for
+    UC Volumes. Like the volume path, the bytes are pulled by the server and bypass the agent.
+    Returns the local temp-dir path (clean up with :func:`cleanup_materialized`).
+    """
+    from databricks.sdk import WorkspaceClient
+    from databricks.sdk.service.workspace import ObjectType
+
+    client = WorkspaceClient()
+    base = Path(tempfile.mkdtemp(prefix="orchestra-ws-"))
+    root = workspace_path.rstrip("/")
+
+    def _recurse(directory: str) -> None:
+        for entry in client.workspace.list(directory):
+            entry_path = entry.path or ""
+            if entry.object_type in (ObjectType.DIRECTORY, ObjectType.REPO):
+                _recurse(entry_path)
+            elif entry.object_type == ObjectType.FILE:
+                rel = entry_path[len(root) :].lstrip("/")
+                dest = base / rel
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_bytes(client.workspace.download(entry_path).read())
+
+    _recurse(root)
+    return str(base)
+
+
+def upload_tree_to_volume(local_root: Path, volume_path: str) -> dict[str, Any]:
+    """Upload a local directory tree to a Unity Catalog Volume via the SDK Files API.
+
+    This is the scalable output path: the generated bundle is written to a location the user can
+    reach without the (potentially large) file contents passing back through the agent.
+
+    Returns:
+        ``{"output_volume_path": <root>, "files": [relpath, ...], "count": n}``.
+    """
+    from databricks.sdk import WorkspaceClient
+
+    client = WorkspaceClient()
+    root = volume_path.rstrip("/")
+    uploaded: list[str] = []
+    for path in sorted(local_root.rglob("*")):
+        if not path.is_file():
+            continue
+        rel = str(path.relative_to(local_root))
+        client.files.upload(f"{root}/{rel}", io.BytesIO(path.read_bytes()), overwrite=True)
+        uploaded.append(rel)
+    return {"output_volume_path": root, "files": uploaded, "count": len(uploaded)}

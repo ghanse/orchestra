@@ -44,8 +44,12 @@ This phase runs one of two ways; run the **`setup`** skill first if you haven't.
   orchestra(command="install_dashboard", parameters={"results_table": "catalog.schema.table", "warehouse_id": "<optional>"})
   ```
 
-  The `command="prepare"` result includes the generated bundle file tree and `SETUP.md`. Skip the
-  `"$PY" -m …` commands below.
+  The server's `output_dir` is ephemeral and not reachable from your workspace, so the result returns
+  the bundle for you to persist. For **large bundles**, pass `"output_volume_path":
+  "/Volumes/cat/sch/dab"` so `prepare` uploads the DAB to that UC Volume via the SDK Files API and
+  returns `bundle_uploaded = {"output_volume_path", "files", "count"}`. Otherwise the result includes
+  the contents inline as `bundle = {"files": {relpath: text, …}, "truncated": [...]}` — **write
+  `bundle.files` to the target workspace/volume**. Skip the `"$PY" -m …` commands below.
 
 - **venv CLI (local, no MCP server):** ensure the venv exists (`setup` Path B / `bootstrap.sh`), then
   run the commands below with the venv interpreter (from the marker file `<plugin_dir>/.migration-venv`)
