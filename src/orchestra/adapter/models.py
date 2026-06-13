@@ -324,8 +324,8 @@ class PendingMigrationInputs:
     """Outstanding migration-phase input options for a single phase.
 
     Attributes:
-        phase: The migration phase name (``"profile"``, ``"translate"``,
-            ``"prepare"``).
+        phase: The migration phase name (``"discover"``, ``"convert"``,
+            ``"package"``).
         options: Ordered list of options still awaiting an answer.
     """
 

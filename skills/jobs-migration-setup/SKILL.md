@@ -1,7 +1,7 @@
 ---
-name: setup
+name: jobs-migration-setup
 description: >
-  Prepare orchestra to run its phases (profile, translate, prepare, migrate). In Databricks
+  Prepare orchestra to run its phases (discover, convert, package, migrate). In Databricks
   Genie Code this deploys the phases as an MCP server (a Databricks App) and creates NO virtual
   environment — all code runs through MCP. Everywhere else it provisions a Python virtual
   environment for the CLI skills, and optionally a local (stdio) MCP server. Run this once before
@@ -19,7 +19,7 @@ triggers:
 
 # Set up orchestra
 
-orchestra runs its phases (`profile`, `translate`, `prepare`, `migrate`) in one of two ways. This
+orchestra runs its phases (`discover`, `convert`, `package`, `migrate`) in one of two ways. This
 skill prepares whichever fits your environment, keyed on `DATABRICKS_RUNTIME_VERSION` (the same
 signal the rest of the plugin uses to detect Databricks):
 
@@ -73,7 +73,7 @@ After it deploys, relay these follow-up steps to the user (the script also print
    `orchestra` tool then appears (MCP needs Agent mode; it uses one of the 20 tool slots).
    Verify via the health endpoint `<app-url>/`.
 
-Once added, the `profile`, `translate`, `prepare`, and `migrate` skills run **entirely through the
+Once added, the `discover`, `convert`, `package`, and `migrate` skills run **entirely through the
 `orchestra` MCP tool** (`orchestra(command="…", parameters={…})`) — there is no venv, no
 `bootstrap.sh`, and no `.migration-venv` marker on this path.
 
@@ -127,7 +127,7 @@ skills run Python with that interpreter and `src/` on `PYTHONPATH`. Resolve it f
 ```bash
 export PYTHONPATH="<plugin_dir>/src"
 PY="$(cat <plugin_dir>/.migration-venv)"
-"$PY" -m orchestra.adapter inputs profile
+"$PY" -m orchestra.adapter inputs discover
 ```
 
 `$PY` resolves to `<plugin_dir>/.venv/bin/python` (on Windows, `<plugin_dir>\.venv\Scripts\python.exe`).
@@ -169,4 +169,4 @@ PYTHONPATH="<plugin_dir>/src" "$PY" -m orchestra.mcp        # stdio (default)
 - "Set up orchestra" (auto-detects Genie Code vs. local)
 - "Deploy the orchestra MCP server to Databricks / Genie Code" (Path A)
 - "Bootstrap orchestra so I can run a migration locally" (Path B)
-- "I got a ModuleNotFoundError running profile — fix the environment" (Path B)
+- "I got a ModuleNotFoundError running discover — fix the environment" (Path B)

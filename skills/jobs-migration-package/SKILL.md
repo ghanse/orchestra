@@ -1,24 +1,24 @@
 ---
-name: prepare
+name: jobs-migration-package
 description: >
   Generate Databricks Declarative Automation Bundles (DABs) from translated IR,
   including job definitions, notebooks, and setup scripts.
 triggers:
-  - "prepare bundles"
+  - "package bundles"
   - "generate DABs"
   - "create bundles"
-  - "prepare deployment"
+  - "package deployment"
   - "generate bundles"
   - "build DABs"
 ---
 
-# Prepare Databricks Declarative Automation Bundles
+# Package Databricks Declarative Automation Bundles
 
 Generate deployment-ready Databricks Declarative Automation Bundles (DABs) from the translated intermediate representation, including job definitions, notebooks, and infrastructure setup scripts.
 
 ## Context
 
-This is phase 3 of the orchestra migration workflow. It consumes the `translation_report.json` produced by the `translate` skill and generates a complete DABs project that can be validated and deployed with the Databricks CLI.
+This is phase 3 of the orchestra migration workflow. It consumes the `translation_report.json` produced by the `convert` skill and generates a complete DABs project that can be validated and deployed with the Databricks CLI.
 
 The output is a standard DABs project with:
 - `databricks.yml` — the bundle configuration
@@ -36,7 +36,7 @@ This phase runs one of two ways; run the **`setup`** skill first if you haven't.
   them on this path. Map the steps to:
 
   ```
-  orchestra(command="prepare", parameters={"output_dir": "<dir>", "report_path": "<optional>", "catalog": "<catalog>",
+  orchestra(command="package", parameters={"output_dir": "<dir>", "report_path": "<optional>", "catalog": "<catalog>",
                                             "schema": "<schema>", "bundle_name": "<optional>", "profile": "<optional>",
                                             "download_workspace_files": true})
   orchestra(command="workspace_paths", parameters={"report_path": "...", "source_dir": "<optional ADF source>"})
@@ -46,7 +46,7 @@ This phase runs one of two ways; run the **`setup`** skill first if you haven't.
 
   The server's `output_dir` is ephemeral and not reachable from your workspace, so the result returns
   the bundle for you to persist. For **large bundles**, pass `"output_volume_path":
-  "/Volumes/cat/sch/dab"` so `prepare` uploads the DAB to that UC Volume via the SDK Files API and
+  "/Volumes/cat/sch/dab"` so `package` uploads the DAB to that UC Volume via the SDK Files API and
   returns `bundle_uploaded = {"output_volume_path", "files", "count"}`. Otherwise the result includes
   the contents inline as `bundle = {"files": {relpath: text, …}, "truncated": [...]}` — **write
   `bundle.files` to the target workspace/volume**. Skip the `"$PY" -m …` commands below.
@@ -58,7 +58,7 @@ This phase runs one of two ways; run the **`setup`** skill first if you haven't.
   ```bash
   export PYTHONPATH="<plugin_dir>/src"
   PY="$(cat <plugin_dir>/.migration-venv)"
-  "$PY" -m orchestra.adapter prepare --output-dir <dir> --catalog <catalog> --schema <schema>
+  "$PY" -m orchestra.adapter package --output-dir <dir> --catalog <catalog> --schema <schema>
   ```
 
   If Python or pip is missing, `bootstrap.sh` prints a warning telling the user what to install —
@@ -76,7 +76,7 @@ The translate/modify phases left the stamped report at `<output_dir>/.work/trans
 
 > Which migration output directory should I build the bundle in? (default: `./orchestra_output`)
 
-`prepare` reads the report from `<output_dir>/.work/` automatically — you do not pass a report path.
+`package` reads the report from `<output_dir>/.work/` automatically — you do not pass a report path.
 Validate that a report exists there and that all required translations have status `translated`.
 
 ### Step 2 — Gather deployment parameters
@@ -138,7 +138,7 @@ When `needs_auth` is `true`:
 
    This writes a profile into `~/.databrickscfg`.  When the user has
    chosen a specific profile name, append `--profile <name>` to both
-   the login and the prepare invocation below.
+   the login and the package invocation below.
 
 3. Pass the resolved profile to step 3 via `--profile <name>` (default
    profile name is `DEFAULT`).  When `needs_auth` is `false` skip steps
@@ -152,7 +152,7 @@ know which notebooks the bundle will download.
 Execute the DAB writer:
 
 ```bash
-# Unified runner (recommended): `"$PY" -m orchestra.adapter prepare ...`
+# Unified runner (recommended): `"$PY" -m orchestra.adapter package ...`
 # forwards to dab_writer below.
 "$PY" -m orchestra.bundler.dab_writer \
   --output-dir <output_dir> \
@@ -165,11 +165,11 @@ Execute the DAB writer:
 ```
 
 Where:
-- `<output_dir>` is the shared migration directory — `prepare` defaults `--report` to
+- `<output_dir>` is the shared migration directory — `package` defaults `--report` to
   `<output_dir>/.work/translation_report.stamped.json` (falling back to the un-stamped report).
   Pass `--report <path>` only to override.
 - Other parameters are from step 2
-- After a successful build, `prepare` **prunes the transient `<output_dir>/.work/`** so the
+- After a successful build, `package` **prunes the transient `<output_dir>/.work/`** so the
   final tree contains only the bundle and the kept `metadata/` files. Pass `--keep-intermediates`
   to retain `.work/` for debugging.
 
@@ -212,7 +212,7 @@ Show the user what was generated:
       create_secrets.py
       register_connections.py
   SETUP.md
-  metadata/                           # kept migration metadata (from profile + modify)
+  metadata/                           # kept migration metadata (from discover + modify)
     inventory.json
     profile_report.csv
     <pipeline>.arm.json               # verbatim original ADF/ARM source
@@ -273,7 +273,7 @@ Recommend running `databricks bundle validate` first to catch any configuration 
 ### Step 8 — (Optional) Persist coverage results and install a dashboard
 
 This step only applies when running with workspace auth (Genie Code, or a configured
-Databricks CLI profile). The `inputs prepare` options surface three optional prompts:
+Databricks CLI profile). The `inputs package` options surface three optional prompts:
 `results_table`, `results_warehouse_id`, and `install_dashboard`.
 
 **Persist results.** When the user provides a `results_table` (a UC `catalog.schema.table`),
@@ -312,7 +312,7 @@ is unavailable.
 
 ## Examples
 
-- "Prepare the bundles"
+- "Package the bundles"
 - "Generate DABs for the translated pipelines"
 - "Create deployment bundles targeting catalog 'analytics' and schema 'bronze'"
 - "Build the DABs project in ./output/my_migration/"
@@ -328,9 +328,9 @@ All under the shared `<output_dir>`:
 | `src/notebooks/*.py` | Generated notebooks |
 | `src/setup/*.py` | Infrastructure setup scripts |
 | `SETUP.md` | Human-readable setup instructions |
-| `metadata/inventory.json` | Activity inventory (from profile) |
+| `metadata/inventory.json` | Activity inventory (from discover) |
 | `metadata/profile_report.csv` | Per-pipeline complexity report (from profile) |
-| `metadata/<pipeline>.arm.json` | Verbatim original ADF/ARM source (from profile) |
+| `metadata/<pipeline>.arm.json` | Verbatim original ADF/ARM source (from discover) |
 | `metadata/configuration.json` | Collected configuration answers (from modify) |
 
-> **Notification destinations.** When a `copy_and_notify` motif was opted into a Slack/Teams/PagerDuty/Generic-Webhook destination, the destination is created (or reused by display name) via the SDK at **prompt time** (the `modify` phase), and its resolved id is carried in the report; prepare simply wires that id into the task's `webhook_notifications`. If the report has no pre-resolved id (creation was deferred or failed earlier), prepare retries the create; failing that — e.g. no workspace auth — a `notification_destination` setup task is emitted in SETUP.md instead and the task ships without notifications. Email destinations use raw `email_notifications` and never create an SDK destination.
+> **Notification destinations.** When a `copy_and_notify` motif was opted into a Slack/Teams/PagerDuty/Generic-Webhook destination, the destination is created (or reused by display name) via the SDK at **prompt time** (the `modify` phase), and its resolved id is carried in the report; package simply wires that id into the task's `webhook_notifications`. If the report has no pre-resolved id (creation was deferred or failed earlier), package retries the create; failing that — e.g. no workspace auth — a `notification_destination` setup task is emitted in SETUP.md instead and the task ships without notifications. Email destinations use raw `email_notifications` and never create an SDK destination.

@@ -83,9 +83,9 @@ The following are required to consolidate into a single ingestion pipeline:
 - The number of metadata rows or objects must be less than 250
 </Callout>
 
-## Profile complexity report
+## Discover complexity report
 
-The `profile` phase emits `<output_dir>/metadata/profile_report.csv` (default `./orchestra_output/metadata/profile_report.csv`), one row per pipeline with the following columns:
+The `discover` phase emits `<output_dir>/metadata/profile_report.csv` (default `./orchestra_output/metadata/profile_report.csv`), one row per pipeline with the following columns:
 
 | Column | Description |
 |--------|-------------|
@@ -108,7 +108,7 @@ The weighted score is `sum(activity weights) + #datasets + #linked_services + #c
 
 ## Coverage results table & dashboard (Genie Code)
 
-When running with workspace auth (Genie Code, or a configured Databricks profile) the `prepare`
+When running with workspace auth (Genie Code, or a configured Databricks profile) the `package`
 phase surfaces three optional inputs — `results_table`, `results_warehouse_id`, and
 `install_dashboard` — to persist coverage and visualize it:
 

@@ -49,12 +49,12 @@ Declarative Automation Bundles (DABs). Everything is driven through the single `
 `orchestra(command="<command>", parameters={...})`.
 
 Typical flow:
-  orchestra("inputs", {"phase": "profile"})              # learn a phase's inputs
-  orchestra("profile", {"adf_source_path": "...", "output_dir": "..."})
-  orchestra("translate", {"output_dir": "..."})
+  orchestra("inputs", {"phase": "discover"})             # learn a phase's inputs
+  orchestra("discover", {"adf_source_path": "...", "output_dir": "..."})
+  orchestra("convert", {"output_dir": "..."})
   orchestra("inspect", {"report_path": "<output_dir>/.work/translation_report.json"})
   orchestra("apply_answers", {"report_path": "...", "answers": ["id=value"], "output_dir": "..."})
-  orchestra("prepare", {"output_dir": "...", "catalog": "main", "schema": "default"})
+  orchestra("package", {"output_dir": "...", "catalog": "main", "schema": "default"})
 Or run it all at once:
   orchestra("migrate", {"adf_source_path": "...", "output_dir": "...", "catalog": "...", "schema": "..."})
 
@@ -116,13 +116,13 @@ def _cmd_inputs(p: dict[str, Any]) -> dict[str, Any]:
     return {"ok": result.ok, "inputs": runner.parse_stdout_json(result), "process": result.as_dict()}
 
 
-def _cmd_profile(p: dict[str, Any]) -> dict[str, Any]:
+def _cmd_discover(p: dict[str, Any]) -> dict[str, Any]:
     output_dir = p.get("output_dir", "./orchestra_output")
     source, cleanup = _resolve_source(p)
     if not source:
         return {"ok": False, "error": "Provide 'adf_definitions' (inline ARM JSON) or 'adf_source_path'."}
     try:
-        args = ["profile", "--adf-source-path", source, "--output-dir", output_dir]
+        args = ["discover", "--adf-source-path", source, "--output-dir", output_dir]
         if p.get("pipeline"):
             args += ["--pipeline", p["pipeline"]]
         result = runner.run_adapter(args)
@@ -132,11 +132,11 @@ def _cmd_profile(p: dict[str, Any]) -> dict[str, Any]:
         cleanup()
 
 
-def _cmd_translate(p: dict[str, Any]) -> dict[str, Any]:
+def _cmd_convert(p: dict[str, Any]) -> dict[str, Any]:
     output_dir = p.get("output_dir", "./orchestra_output")
     source, cleanup = _resolve_source(p)
     try:
-        args = ["translate", "--output-dir", output_dir]
+        args = ["convert", "--output-dir", output_dir]
         if source:
             args += ["--adf-source-path", source]
         if p.get("pipeline"):
@@ -149,7 +149,7 @@ def _cmd_translate(p: dict[str, Any]) -> dict[str, Any]:
 
 
 def _cmd_merge_agentic(p: dict[str, Any]) -> dict[str, Any]:
-    args = ["translate", "--merge-agentic", "--report", p["report_path"], "--agentic-results", p["agentic_results_dir"]]
+    args = ["convert", "--merge-agentic", "--report", p["report_path"], "--agentic-results", p["agentic_results_dir"]]
     if p.get("output_path"):
         args += ["--output", p["output_path"]]
     result = runner.run_adapter(args)
@@ -193,10 +193,10 @@ def _cmd_workspace_paths(p: dict[str, Any]) -> dict[str, Any]:
         cleanup()
 
 
-def _cmd_prepare(p: dict[str, Any]) -> dict[str, Any]:
+def _cmd_package(p: dict[str, Any]) -> dict[str, Any]:
     output_dir = p.get("output_dir", "./orchestra_output")
     args: list[Any] = [
-        "prepare",
+        "package",
         "--output-dir",
         output_dir,
         "--catalog",
@@ -232,28 +232,28 @@ def _cmd_migrate(p: dict[str, Any]) -> dict[str, Any]:
     out = Path(output_dir)
     steps: dict[str, Any] = {}
     try:
-        profile_args = ["profile", "--adf-source-path", source, "--output-dir", output_dir]
+        discover_args = ["discover", "--adf-source-path", source, "--output-dir", output_dir]
         if pipeline:
-            profile_args += ["--pipeline", pipeline]
-        profile_res = runner.run_adapter(profile_args)
-        steps["profile"] = _phase_result(profile_res, out, inventory=runner.summarize_inventory(out))
-        if not profile_res.ok:
-            return {"ok": False, "failed_phase": "profile", "steps": steps}
+            discover_args += ["--pipeline", pipeline]
+        discover_res = runner.run_adapter(discover_args)
+        steps["discover"] = _phase_result(discover_res, out, inventory=runner.summarize_inventory(out))
+        if not discover_res.ok:
+            return {"ok": False, "failed_phase": "discover", "steps": steps}
 
-        translate_args = ["translate", "--output-dir", output_dir, "--adf-source-path", source]
+        convert_args = ["convert", "--output-dir", output_dir, "--adf-source-path", source]
         if pipeline:
-            translate_args += ["--pipeline", pipeline]
-        translate_res = runner.run_adapter(translate_args)
-        steps["translate"] = _phase_result(translate_res, out, translation=runner.summarize_translation(out))
-        if not translate_res.ok:
-            return {"ok": False, "failed_phase": "translate", "steps": steps}
+            convert_args += ["--pipeline", pipeline]
+        convert_res = runner.run_adapter(convert_args)
+        steps["convert"] = _phase_result(convert_res, out, translation=runner.summarize_translation(out))
+        if not convert_res.ok:
+            return {"ok": False, "failed_phase": "convert", "steps": steps}
 
-        prepare_res = runner.run_adapter(
-            ["prepare", "--output-dir", output_dir, "--catalog", catalog, "--schema", schema]
+        package_res = runner.run_adapter(
+            ["package", "--output-dir", output_dir, "--catalog", catalog, "--schema", schema]
         )
-        extra = _bundle_output(out, p.get("output_volume_path")) if prepare_res.ok else {}
-        steps["prepare"] = _phase_result(prepare_res, out, bundle_files=runner.list_tree(out), **extra)
-        return {"ok": prepare_res.ok, "failed_phase": None if prepare_res.ok else "prepare", "steps": steps}
+        extra = _bundle_output(out, p.get("output_volume_path")) if package_res.ok else {}
+        steps["package"] = _phase_result(package_res, out, bundle_files=runner.list_tree(out), **extra)
+        return {"ok": package_res.ok, "failed_phase": None if package_res.ok else "package", "steps": steps}
     finally:
         cleanup()
 
@@ -280,14 +280,14 @@ def _cmd_install_dashboard(p: dict[str, Any]) -> dict[str, Any]:
 
 _COMMANDS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "inputs": _cmd_inputs,
-    "profile": _cmd_profile,
-    "translate": _cmd_translate,
+    "discover": _cmd_discover,
+    "convert": _cmd_convert,
     "merge_agentic": _cmd_merge_agentic,
     "inspect": _cmd_inspect,
     "apply_answers": _cmd_apply_answers,
     "materialize_lookup": _cmd_materialize_lookup,
     "workspace_paths": _cmd_workspace_paths,
-    "prepare": _cmd_prepare,
+    "package": _cmd_package,
     "migrate": _cmd_migrate,
     "record_results": _cmd_record_results,
     "install_dashboard": _cmd_install_dashboard,
@@ -310,17 +310,22 @@ def build_server() -> FastMCP:
         transport_security=_transport_security(),
     )
 
-    @mcp.tool()
+    # structured_output=False: do NOT emit an `outputSchema`. FastMCP would otherwise derive one from
+    # the `-> dict[str, Any]` return annotation, but Genie Code's MCP client rejects tools that declare
+    # an outputSchema (a recent spec feature) — `tools/list` fails and Genie reports "can't fetch tools"
+    # even though `initialize` (the connection) succeeded. The dict is still returned, serialized as
+    # JSON text content, which every client understands.
+    @mcp.tool(structured_output=False)
     def orchestra(command: str, parameters: dict[str, Any] | None = None) -> dict[str, Any]:
         """Run an orchestra ADF→Databricks migration command.
 
         Call as ``orchestra(command="<command>", parameters={...})``. Commands and their
         ``parameters`` keys (req = required; phases share ``output_dir``, default "./orchestra_output"):
 
-        - "inputs": phase(req: "profile"|"translate"|"prepare") — list a phase's input prompts.
-        - "profile": one of adf_volume_path | adf_workspace_path | adf_definitions | adf_source_path
+        - "inputs": phase(req: "discover"|"convert"|"package") — list a phase's input prompts.
+        - "discover": one of adf_volume_path | adf_workspace_path | adf_definitions | adf_source_path
           (req), output_dir, pipeline — parse ADF JSON, classify activities.
-        - "translate": output_dir, (adf_volume_path | adf_workspace_path | adf_definitions |
+        - "convert": output_dir, (adf_volume_path | adf_workspace_path | adf_definitions |
           adf_source_path), pipeline.
         - "merge_agentic": report_path(req), agentic_results_dir(req), output_path — merge agent results.
         - "inspect": report_path(req), answers(list of "ID=VALUE") — list pending translation options.
@@ -328,10 +333,10 @@ def build_server() -> FastMCP:
         - "materialize_lookup": source(req: CSV path or literal CSV), out(req: destination JSON path).
         - "workspace_paths": report_path(req), (adf_volume_path | adf_workspace_path | adf_definitions
           | source_dir).
-        - "prepare": output_dir, output_volume_path, report_path, catalog(default "main"),
+        - "package": output_dir, output_volume_path, report_path, catalog(default "main"),
           schema(default "default"), bundle_name, profile, download_workspace_files(bool), keep_intermediates(bool).
         - "migrate": one of adf_volume_path | adf_workspace_path | adf_definitions | adf_source_path
-          (req), output_dir, output_volume_path, catalog, schema, pipeline — runs profile→translate→prepare.
+          (req), output_dir, output_volume_path, catalog, schema, pipeline — runs discover→convert→package.
         - "record_results": output_dir(req), results_table(req: catalog.schema.table), warehouse_id.
         - "install_dashboard": results_table(req), warehouse_id, dashboard_name, parent_path.
 
@@ -348,7 +353,7 @@ def build_server() -> FastMCP:
         - ``adf_source_path`` / ``source_dir``: a path the server itself can read (local hosting / mounted volume).
 
         Delivering the generated DAB (the server's output_dir is local/ephemeral):
-        - Set ``output_volume_path`` so "prepare"/"migrate" upload the bundle to a UC Volume and return
+        - Set ``output_volume_path`` so "package"/"migrate" upload the bundle to a UC Volume and return
           ``bundle_uploaded`` = {"output_volume_path", "files":[...], "count"}. **Preferred for large bundles.**
         - Otherwise they return ``bundle`` = {"files": {relpath: text, ...}, "truncated": [...]} inline.
 

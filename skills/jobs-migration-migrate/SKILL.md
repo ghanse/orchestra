@@ -1,8 +1,8 @@
 ---
-name: migrate
+name: jobs-migration-migrate
 description: >
   End-to-end migration of Azure Data Factory pipelines to Databricks Lakeflow Jobs.
-  Orchestrates profile, translate, and prepare phases in sequence.
+  Orchestrates discover, convert, and package phases in sequence.
 triggers:
   - "migrate ADF"
   - "migrate pipelines"
@@ -15,15 +15,15 @@ triggers:
 
 # End-to-End ADF to Databricks Migration
 
-Orchestrate the complete migration of Azure Data Factory pipelines to Databricks Lakeflow Jobs via Declarative Automation Bundles. This skill runs all three phases in sequence: profile, translate, prepare.
+Orchestrate the complete migration of Azure Data Factory pipelines to Databricks Lakeflow Jobs via Declarative Automation Bundles. This skill runs all three phases in sequence: discover, convert, package.
 
 ## Context
 
 This is the top-level orchestration skill. It runs the full migration pipeline:
 
-1. **Profile** — Parse ADF JSON exports into a typed inventory
-2. **Translate** — Convert ADF activities to Databricks IR (deterministic + agentic)
-3. **Prepare** — Generate Databricks Declarative Automation Bundles for deployment
+1. **Discover** — Parse ADF JSON exports into a typed inventory
+2. **Convert** — Convert ADF activities to Databricks IR (deterministic + agentic)
+3. **Package** — Generate Databricks Declarative Automation Bundles for deployment
 
 Each phase builds on the output of the previous phase. The user is shown a summary and asked to confirm before proceeding to the next phase.
 
@@ -61,20 +61,20 @@ orchestra(command="migrate", parameters={
 > `mcp-orchestra` app's service principal read on the source volume and write on the output volume.
 
 For step-by-step control, run the commands in order (the app reuses `output_dir` across calls, so
-only `profile` needs `adf_definitions`):
+only `discover` needs `adf_definitions`):
 
 ```
-orchestra(command="inputs", parameters={"phase": "profile" | "translate" | "prepare"})  # learn each phase's inputs
-orchestra(command="profile", parameters={"adf_definitions": {...}, "output_dir": ..., "pipeline": ...})
-orchestra(command="translate", parameters={"output_dir": ..., "pipeline": ...})
+orchestra(command="inputs", parameters={"phase": "discover" | "convert" | "package"})  # learn each phase's inputs
+orchestra(command="discover", parameters={"adf_definitions": {...}, "output_dir": ..., "pipeline": ...})
+orchestra(command="convert", parameters={"output_dir": ..., "pipeline": ...})
 orchestra(command="merge_agentic", parameters={"report_path": ..., "agentic_results_dir": ..., "output_path": ...})  # if agentic results
 orchestra(command="inspect", parameters={"report_path": ...})
 orchestra(command="apply_answers", parameters={"report_path": ..., "answers": [...], "output_dir": ...})
-orchestra(command="prepare", parameters={"output_dir": ..., "catalog": ..., "schema": ...})
+orchestra(command="package", parameters={"output_dir": ..., "catalog": ..., "schema": ...})
 orchestra(command="record_results", parameters={...}) / orchestra(command="install_dashboard", parameters={...})
 ```
 
-`migrate` and `prepare` return the generated bundle inline as `bundle = {"files": {relpath: text,…},
+`migrate` and `package` return the generated bundle inline as `bundle = {"files": {relpath: text,…},
 "truncated": [...]}` (the server's `output_dir` is ephemeral and not reachable from your workspace).
 **Write those `bundle.files` to the target workspace/volume** so the user has the DAB to validate and
 deploy. Each call returns a structured result (summaries / file trees); use those in place of reading
@@ -93,7 +93,7 @@ interpreter (from the marker file `<plugin_dir>/.migration-venv`) and `src/` on 
 ```bash
 export PYTHONPATH="<plugin_dir>/src"
 PY="$(cat <plugin_dir>/.migration-venv)"
-"$PY" -m orchestra.adapter inputs profile
+"$PY" -m orchestra.adapter inputs discover
 ```
 
 If Python or pip is missing, `bootstrap.sh` prints a warning telling the user what to install — relay
@@ -105,13 +105,13 @@ Follow these steps in order:
 
 ### Step 0 — Gather phase inputs via the adapter
 
-Before invoking profile, run the adapter inputs subcommand once per
+Before invoking discover, run the adapter inputs subcommand once per
 phase so the agent surfaces the matching free-text prompts:
 
 ```bash
-"$PY" -m orchestra.adapter inputs profile
-"$PY" -m orchestra.adapter inputs translate
-"$PY" -m orchestra.adapter inputs prepare
+"$PY" -m orchestra.adapter inputs discover
+"$PY" -m orchestra.adapter inputs convert
+"$PY" -m orchestra.adapter inputs package
 ```
 
 Each response carries the options for that phase plus their descriptions and
@@ -138,14 +138,14 @@ Example prompt:
 > 2. Where should I write the output? (default: `./orchestra_output/`)
 > 3. What target catalog and schema? (default: `main.default`)
 
-### Step 2 — Phase 1: Profile
+### Step 2 — Phase 1: Discover
 
-Invoke the `orchestra:profile` skill with the ADF source path and `--output-dir <output_dir>` (the shared migration dir). Profile writes `<output_dir>/metadata/{inventory.json, profile_report.csv, <pipeline>.arm.json}`.
+Invoke the `orchestra:jobs-migration-discover` skill with the ADF source path and `--output-dir <output_dir>` (the shared migration dir). Profile writes `<output_dir>/metadata/{inventory.json, profile_report.csv, <pipeline>.arm.json}`.
 
-Wait for the profile to complete and present the inventory summary:
+Wait for discover to complete and present the inventory summary:
 
 ```
-Phase 1: Profile — Complete
+Phase 1: Discover — Complete
 ==========================
 Pipelines parsed:     12
 Total activities:     47
@@ -159,27 +159,27 @@ Coverage:             95.7%
 
 Ask the user to review the inventory and confirm before continuing:
 
-> The profile phase found 47 activities across 12 pipelines. 95.7% have a translation path (74.5% deterministic, 21.3% agentic). 2 activities are unsupported and will need manual handling.
+> The discover phase found 47 activities across 12 pipelines. 95.7% have a translation path (74.5% deterministic, 21.3% agentic). 2 activities are unsupported and will need manual handling.
 >
 > Proceed to the translation phase? (yes/no)
 
 If the user says no, explain the options:
-- Re-run profile with a different source directory
+- Re-run discover with a different source directory
 - Review `<output_dir>/metadata/inventory.json` (and `profile_report.csv`) to understand unsupported activities and pipeline complexity
 - Manually classify activities before proceeding
 
 If the user says yes, proceed to step 4.
 
-### Step 4 — Phase 2: Translate
+### Step 4 — Phase 2: Convert
 
-Invoke the `orchestra:translate` skill with:
-- ADF source dir: the original ADF source path (same `--source-dir` as profile)
-- Output dir: the same shared `<output_dir>` (translate writes its report to `<output_dir>/.work/`)
+Invoke the `orchestra:jobs-migration-convert` skill with:
+- ADF source dir: the original ADF source path (same `--source-dir` as discover)
+- Output dir: the same shared `<output_dir>` (convert writes its report to `<output_dir>/.work/`)
 
 Wait for the translation to complete and present the summary:
 
 ```
-Phase 2: Translate — Complete
+Phase 2: Convert — Complete
 =============================
 Deterministic translated:   35 (74.5%)
 Agentic translated:          8 (17.0%)
@@ -231,9 +231,9 @@ and the affected task keys. Then apply the collected answers as repeatable
 ```
 
 `modify` writes the stamped report to `<output_dir>/.work/translation_report.stamped.json`
-and the kept answers record to `<output_dir>/metadata/configuration.json`. The prepare phase
+and the kept answers record to `<output_dir>/metadata/configuration.json`. The package phase
 reads the stamped report from `.work/` automatically. When inspect emits no options for any
-pipeline, skip `modify` — prepare falls back to the un-stamped report.
+pipeline, skip `modify` — package falls back to the un-stamped report.
 
 The options the adapter raises:
 
@@ -264,7 +264,7 @@ for each detected pattern.
 
 ### Step 6.5 — Detect workspace artifacts and authenticate
 
-Before invoking the prepare phase, run the adapter's
+Before invoking the package phase, run the adapter's
 `workspace-paths` subcommand to detect any absolute workspace paths
 the bundle would need to download:
 
@@ -288,22 +288,22 @@ When the response carries `needs_auth: true`:
 
 Skip this step entirely when `needs_auth` is `false`.
 
-### Step 7 — Phase 3: Prepare
+### Step 7 — Phase 3: Package
 
-Invoke the `orchestra:prepare` skill with:
-- Output dir: the same shared `<output_dir>` — prepare reads the stamped report from
+Invoke the `orchestra:jobs-migration-package` skill with:
+- Output dir: the same shared `<output_dir>` — package reads the stamped report from
   `<output_dir>/.work/` automatically (no report path needed) and writes the bundle here
 - Catalog: user-specified or `main`
 - Schema: user-specified or `default`
 
-Prepare prunes the transient `<output_dir>/.work/` after a successful build, leaving the
+Package prunes the transient `<output_dir>/.work/` after a successful build, leaving the
 bundle (databricks.yml, resources/, src/, SETUP.md) plus the kept `metadata/` folder.
 
 ### Step 7.5 — (Optional) Persist coverage results and install a dashboard
 
 When running with workspace auth (Genie Code or a configured profile), offer to record this
 run's migration coverage to a Unity Catalog table and optionally install a coverage dashboard.
-The `inputs prepare` prompts surface `results_table`, `results_warehouse_id`, and
+The `inputs package` prompts surface `results_table`, `results_warehouse_id`, and
 `install_dashboard`.
 
 If the user supplies a `results_table`:
@@ -323,7 +323,7 @@ coverage), each stamped with a UUID `run_id`, `run_date` (`CURRENT_TIMESTAMP()`)
 
 Creates and publishes an AI/BI coverage dashboard over the table and prints its URL. Both
 auto-detect a SQL warehouse when `--warehouse-id` is omitted and degrade gracefully without
-workspace auth. See the `prepare` skill (Step 8) for details.
+workspace auth. See the `package` skill (Step 8) for details.
 
 ### Step 8 — Present final summary
 
@@ -392,5 +392,5 @@ All three phases write into a single shared `<output_dir>` (default `./orchestra
 | Path | Phase | Contents |
 |---|---|---|
 | `metadata/` | Profile + Modify | `inventory.json`, `profile_report.csv`, `<pipeline>.arm.json`, `configuration.json` |
-| `databricks.yml`, `resources/`, `src/`, `SETUP.md` | Prepare | The deployable DAB bundle |
-| `.work/` | Translate/Modify (transient) | Translation report + IR; pruned by prepare |
+| `databricks.yml`, `resources/`, `src/`, `SETUP.md` | Package | The deployable DAB bundle |
+| `.work/` | Convert/Modify (transient) | Translation report + IR; pruned by package |

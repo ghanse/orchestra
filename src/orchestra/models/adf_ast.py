@@ -172,7 +172,7 @@ class AdfPipeline:
         annotations: Free-form annotation strings attached to the pipeline.
         folder: Organisational folder path within the ADF workspace.
         raw: Original ADF/ARM pipeline JSON as loaded from source, retained so
-            the profile phase can emit a verbatim ``<pipeline>.arm.json`` into the
+            the discover phase can emit a verbatim ``<pipeline>.arm.json`` into the
             bundle's metadata folder for provenance.
     """
 

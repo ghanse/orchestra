@@ -1,6 +1,6 @@
 """MCP packaging for orchestra.
 
-Exposes the orchestra migration phases (profile, translate, prepare) and the
+Exposes the orchestra migration phases (discover, convert, package) and the
 adapter helper operations as Model Context Protocol tools. The tool layer is a
 thin bridge over the existing, tested ``python -m orchestra.adapter`` entry
 point so the phase contracts are reused verbatim rather than duplicated.

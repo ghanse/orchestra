@@ -524,25 +524,25 @@ class TestSerializationRoundtrip:
 
 
 class TestMigrationInputSession:
-    def test_ingest_session_lists_expected_options(self):
+    def test_discover_session_lists_expected_options(self):
         from orchestra.adapter import MigrationInputSession
 
-        session = MigrationInputSession(phase="profile")
+        session = MigrationInputSession(phase="discover")
         ids = [q.option_id for q in session.pending().options]
         assert ids == ["adf_source_path", "adf_resource_url", "output_dir"]
 
-    def test_translate_session_lists_expected_options(self):
+    def test_convert_session_lists_expected_options(self):
         from orchestra.adapter import MigrationInputSession
 
-        session = MigrationInputSession(phase="translate")
+        session = MigrationInputSession(phase="convert")
         ids = [q.option_id for q in session.pending().options]
         assert "inventory_path" in ids
         assert "adf_source_path" in ids
 
-    def test_prepare_session_lists_expected_options(self):
+    def test_package_session_lists_expected_options(self):
         from orchestra.adapter import MigrationInputSession
 
-        session = MigrationInputSession(phase="prepare")
+        session = MigrationInputSession(phase="package")
         ids = {q.option_id for q in session.pending().options}
         assert {"translation_report_path", "output_bundle_path", "catalog", "schema"} <= ids
 
@@ -555,7 +555,7 @@ class TestMigrationInputSession:
     def test_answer_records_value_and_drops_from_pending(self):
         from orchestra.adapter import MigrationInputSession
 
-        session = MigrationInputSession(phase="profile")
+        session = MigrationInputSession(phase="discover")
         session.answer("adf_source_path", "/Volumes/main/default/adf")
         ids = [q.option_id for q in session.pending().options]
         assert "adf_source_path" not in ids
@@ -563,14 +563,14 @@ class TestMigrationInputSession:
     def test_answer_rejects_unknown_option(self):
         from orchestra.adapter import MigrationInputSession
 
-        session = MigrationInputSession(phase="profile")
+        session = MigrationInputSession(phase="discover")
         with pytest.raises(ValueError, match="Unknown input option"):
             session.answer("not_a_field", "x")
 
     def test_collected_merges_answers_with_defaults(self):
         from orchestra.adapter import MigrationInputSession
 
-        session = MigrationInputSession(phase="prepare")
+        session = MigrationInputSession(phase="package")
         session.answer("translation_report_path", "/tmp/report.json")
         collected = session.collected()
         assert collected["translation_report_path"] == "/tmp/report.json"
@@ -580,7 +580,7 @@ class TestMigrationInputSession:
     def test_collected_omits_required_when_missing(self):
         from orchestra.adapter import MigrationInputSession
 
-        session = MigrationInputSession(phase="profile")
+        session = MigrationInputSession(phase="discover")
         collected = session.collected()
         assert "adf_source_path" not in collected
         assert collected["output_dir"] == "./orchestra_output"
@@ -648,20 +648,20 @@ class TestWorkspacePathsCli:
 
 
 class TestInputsCli:
-    def test_inputs_emits_ingest_options(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]):
-        exit_code = adapter_cli_main(["inputs", "profile"])
+    def test_inputs_emits_discover_options(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]):
+        exit_code = adapter_cli_main(["inputs", "discover"])
         assert exit_code == 0
         payload = json.loads(capsys.readouterr().out)
-        assert payload["phase"] == "profile"
+        assert payload["phase"] == "discover"
         ids = [q["option_id"] for q in payload["options"]]
         assert ids == ["adf_source_path", "adf_resource_url", "output_dir"]
 
     def test_inputs_writes_to_file(self, tmp_path: Path):
         out = tmp_path / "options.json"
-        exit_code = adapter_cli_main(["inputs", "prepare", "--out", str(out)])
+        exit_code = adapter_cli_main(["inputs", "package", "--out", str(out)])
         assert exit_code == 0
         payload = json.loads(out.read_text())
-        assert payload["phase"] == "prepare"
+        assert payload["phase"] == "package"
         ids = {q["option_id"] for q in payload["options"]}
         assert "output_bundle_path" in ids
 

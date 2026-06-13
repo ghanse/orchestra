@@ -25,7 +25,7 @@ databricks workspace import-dir skills /Workspace/.assistant/skills
 ```
 
 Genie Code picks up skills from these directories automatically. Skills fire automatically when their description matches your request. 
-To invoke a specific skill, use the `@` prefix (e.g. `@migrate translate the ADF pipelines I exported to /Volumes/main/default/adf_export`).
+To invoke a specific skill, use the `@` prefix (e.g. `@jobs-migration-migrate translate the ADF pipelines I exported to /Volumes/main/default/adf_export`).
 
 See the [Databricks Genie Code Skills documentation](https://docs.databricks.com/aws/en/genie-code/skills) for more details.
 </Tab>
@@ -42,16 +42,16 @@ orchestra, run the following command from a Claude Code session:
 You can also copy the skill folders into your local `/.claude/skills` folder:
 
 ```bash
-cp -R skills/{setup,profile,translate,prepare,migrate} ~/.claude/skills/
+cp -R skills/{jobs-migration-setup,jobs-migration-discover,jobs-migration-convert,jobs-migration-package,jobs-migration-migrate} ~/.claude/skills/
 ```
 
-Once installed, the skills can be invoked using `/orchestra:migrate`, `/orchestra:profile`, etc. Claude Code can also invoke the skills when prompted.  See the [Claude Code Plugins documentation](https://docs.claude.com/en/docs/claude-code/plugins) for more details.
+Once installed, the skills can be invoked using `/orchestra:jobs-migration-migrate`, `/orchestra:jobs-migration-discover`, etc. Claude Code can also invoke the skills when prompted.  See the [Claude Code Plugins documentation](https://docs.claude.com/en/docs/claude-code/plugins) for more details.
 </Tab>
 
 <Tab value="Other AI tools">
 Any tool that supports the [Agent Skills](https://agentskills.io/) open standard can install the orchestra skills. The general pattern:
 
-1. Copy each skill folder (`skills/setup`, `skills/profile`, `skills/translate`, `skills/prepare`, `skills/migrate`) into the tool's configured skills directory.
+1. Copy each skill folder (`skills/jobs-migration-setup`, `skills/jobs-migration-discover`, `skills/jobs-migration-convert`, `skills/jobs-migration-package`, `skills/jobs-migration-migrate`) into the tool's configured skills directory.
 2. Make sure the path contains `SKILL.md` directly,
 3. Restart the tool if it caches skill metadata at startup.
 
@@ -69,7 +69,7 @@ cat skills/*/SKILL.md > orchestra-skills.md
 
 Orchestra's skills invoke Python modules that may depend on third-party packages. The `setup` skill provisions an isolated virtual environment with the required dependencies.
 
-Run it **once** after installing the skills, before `profile`, `translate`, `prepare`, or `migrate`. Just ask your agent:
+Run it **once** after installing the skills, before `discover`, `convert`, `package`, or `migrate`. Just ask your agent:
 
 > Set up the orchestra environment
 
@@ -102,7 +102,7 @@ After the venv exists, every Python command the skills run uses the interpreter 
 ```bash
 export PYTHONPATH="<plugin_dir>/src"
 PY="$(cat <plugin_dir>/.migration-venv)"
-"$PY" -m orchestra.adapter inputs profile
+"$PY" -m orchestra.adapter inputs discover
 ```
 
 The marker file points at `<plugin_dir>/.venv` locally or `/Workspace/Users/<user>/.migration-skills` on Databricks. The agent normally runs these commands for you; they are handy for troubleshooting a `ModuleNotFoundError`.

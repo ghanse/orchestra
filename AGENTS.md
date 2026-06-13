@@ -10,14 +10,14 @@ make fmt          # Format + lint (ruff + mypy)
 make clean        # Remove build artifacts
 ```
 
-To run the **plugin skills** (profile/translate/prepare/migrate) without a uv-based dev setup,
+To run the **plugin skills** (discover/convert/package/migrate) without a uv-based dev setup,
 bootstrap a self-contained virtual environment with pip via the `setup` skill or directly:
 
 ```bash
 bash scripts/bootstrap.sh   # creates the venv, pip-installs requirements.txt, writes .migration-venv
 # then run plugin code with src/ on PYTHONPATH, using the interpreter from the marker file:
 PY="$(cat .migration-venv)"
-PYTHONPATH=src "$PY" -m orchestra.adapter inputs profile
+PYTHONPATH=src "$PY" -m orchestra.adapter inputs discover
 ```
 
 `bootstrap.sh` creates the venv at `/Workspace/Users/<current user>/.migration-skills` when running
@@ -46,7 +46,7 @@ Orchestra is an agent plugin that translates Azure Data Factory (ADF) pipeline d
 ## Data Flow
 
 ```
-ADF JSON -> Parse (AST) -> Classify (Inventory) -> Translate (IR) -> Prepare (Tasks + Notebooks) -> Bundle (DABs)
+ADF JSON -> Parse (AST) -> Classify (Inventory) -> Convert (IR) -> Package (Tasks + Notebooks) -> Bundle (DABs)
 ```
 
 ## Architecture
@@ -54,11 +54,11 @@ ADF JSON -> Parse (AST) -> Classify (Inventory) -> Translate (IR) -> Prepare (Ta
 ### Three-Phase Pipeline
 All three phases write into one shared `<output_dir>` (default `./orchestra_output`):
 the DAB bundle at the top level, kept artifacts under `metadata/`, and transient
-intermediates under `.work/` (pruned by `prepare`).
+intermediates under `.work/` (pruned by `package`).
 
-1. **Profile** -- Parse ADF JSON from UC volumes -> typed AST -> `metadata/inventory.json` + `metadata/profile_report.csv` + verbatim `metadata/<pipeline>.arm.json`
-2. **Translate** -- Registry dispatch + topological sort -> Pipeline IR (deterministic + agentic gaps); transient report at `.work/translation_report.json`
-3. **Prepare** -- IR -> DAB YAML + generated notebooks + setup scripts; prunes `.work/`
+1. **Discover** -- Parse ADF JSON from UC volumes -> typed AST -> `metadata/inventory.json` + `metadata/profile_report.csv` + verbatim `metadata/<pipeline>.arm.json`
+2. **Convert** -- Registry dispatch + topological sort -> Pipeline IR (deterministic + agentic gaps); transient report at `.work/translation_report.json`
+3. **Package** -- IR -> DAB YAML + generated notebooks + setup scripts; prunes `.work/`
 
 ### Key Patterns
 - `@dataclass(slots=True, kw_only=True)` for all models

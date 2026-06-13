@@ -27,9 +27,9 @@ from orchestra.adapter.constants import (
     INPUT_RESULTS_WAREHOUSE,
     INPUT_SCHEMA,
     INPUT_TRANSLATION_REPORT_PATH,
-    PHASE_PREPARE,
-    PHASE_PROFILE,
-    PHASE_TRANSLATE,
+    PHASE_CONVERT,
+    PHASE_DISCOVER,
+    PHASE_PACKAGE,
 )
 from orchestra.adapter.models import (
     DEFAULT_CONFIGURATION,
@@ -244,7 +244,7 @@ class TranslationSession:
         return self.resume()
 
 
-_PROFILE_OPTIONS: tuple[MigrationInputOption, ...] = (
+_DISCOVER_OPTIONS: tuple[MigrationInputOption, ...] = (
     MigrationInputOption(
         option_id=INPUT_ADF_SOURCE_PATH,
         prompt="Where are the ADF JSON exports?",
@@ -270,7 +270,7 @@ _PROFILE_OPTIONS: tuple[MigrationInputOption, ...] = (
         prompt="Which migration output directory should orchestra use?",
         description=(
             "Single shared migration directory used by every phase (default ``./orchestra_output``). "
-            "Profile writes ``metadata/inventory.json``, ``metadata/profile_report.csv``, and the "
+            "Discover writes ``metadata/inventory.json``, ``metadata/profile_report.csv``, and the "
             "verbatim ``metadata/<pipeline>.arm.json`` into it."
         ),
         default="./orchestra_output",
@@ -278,39 +278,39 @@ _PROFILE_OPTIONS: tuple[MigrationInputOption, ...] = (
     ),
 )
 
-_TRANSLATE_OPTIONS: tuple[MigrationInputOption, ...] = (
+_CONVERT_OPTIONS: tuple[MigrationInputOption, ...] = (
     MigrationInputOption(
         option_id=INPUT_INVENTORY_PATH,
-        prompt="Path to the inventory.json from the profile phase?",
-        description="Inventory produced by the profile phase (under the shared migration dir's metadata/).",
+        prompt="Path to the inventory.json from the discover phase?",
+        description="Inventory produced by the discover phase (under the shared migration dir's metadata/).",
         default="./orchestra_output/metadata/inventory.json",
         required=False,
     ),
     MigrationInputOption(
         option_id=INPUT_ADF_SOURCE_PATH,
         prompt="Path to the ADF JSON exports?",
-        description="Same source directory the profile phase consumed; needed for cross-references.",
+        description="Same source directory the discover phase consumed; needed for cross-references.",
         required=True,
     ),
     MigrationInputOption(
         option_id=INPUT_OUTPUT_DIR,
         prompt="Which migration output directory should orchestra use?",
         description=(
-            "The same shared migration directory the profile phase used (default ``./orchestra_output``). "
-            "Translate writes its transient report and IR to the directory's ``.work/`` subfolder."
+            "The same shared migration directory the discover phase used (default ``./orchestra_output``). "
+            "Convert writes its transient report and IR to the directory's ``.work/`` subfolder."
         ),
         default="./orchestra_output",
         required=False,
     ),
 )
 
-_PREPARE_OPTIONS: tuple[MigrationInputOption, ...] = (
+_PACKAGE_OPTIONS: tuple[MigrationInputOption, ...] = (
     MigrationInputOption(
         option_id=INPUT_TRANSLATION_REPORT_PATH,
         prompt="Path to the translation report?",
         description=(
             "Configuration-stamped report from `python -m orchestra.adapter modify`, "
-            "or the raw translate-phase report when no configuration were applied."
+            "or the raw convert-phase report when no configuration were applied."
         ),
         default="./orchestra_output/.work/translation_report.stamped.json",
         required=False,
@@ -319,8 +319,8 @@ _PREPARE_OPTIONS: tuple[MigrationInputOption, ...] = (
         option_id=INPUT_OUTPUT_BUNDLE_PATH,
         prompt="Which migration output directory should orchestra use?",
         description=(
-            "The same shared migration directory used by profile/translate (default ``./orchestra_output``). "
-            "Prepare writes the DAB bundle at its top level and prunes the transient ``.work/`` folder."
+            "The same shared migration directory used by discover/convert (default ``./orchestra_output``). "
+            "Package writes the DAB bundle at its top level and prunes the transient ``.work/`` folder."
         ),
         default="./orchestra_output",
         required=False,
@@ -351,7 +351,7 @@ _PREPARE_OPTIONS: tuple[MigrationInputOption, ...] = (
         prompt="Databricks CLI profile?",
         description=(
             "Profile used to download workspace-resident notebooks during the "
-            "prepare phase.  Leave blank to use the default profile from "
+            "package phase.  Leave blank to use the default profile from "
             "``~/.databrickscfg`` or the active ``DATABRICKS_*`` env vars."
         ),
         default="",
@@ -361,7 +361,7 @@ _PREPARE_OPTIONS: tuple[MigrationInputOption, ...] = (
         option_id=INPUT_RESULTS_TABLE,
         prompt="Record migration coverage to a Unity Catalog table? If so, the table (catalog.schema.table)?",
         description=(
-            "Optional. When set, the prepare phase writes one coverage row per pipeline to this UC "
+            "Optional. When set, the package phase writes one coverage row per pipeline to this UC "
             "table, stamped with a UUID run_id, run_date (CURRENT_TIMESTAMP()), and run_by "
             "(CURRENT_USER()). Leave blank to skip. Requires workspace auth (Genie Code / a profile)."
         ),
@@ -391,9 +391,9 @@ _PREPARE_OPTIONS: tuple[MigrationInputOption, ...] = (
 )
 
 _OPTIONS_BY_PHASE: dict[str, tuple[MigrationInputOption, ...]] = {
-    PHASE_PROFILE: _PROFILE_OPTIONS,
-    PHASE_TRANSLATE: _TRANSLATE_OPTIONS,
-    PHASE_PREPARE: _PREPARE_OPTIONS,
+    PHASE_DISCOVER: _DISCOVER_OPTIONS,
+    PHASE_CONVERT: _CONVERT_OPTIONS,
+    PHASE_PACKAGE: _PACKAGE_OPTIONS,
 }
 
 
@@ -413,7 +413,7 @@ class MigrationInputSession:
     free-text paths and identifiers rather than enum-backed choices.
 
     Attributes:
-        phase: One of ``"profile"``, ``"translate"``, ``"prepare"``.
+        phase: One of ``"discover"``, ``"convert"``, ``"package"``.
     """
 
     phase: str

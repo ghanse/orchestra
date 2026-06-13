@@ -35,9 +35,9 @@ ADF JSON Exports
   databricks bundle deploy
 ```
 
-## Phase 1: Profile
+## Phase 1: Discover
 
-**Skill:** `orchestra:profile`
+**Skill:** `orchestra:jobs-migration-discover`
 
 **Input:** Directory of ADF JSON export files (from ARM template export, Azure DevOps, or manual export)
 
@@ -60,9 +60,9 @@ ADF JSON Exports
 - Datasets and linked services are parsed for context but not independently translated — they inform the activity translators.
 - Triggers are included in the inventory and translated in phase 2.
 
-## Phase 2: Translate
+## Phase 2: Convert
 
-**Skill:** `orchestra:translate`
+**Skill:** `orchestra:jobs-migration-convert`
 
 **Input:** `inventory.json` from phase 1 + original ADF JSON files
 
@@ -84,13 +84,13 @@ ADF JSON Exports
 
 **Key decisions:**
 - Deterministic translators run first because they are fast and reliable. Agentic skills are only invoked for gaps.
-- The IR is an intermediate format that decouples translation from DABs generation. This allows the prepare phase to target different output formats in the future.
+- The IR is an intermediate format that decouples translation from DABs generation. This allows the package phase to target different output formats in the future.
 - Each deterministic translator is a standalone Python module in `src/orchestra/translator/activity_translators/`. Adding support for a new activity type means adding a new module.
 - Agentic results are saved separately before merging, so they can be inspected, retried, or manually overridden.
 
-## Phase 3: Prepare
+## Phase 3: Package
 
-**Skill:** `orchestra:prepare`
+**Skill:** `orchestra:jobs-migration-package`
 
 **Input:** `translation_report.json` from phase 2
 
@@ -140,7 +140,7 @@ The Databricks IR (intermediate representation) sits between ADF semantics and D
 - **Semantic mapping** — translating ADF concepts to Databricks concepts
 - **Serialization** — writing DABs YAML and notebooks
 
-This means the prepare phase could target different output formats (Terraform, raw API calls, etc.) without changing the translation logic.
+This means the package phase could target different output formats (Terraform, raw API calls, etc.) without changing the translation logic.
 
 ## ADF Concepts to Databricks Mapping
 
@@ -164,4 +164,4 @@ This means the prepare phase could target different output formats (Terraform, r
 - **Parse errors** — logged to `parse_errors.json`, skipped in inventory
 - **Translation failures** — marked as `failed` in translation report, get placeholder tasks in DABs
 - **Agentic failures** — saved with error details, can be retried with additional context
-- **Unsupported activities** — warned at profile, get placeholder tasks with TODO comments in DABs
+- **Unsupported activities** — warned at discover, get placeholder tasks with TODO comments in DABs

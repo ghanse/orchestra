@@ -1,5 +1,5 @@
 ---
-name: translate
+name: jobs-migration-convert
 description: >
   Translate parsed ADF pipeline AST into Databricks IR (intermediate representation).
   Runs deterministic translators for known activity types, then invokes agentic skills
@@ -12,13 +12,13 @@ triggers:
   - "run translation"
 ---
 
-# Translate ADF to Databricks IR
+# Convert ADF to Databricks IR
 
 Convert the parsed ADF inventory into Databricks intermediate representation (IR) using deterministic translators for known types and agentic fallback for unknown types.
 
 ## Context
 
-This is phase 2 of the orchestra migration workflow. It consumes the ADF source (profiled by the `profile` skill) and produces a translation report — a transient intermediate under `<output_dir>/.work/` — that the `prepare` skill uses to generate Databricks Declarative Automation Bundles. It shares the single migration `<output_dir>` with the other phases.
+This is phase 2 of the orchestra migration workflow. It consumes the ADF source (profiled by the `discover` skill) and produces a translation report — a transient intermediate under `<output_dir>/.work/` — that the `package` skill uses to generate Databricks Declarative Automation Bundles. It shares the single migration `<output_dir>` with the other phases.
 
 The translation follows a **deterministic-first** strategy:
 1. Activities with known, well-defined mappings are translated by built-in Python translators
@@ -34,9 +34,9 @@ This phase runs one of two ways; run the **`setup`** skill first if you haven't.
   them on this path. Map the steps to:
 
   ```
-  orchestra(command="translate", parameters={"output_dir": "<dir>", "pipeline": "<optional>"})
-  # translate reuses the profiled output_dir on the server; only pass "adf_definitions" (inline ARM
-  # JSON) if you are translating without a prior profile on this server.
+  orchestra(command="convert", parameters={"output_dir": "<dir>", "pipeline": "<optional>"})
+  # convert reuses the discovered output_dir on the server; only pass "adf_definitions" (inline ARM
+  # JSON) if you are converting without a prior discover on this server.
   orchestra(command="inspect", parameters={"report_path": "<dir>/.work/translation_report.json", "answers": [...]})
   orchestra(command="apply_answers", parameters={"report_path": "...", "answers": ["id=value", ...], "output_dir": "<dir>", "lookup_csv": "<optional>"})
   orchestra(command="merge_agentic", parameters={"report_path": "...", "agentic_results_dir": "<dir>", "output_path": "<optional>"})
@@ -52,7 +52,7 @@ This phase runs one of two ways; run the **`setup`** skill first if you haven't.
   ```bash
   export PYTHONPATH="<plugin_dir>/src"
   PY="$(cat <plugin_dir>/.migration-venv)"
-  "$PY" -m orchestra.adapter translate --output-dir <dir>
+  "$PY" -m orchestra.adapter convert --output-dir <dir>
   ```
 
   If Python or pip is missing, `bootstrap.sh` prints a warning telling the user what to install —
@@ -69,7 +69,7 @@ options the phase needs (inventory path, ADF source dir, output
 directory):
 
 ```bash
-"$PY" -m orchestra.adapter inputs translate
+"$PY" -m orchestra.adapter inputs convert
 ```
 
 The JSON response carries the prompts and defaults; collect answers from the user
@@ -78,10 +78,10 @@ The JSON response carries the prompts and defaults; collect answers from the use
 
 ### Step 1 — Locate the inventory
 
-The profile phase wrote `<output_dir>/metadata/inventory.json` (and `profile_report.csv`). If the
+The discover phase wrote `<output_dir>/metadata/inventory.json` (and `profile_report.csv`). If the
 shared `<output_dir>` is not already in conversation context, ask the user:
 
-> Which migration output directory did the profile phase use? (default: `./orchestra_output`)
+> Which migration output directory did the discover phase use? (default: `./orchestra_output`)
 
 Validate `<output_dir>/metadata/inventory.json` exists and is well-formed.
 
@@ -90,7 +90,7 @@ Validate `<output_dir>/metadata/inventory.json` exists and is well-formed.
 Execute the translation engine on all deterministic activities:
 
 ```bash
-# Unified runner (recommended): `"$PY" -m orchestra.adapter translate ...`
+# Unified runner (recommended): `"$PY" -m orchestra.adapter convert ...`
 # forwards to the engine below; --adf-source-path aliases --source-dir.
 "$PY" -m orchestra.translator.engine \
   --source-dir <adf_source_dir> \
@@ -99,14 +99,14 @@ Execute the translation engine on all deterministic activities:
 ```
 
 Where:
-- `<adf_source_dir>` is the original ADF JSON directory (the same `--source-dir` used by profile)
+- `<adf_source_dir>` is the original ADF JSON directory (the same `--source-dir` used by discover)
 - `<output_dir>` is the **shared migration output directory** (default: `./orchestra_output`) — the
-  same one profile used
-- `<pipeline_name>` (optional) — when provided, translates only the named pipeline. **Always pass `--pipeline` when the user has specified a specific pipeline to migrate**, matching the value passed to the profile phase.
+  same one discover used
+- `<pipeline_name>` (optional) — when provided, translates only the named pipeline. **Always pass `--pipeline` when the user has specified a specific pipeline to migrate**, matching the value passed to the discover phase.
 
 The translation report and intermediate IR are written to the **transient** `<output_dir>/.work/`
 folder (`translation_report.json`, per-pipeline IR, `gaps.json`). These are consumed by the steps
-below and the prepare phase, then pruned — they are not kept artifacts.
+below and the package phase, then pruned — they are not kept artifacts.
 
 ### Step 3 — Read the translation report
 
@@ -219,7 +219,7 @@ arbitrary, e.g. `<pipeline>__<activity>.json`). Each file MUST use this schema:
 - `pipeline` (optional) — only needed to disambiguate multi-pipeline reports.
 - `task` (required) — the replacement IR task. The most portable form is a
   `NotebookActivity` whose `notebook_path` points at a notebook you have written
-  to the workspace; the prepare phase references it directly. `task_key` and
+  to the workspace; the package phase references it directly. `task_key` and
   `depends_on` are inherited from the placeholder when omitted, so dependency
   edges are preserved.
 
@@ -234,7 +234,7 @@ Fold the results into the translation report (placeholders are replaced in place
   --agentic-results <agentic_results_dir>
 ```
 
-Equivalently via the unified runner: `"$PY" -m orchestra.adapter translate --merge-agentic --report <output_dir>/.work/translation_report.json --agentic-results <dir>`. Add `--output <path>` to write a copy instead of overwriting the report. The command exits non-zero if any result could not be matched to a placeholder.
+Equivalently via the unified runner: `"$PY" -m orchestra.adapter convert --merge-agentic --report <output_dir>/.work/translation_report.json --agentic-results <dir>`. Add `--output <path>` to write a copy instead of overwriting the report. The command exits non-zero if any result could not be matched to a placeholder.
 
 This updates `<output_dir>/.work/translation_report.json` with the agentic results merged in, changing their status from `pending` to `translated` (or `failed` if the agentic skill could not produce a result).
 
@@ -277,9 +277,9 @@ omitted so the SDK applies its defaults. For **non-email** destinations, the
 `modify` phase creates (or reuses by display name) the Databricks notification
 destination via the SDK **as soon as you submit the answers** — it validates the
 config immediately and bakes the resolved destination id into the modified report,
-so prepare just wires `webhook_notifications` to that id (no further SDK call).
+so package just wires `webhook_notifications` to that id (no further SDK call).
 This requires workspace auth at `modify` time; if creation fails there, the id is
-left unresolved and prepare retries or emits a `notification_destination` setup task.
+left unresolved and package retries or emits a `notification_destination` setup task.
 **Email** needs no destination — it uses raw `email_notifications` and is never
 created via the SDK.
 
@@ -347,11 +347,11 @@ affects. Use the default when the user defers. Then apply the collected answers 
 ```
 
 `modify` writes two things under the shared `<output_dir>`:
-- `.work/translation_report.stamped.json` — the configuration-stamped IR the prepare phase consumes
+- `.work/translation_report.stamped.json` — the configuration-stamped IR the package phase consumes
 - `metadata/configuration.json` — the collected answers, kept as the migration's configuration record
 
-The prepare phase (next skill) reads the stamped report from `.work/` automatically.
-When no options are raised, the inspect output is `{"pipelines": [{"pipeline_name": "...", "options": []},...]}` — skip `modify`; prepare falls back to the un-stamped report.
+The package phase (next skill) reads the stamped report from `.work/` automatically.
+When no options are raised, the inspect output is `{"pipelines": [{"pipeline_name": "...", "options": []},...]}` — skip `modify`; package falls back to the un-stamped report.
 
 ### Step 7 — Present translation summary
 
@@ -389,16 +389,16 @@ See `references/activity-mapping.md` for the complete mapping between ADF activi
 
 ## Examples
 
-- "Translate the ADF pipelines"
+- "Convert the ADF pipelines"
 - "Convert ADF to Databricks"
 - "Run the translation on the inventory from the profile step"
-- "Translate the parsed pipelines using deterministic + agentic"
-- "Translate only the pl_demo_01 pipeline"
+- "Convert the parsed pipelines using deterministic + agentic"
+- "Convert only the pl_demo_01 pipeline"
 
 ## Output Artifacts
 
-The translate phase writes only **transient** intermediates, under `<output_dir>/.work/` (consumed
-by `modify`/`prepare`, then pruned — not kept):
+The convert phase writes only **transient** intermediates, under `<output_dir>/.work/` (consumed
+by `modify`/`package`, then pruned — not kept):
 
 | File | Description |
 |---|---|

@@ -10,7 +10,7 @@ Orchestra translates data pipelines into Databricks Lakeflow Jobs packaged as De
 ## Three-phase pipeline
 
 ```text
-ADF JSON ──▶ profile ──▶ translate ──▶ prepare ──▶ databricks.yml (DAB)
+ADF JSON ──▶ discover ──▶ convert ──▶ package ──▶ databricks.yml (DAB)
             (parse +     (activities    (IR → jobs,
              classify)    → IR)          notebooks, setup)
 ```
@@ -34,8 +34,8 @@ The reporting layer (`reporting/`) can write per-run coverage to a Unity Catalog
 
 ```text
                     ┌─────────────────────────────┐
-   Agent skills ───▶│  python -m orchestra.adapter │───▶ phase modules (profile/
-   (profile/...,    │  (unified CLI entry point)   │     translate/prepare) +
+   Agent skills ───▶│  python -m orchestra.adapter │───▶ phase modules (discover/
+   (discover/...,   │  (unified CLI entry point)   │     convert/package) +
     setup, migrate) └─────────────────────────────┘     adapter operations
                                   ▲
                                   │ subprocess (same contract)
@@ -59,7 +59,7 @@ The unified `orchestra.adapter` CLI is the single contract. Both surfaces go thr
 | `mcp/runner.py`   | Subprocess bridge to `orchestra.adapter` with artifact summarizers (for running translation without the `mcp` dependency) |
 | `mcp/__main__.py` | `python -m orchestra.mcp` entry point (stdio default, `--http` for hosting)                                               |
 
-The `orchestra` tool's `command` selects the adapter operation: `inputs`, `profile`, `translate`, `merge_agentic`, `inspect`, `apply_answers`, `materialize_lookup`, `workspace_paths`, `prepare`, `migrate`, `record_results`, and `install_dashboard` (with `parameters` carrying that command's arguments).
+The `orchestra` tool's `command` selects the adapter operation: `inputs`, `discover`, `convert`, `merge_agentic`, `inspect`, `apply_answers`, `materialize_lookup`, `workspace_paths`, `package`, `migrate`, `record_results`, and `install_dashboard` (with `parameters` carrying that command's arguments).
 
 ## Deployment topology
 
@@ -83,7 +83,7 @@ See [Installation](/docs/installation#running-orchestra-as-an-mcp-server) for th
 <Callout type="info" title="Inputs and outputs on a hosted app">
 A Databricks App can't read the user's workspace / UC Volume files (`/Volumes/...` is **not** auto-mounted). Two ways to get data in/out of the `orchestra` tool:
 
-- **Small jobs — inline.** `command="profile"`/`"migrate"` accept `adf_definitions` (a mapping of relative path → ARM JSON, Git-export layout), supplied by the agent and materialized to a temp dir; `prepare`/`migrate` return the DAB inline as `bundle = {"files": {relpath: text, …}}`. Inline data flows through the agent's context, so it's capped (~5 MB in).
+- **Small jobs — inline.** `command="discover"`/`"migrate"` accept `adf_definitions` (a mapping of relative path → ARM JSON, Git-export layout), supplied by the agent and materialized to a temp dir; `package`/`migrate` return the DAB inline as `bundle = {"files": {relpath: text, …}}`. Inline data flows through the agent's context, so it's capped (~5 MB in).
 - **Large factories — by reference (recommended).** Point the server at the source: `adf_volume_path` (a UC Volume read via the SDK Files API) or `adf_workspace_path` (a `/Workspace` directory — e.g. an ADF Git folder — read via the SDK Workspace API). Write the DAB to `output_volume_path` (returned as `bundle_uploaded`). The bytes bypass the agent entirely, so it scales to thousands of pipelines; grant the app's service principal read on the source and read/write on the output volume.
 
 Locally hosted, ordinary `adf_source_path` / `output_dir` paths and mounted volumes work as-is.

@@ -108,9 +108,9 @@ def list_tree(root: Path, *, max_entries: int = 250) -> list[str]:
 
 
 def summarize_inventory(output_dir: Path) -> dict[str, Any] | None:
-    """Summarise ``metadata/inventory.json`` produced by the profile phase.
+    """Summarise ``metadata/inventory.json`` produced by the discover phase.
 
-    The profile phase writes a ready-made ``summary`` block (pipeline/activity
+    The discover phase writes a ready-made ``summary`` block (pipeline/activity
     counts by strategy plus coverage); surface it directly when present.
     """
     inventory = read_json(output_dir / "metadata" / "inventory.json")

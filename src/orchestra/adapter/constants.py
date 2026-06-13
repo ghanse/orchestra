@@ -28,9 +28,9 @@ MOTIF_CONSOLIDATE_OPTION_PREFIX: Final[str] = "consolidate_motif:"
 
 METADATA_DRIVEN_MOTIF_ID: Final[str] = "metadata_driven_bulk_copy"
 
-PHASE_PROFILE: Final[str] = "profile"
-PHASE_TRANSLATE: Final[str] = "translate"
-PHASE_PREPARE: Final[str] = "prepare"
+PHASE_DISCOVER: Final[str] = "discover"
+PHASE_CONVERT: Final[str] = "convert"
+PHASE_PACKAGE: Final[str] = "package"
 
 INPUT_ADF_SOURCE_PATH: Final[str] = "adf_source_path"
 INPUT_ADF_RESOURCE_URL: Final[str] = "adf_resource_url"

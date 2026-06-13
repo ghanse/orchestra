@@ -18,19 +18,19 @@ operation; `parameters` is its keyword-argument dict.
 | `command` | Wraps | Purpose |
 |-----------|-------|---------|
 | `inputs` | `adapter inputs` | List a phase's input prompts/defaults |
-| `profile` | `adapter profile` | Parse ADF JSON, classify activities |
-| `translate` | `adapter translate` | ADF activities → Databricks IR |
-| `merge_agentic` | `adapter translate --merge-agentic` | Merge agent-produced results into the report |
+| `discover` | `adapter discover` | Parse ADF JSON, classify activities |
+| `convert` | `adapter convert` | ADF activities → Databricks IR |
+| `merge_agentic` | `adapter convert --merge-agentic` | Merge agent-produced results into the report |
 | `inspect` | `adapter inspect` | Surface pending translation options |
 | `apply_answers` | `adapter modify` | Apply answers → stamped IR |
 | `materialize_lookup` | `adapter materialize-lookup` | CSV → lookup-values JSON |
 | `workspace_paths` | `adapter workspace-paths` | Detect workspace paths / hosts |
-| `prepare` | `adapter prepare` | Emit the deployable DAB bundle |
-| `migrate` | profile→translate→prepare | Full non-interactive migration |
+| `package` | `adapter package` | Emit the deployable DAB bundle |
+| `migrate` | discover→convert→package | Full non-interactive migration |
 | `record_results` | `adapter record-results` | Write coverage to a UC table |
 | `install_dashboard` | `adapter install-dashboard` | Publish the coverage dashboard |
 
-Example: `orchestra(command="profile", parameters={"adf_source_path": "/Volumes/main/default/adf_export", "output_dir": "./out"})`.
+Example: `orchestra(command="discover", parameters={"adf_source_path": "/Volumes/main/default/adf_export", "output_dir": "./out"})`.
 
 Each command is a thin bridge over `python -m orchestra.adapter` (the same entry point the agent
 skills use), then reads back the JSON/CSV artifacts each phase writes — so the MCP surface stays in
@@ -120,6 +120,15 @@ from the app's logs (`databricks apps logs <app>` or the app UI):
   (blocked by `Access-Control-Allow-Origin`), with no corresponding 500 in the app logs. Set the
   app env var `ORCHESTRA_ALLOWED_ORIGINS` to your workspace URL and redeploy.
 
+**Server connects but Genie Code "fails to fetch tools"** — the connection (`initialize`) succeeds,
+but `tools/list` comes back empty / errors. This is a **schema-compatibility** problem, not a
+transport one: Genie Code's MCP client rejects tools that declare an `outputSchema` (the structured-
+output feature from the 2025-06-18 spec). FastMCP derives one automatically from a tool's return-type
+annotation, so the `orchestra` tool registers with `@mcp.tool(structured_output=False)` to suppress
+it (the result is still returned as JSON text). If you see this after customizing the server, make
+sure no tool emits an `outputSchema` — check with `curl`-ing a `tools/list` request or inspecting
+`mcp.list_tools()`.
+
 **`403 Forbidden` with `Invalid Origin header`, or `421 Misdirected Request` with `Invalid Host
 header: localhost:8000`** (from `transport_security.py` in the logs) — this is the MCP SDK's
 DNS-rebinding protection, **not** CORS. Behind the Databricks Apps OAuth proxy the app sees the
@@ -165,10 +174,10 @@ by passing data **inline** through the tool, since the calling agent *can* read 
 
   Grant the app's service principal read on whichever path you use. (`adf_source_path` / `source_dir`
   remain for paths the server itself can read — local hosting or a mounted volume.)
-- **Output — large bundles (recommended):** pass `output_volume_path`; `prepare`/`migrate` upload the
+- **Output — large bundles (recommended):** pass `output_volume_path`; `package`/`migrate` upload the
   DAB to that UC Volume via the SDK Files API and return `bundle_uploaded` (location + file list).
   Grant the service principal write on it.
-- **Output — small bundles:** without `output_volume_path`, `prepare`/`migrate` return the DAB inline
+- **Output — small bundles:** without `output_volume_path`, `package`/`migrate` return the DAB inline
   as `bundle = {"files": {relpath: text, …}, "truncated": [...]}` (capped ~2 MB) for the caller to persist.
 
 ## Known constraints / follow-ups

@@ -1,10 +1,10 @@
 ---
-name: profile
+name: jobs-migration-discover
 description: >
   Load and parse Azure Data Factory pipeline definitions from Unity Catalog volumes or local directories.
   Produces a typed inventory that classifies every activity as deterministic, agentic, or unsupported.
 triggers:
-  - "profile ADF"
+  - "discover ADF"
   - "load ADF"
   - "parse ADF"
   - "import pipelines"
@@ -13,13 +13,13 @@ triggers:
   - "inventory ADF"
 ---
 
-# Profile ADF Pipeline Definitions
+# Discover ADF Pipeline Definitions
 
 Parse Azure Data Factory pipeline, dataset, linked service, and trigger JSON files into a typed AST and produce a classified inventory.
 
 ## Context
 
-This is phase 1 of the orchestra migration workflow. It takes raw ADF JSON exports and produces an `inventory.json` file that the `translate` skill consumes. The inventory classifies every ADF activity into one of three strategies:
+This is phase 1 of the orchestra migration workflow. It takes raw ADF JSON exports and produces an `inventory.json` file that the `convert` skill consumes. The inventory classifies every ADF activity into one of three strategies:
 
 - **Deterministic** — a built-in translator exists (Copy, DatabricksNotebook, ForEach, IfCondition, etc.)
 - **Agentic** — requires LLM-assisted translation via the `adf-to-databricks-plugin` skills (ExecuteDataFlow, Switch, Until, StoredProc, etc.)
@@ -30,7 +30,7 @@ This is phase 1 of the orchestra migration workflow. It takes raw ADF JSON expor
 This phase runs one of two ways; run the **`setup`** skill first if you haven't.
 
 - **MCP tool (Databricks Genie Code, or a local stdio registration) — the only path in Genie Code:**
-  call the single **`orchestra`** tool with `command="profile"` and run **no** `python3`/`$PY`/`bash`
+  call the single **`orchestra`** tool with `command="discover"` and run **no** `python3`/`$PY`/`bash`
   commands. The `"$PY" -m …` snippets in the steps below are the **local-CLI fallback only** — ignore
   them on this path.
 
@@ -39,7 +39,7 @@ This phase runs one of two ways; run the **`setup`** skill first if you haven't.
   You (the agent) read the ARM JSON files from the source and supply them:
 
   ```
-  orchestra(command="profile", parameters={
+  orchestra(command="discover", parameters={
     "adf_definitions": {
       "pipeline/Foo.json": { ...ARM JSON... },
       "dataset/Bar.json": { ... },
@@ -64,7 +64,7 @@ This phase runs one of two ways; run the **`setup`** skill first if you haven't.
   ```bash
   export PYTHONPATH="<plugin_dir>/src"
   PY="$(cat <plugin_dir>/.migration-venv)"
-  "$PY" -m orchestra.adapter profile --adf-source-path <path> --output-dir <dir>
+  "$PY" -m orchestra.adapter discover --adf-source-path <path> --output-dir <dir>
   ```
 
   If Python or pip is missing, `bootstrap.sh` prints a warning telling the user what to install —
@@ -120,10 +120,10 @@ Set the working source directory to the local temp path for subsequent steps.
 
 ### Step 3 — Run the deterministic parser
 
-Run the profile phase via the adapter's unified phase runner (recommended):
+Run the discover phase via the adapter's unified phase runner (recommended):
 
 ```bash
-"$PY" -m orchestra.adapter profile \
+"$PY" -m orchestra.adapter discover \
   --adf-source-path <source_path> \
   --output-dir <output_dir> \
   [--pipeline <pipeline_name>]
@@ -142,7 +142,7 @@ Where:
 - `<plugin_dir>` is the root of the orchestra plugin (the directory containing `src/`)
 - `<source_path>` is the local directory containing ADF JSON files
 - `<output_dir>` is the **single shared migration output directory** used by all three phases
-  (default: `./orchestra_output`). Profile writes its artifacts into the `metadata/` subfolder.
+  (default: `./orchestra_output`). Discover writes its artifacts into the `metadata/` subfolder.
 - `<pipeline_name>` (optional) — when provided, filters to only the named pipeline. When omitted, all pipelines in the source directory are included.
 
 **Always pass `--pipeline` when the user has specified a specific pipeline to migrate.** This ensures the inventory and all downstream phases are scoped to only that pipeline.
@@ -202,7 +202,7 @@ assessment. Columns:
 | `activities` | Total activities (including nested ForEach/If/Switch children) |
 | `datasets` | Distinct datasets the pipeline references |
 | `linked_services` | Distinct linked services (activity-level + via referenced datasets) |
-| `collapsible_patterns` | Number of motif patterns detected (auto-collapsible during translate) |
+| `collapsible_patterns` | Number of motif patterns detected (auto-collapsible during convert) |
 | `databricks_native_activities` | Notebook / SparkJar / SparkPython / Job activities (simplest) |
 | `control_flow_activities` | ForEach / If / Switch / SetVariable / AppendVariable / Filter / Wait / Until |
 | `other_activities` | Everything else — Copy, Web, Lookup, agentic types (hardest) |
@@ -252,15 +252,15 @@ WARNING: The following activities have no automated translation path:
 
 ### Step 8 — Confirm output location
 
-Tell the user where the metadata files were written (`<output_dir>/metadata/`: inventory.json, profile_report.csv, and the per-pipeline `.arm.json`), summarise the complexity sizes, and confirm they can proceed to the `translate` phase using the same `<output_dir>`.
+Tell the user where the metadata files were written (`<output_dir>/metadata/`: inventory.json, profile_report.csv, and the per-pipeline `.arm.json`), summarise the complexity sizes, and confirm they can proceed to the `convert` phase using the same `<output_dir>`.
 
 ## Examples
 
-- "Profile my ADF pipelines from /Volumes/main/default/adf_export"
+- "Discover my ADF pipelines from /Volumes/main/default/adf_export"
 - "Parse ADF definitions from ./tests/resources/json/"
 - "Load the ADF pipeline JSON files and show me the inventory"
 - "Import pipelines from /tmp/customer_adf_export"
-- "Profile only the pl_demo_01 pipeline from /Volumes/main/default/adf_export"
+- "Discover only the pl_demo_01 pipeline from /Volumes/main/default/adf_export"
 
 ## Output Artifacts
 
@@ -268,6 +268,6 @@ All under the shared `<output_dir>/metadata/` folder:
 
 | File | Description |
 |---|---|
-| `metadata/inventory.json` | Classified activity inventory for the translate phase |
+| `metadata/inventory.json` | Classified activity inventory for the convert phase |
 | `metadata/profile_report.csv` | Per-pipeline complexity report (counts + T-shirt size) |
 | `metadata/<pipeline>.arm.json` | Verbatim original ADF/ARM source for each pipeline |

@@ -1,13 +1,13 @@
 """CLI bridge that lets the orchestra skills drive the adapter via subprocesses.
 
-The skills (`/orchestra:translate`, `/orchestra:migrate`) cannot keep a
+The skills (`/orchestra:jobs-migration-convert`, `/orchestra:jobs-migration-migrate`) cannot keep a
 Python session alive across user prompts, so this module exposes two
 stateless subcommands:
 
 * ``inspect`` reads a translation report and emits the pending options
   as JSON for the agent to surface to the user.
 * ``modify`` reads the same report plus a JSON file of answers and writes
-  a configuration-stamped report the prepare phase consumes verbatim.
+  a configuration-stamped report the package phase consumes verbatim.
 """
 
 from __future__ import annotations
@@ -51,9 +51,9 @@ from orchestra.translator.engine import _pipeline_to_dict
 
 # Maps the unified phase runner subcommands to the module CLI they forward to.
 _PHASE_MODULES: dict[str, str] = {
-    "profile": "orchestra.parser.adf_loader",
-    "translate": "orchestra.translator.engine",
-    "prepare": "orchestra.bundler.dab_writer",
+    "discover": "orchestra.parser.adf_loader",
+    "convert": "orchestra.translator.engine",
+    "package": "orchestra.bundler.dab_writer",
 }
 # Aliases so the inputs option ids double as CLI flags on the phase runners.
 _PHASE_FLAG_ALIASES: dict[str, str] = {
@@ -106,7 +106,7 @@ def _run_record_results(args: argparse.Namespace) -> int:
 
     metadata_dir = args.output_dir / "metadata"
     if not (metadata_dir / "inventory.json").exists():
-        print(f"No inventory.json under {metadata_dir}; run the profile phase first.", file=sys.stderr)
+        print(f"No inventory.json under {metadata_dir}; run the discover phase first.", file=sys.stderr)
         return 1
     try:
         run_id, rows = write_results(metadata_dir, args.results_table, warehouse_id=args.warehouse_id)
@@ -315,7 +315,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     inputs.add_argument(
         "phase",
-        choices=("profile", "translate", "prepare"),
+        choices=("discover", "convert", "package"),
         help="Migration phase whose input prompts the agent should surface.",
     )
     inputs.add_argument(
@@ -399,7 +399,7 @@ def _build_parser() -> argparse.ArgumentParser:
     # forwards to the underlying phase CLI so agents have a single, consistent
     # entry point.  ``--adf-source-path`` is accepted as an alias of the
     # loader/translator ``--source-dir`` flag (it matches the inputs option id).
-    for _phase in ("profile", "translate", "prepare"):
+    for _phase in ("discover", "convert", "package"):
         _runner = subparsers.add_parser(
             _phase,
             help=f"Run the {_phase} phase (forwards flags to the underlying phase CLI).",
@@ -416,13 +416,13 @@ def _build_parser() -> argparse.ArgumentParser:
 def _run_phase(phase: str, forward: list[str]) -> int:
     """Forward a phase runner subcommand to the underlying module CLI.
 
-    ``python -m orchestra.adapter profile --adf-source-path X --output-dir Y``
+    ``python -m orchestra.adapter discover --adf-source-path X --output-dir Y``
     becomes ``python -m orchestra.parser.adf_loader --source-dir X --output-dir Y``.
     Reuses the existing, tested phase CLIs verbatim so there is a single entry
     point without duplicating each phase's argument surface.
 
     Args:
-        phase: One of ``"profile"`` / ``"translate"`` / ``"prepare"``.
+        phase: One of ``"discover"`` / ``"convert"`` / ``"package"``.
         forward: Tokens after the phase name (flags for the phase CLI).
 
     Returns:

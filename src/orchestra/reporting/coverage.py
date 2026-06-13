@@ -1,6 +1,6 @@
-"""Build per-pipeline migration-coverage rows from the profile-phase metadata.
+"""Build per-pipeline migration-coverage rows from the discover-phase metadata.
 
-Joins the two artifacts the profile phase writes into ``<output_dir>/metadata/``:
+Joins the two artifacts the discover phase writes into ``<output_dir>/metadata/``:
 
 * ``profile_report.csv`` -- per-pipeline complexity (activity/dataset/linked-service
   counts, collapsible patterns, activity-category counts, complexity score + size).

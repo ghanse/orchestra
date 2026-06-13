@@ -43,14 +43,14 @@ Orchestra is a Claude Code plugin that converts Azure Data Factory (ADF) pipelin
 
 2. Run the end-to-end migration:
    ```
-   /orchestra:migrate
+   /orchestra:jobs-migration-migrate
    ```
 
    Or run individual phases:
    ```
-   /orchestra:profile     # Parse ADF JSON, produce inventory + complexity report
-   /orchestra:translate   # Deterministic + agentic translation
-   /orchestra:prepare     # Generate DABs project
+   /orchestra:jobs-migration-discover     # Parse ADF JSON, produce inventory + complexity report
+   /orchestra:jobs-migration-convert   # Deterministic + agentic translation
+   /orchestra:jobs-migration-package     # Generate DABs project
    ```
 
 ## Supported ADF Activity Types
@@ -95,13 +95,13 @@ Orchestra is a Claude Code plugin that converts Azure Data Factory (ADF) pipelin
 
 ## How It Works
 
-### Phase 1: Profile
+### Phase 1: Discover
 Reads ADF JSON definitions from Unity Catalog volumes, normalizes ARM template format, parses into typed AST nodes, and classifies each activity as deterministic, agentic, or unsupported. Produces `metadata/inventory.json` and a per-pipeline complexity report at `metadata/profile_report.csv`.
 
-### Phase 2: Translate
+### Phase 2: Convert
 Applies deterministic translators via registry dispatch, resolves dependencies through topological sort, and threads immutable `TranslationContext` through control-flow visitors. Agentic gaps are flagged for LLM-assisted translation. Produces Pipeline IR.
 
-### Phase 3: Prepare
+### Phase 3: Package
 Converts Pipeline IR into a deployable DABs project: `databricks.yml`, per-job YAML resource files, generated Python notebooks, and setup scripts for UC volumes, secrets, and connections.
 
 ## Output Format
@@ -110,7 +110,7 @@ All three phases write into one shared output directory (default `./orchestra_ou
 
 ```
 orchestra_output/
-  databricks.yml              # Bundle configuration (prepare)
+  databricks.yml              # Bundle configuration (package)
   resources/
     jobs/
       <pipeline_name>.yml     # One job per ADF pipeline
@@ -122,11 +122,11 @@ orchestra_output/
       create_volumes.py       # UC volume setup
       create_secrets.py       # Secret scope setup
       create_connections.py   # Connection setup
-  SETUP.md                    # Setup instructions (prepare)
+  SETUP.md                    # Setup instructions (package)
   metadata/
-    inventory.json            # profile: activity inventory
+    inventory.json            # discover: activity inventory
     profile_report.csv        # profile: per-pipeline complexity report
-    <pipeline>.arm.json       # profile: verbatim original ADF/ARM source
+    <pipeline>.arm.json       # discover: verbatim original ADF/ARM source
     configuration.json        # modify: collected configuration answers
   .work/                      # transient intermediates (translation report, IR, gaps.json); pruned by prepare
 ```
