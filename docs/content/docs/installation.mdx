@@ -141,7 +141,7 @@ If you prefer an installed package over `PYTHONPATH`, run `pip install -e ".[mcp
 </Tab>
 
 <Tab value="Databricks Genie Code">
-Genie Code connects to a **hosted** MCP endpoint, so the orchestra tools run as a Databricks App that Genie Code discovers under **AI Gateway → MCPs**. End to end:
+Genie Code connects to a **hosted** MCP endpoint, so the orchestra tools run as a Databricks App that you add in Genie Code's **Custom MCP server** picker. End to end:
 
 <Steps>
 <Step>
@@ -167,7 +167,11 @@ Ask your agent to **"set up the orchestra environment"** (or run `bash <plugin_d
 bash <plugin_dir>/app/deploy.sh
 ```
 
-`deploy.sh` stages a self-contained bundle (the app entrypoint plus a vendored copy of the orchestra source), syncs it to **`/Workspace/Shared/mcp-orchestra`** (a location the app's service principal can read — override with `APP_SOURCE_PATH`), and creates/deploys the app. The app is named **`mcp-orchestra`** — the `mcp-` prefix is required for Databricks to surface it under **AI Gateway → MCPs**. The script prints the app URL; the MCP endpoint is **`<app-url>/mcp`**.
+`deploy.sh` stages a self-contained bundle (the app entrypoint plus a vendored copy of the orchestra source), syncs it to **`/Workspace/Shared/orchestra-mcp`** (a location the app's service principal can read — override with `APP_SOURCE_PATH`), and creates/deploys the **`orchestra-mcp`** app. The script prints the app URL; the MCP endpoint is **`<app-url>/mcp`**.
+
+<Callout type="info" title="App naming and the AI Playground">
+Only apps named `mcp-*` are auto-listed in the **AI Playground**. Genie Code's **Custom MCP server** picker selects any Databricks App by name, so `orchestra-mcp` works there. If you also want AI Playground auto-discovery, deploy with `APP_NAME=mcp-orchestra`.
+</Callout>
 
 <Callout type="warn" title="Deploy from a CLI session">
 `databricks apps` deploy commands require a Databricks CLI session (workspace web terminal or a local machine); they are **not** available from serverless notebook Python — the same constraint as `databricks bundle deploy`. If "Error: please specify target" appears, the CLI picked up a stray `databricks.yml` from your working directory; `deploy.sh` already isolates against this, so re-run it as-is.
@@ -177,7 +181,7 @@ bash <plugin_dir>/app/deploy.sh
 <Step>
 ### Grant access
 
-- **App access:** grant **Can use** on the `mcp-orchestra` app to the users / service principals that will call it (Apps UI → *Permissions*, or `databricks apps set-permissions`).
+- **App access:** grant **Can use** on the `orchestra-mcp` app to the users / service principals that will call it (Apps UI → *Permissions*, or `databricks apps set-permissions`).
 - **Data access:** grant the app's own service principal access to the catalogs, schemas, and Unity Catalog volumes the migration reads/writes, plus any SQL warehouse used by the reporting tools (`orchestra_record_results` / `orchestra_install_dashboard`).
 </Step>
 
@@ -188,7 +192,7 @@ MCP servers are only available in Genie Code **[Agent mode](https://learn.micros
 
 1. In the Genie Code panel, click **⚙ Settings**.
 2. Under **MCP Servers**, click **+ Add Server**.
-3. Choose **Custom MCP server** and select the **`mcp-orchestra`** Databricks App.
+3. Choose **Custom MCP server** and select the **`orchestra-mcp`** Databricks App.
 4. Click **Save**.
 
 Its `orchestra_*` tools are then available in Agent mode (start with `orchestra_phase_inputs` or `orchestra_migrate`) — no prompt changes needed.

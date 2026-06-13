@@ -49,8 +49,10 @@ def build_server() -> FastMCP:
 
     ``stateless_http=True`` is required by Databricks Genie Code: it only connects to custom
     MCP servers that do not rely on a persistent session (no ``Mcp-Session-Id`` round-trip).
+    ``streamable_http_path="/mcp"`` pins the transport to ``/mcp`` (Genie expects the server at
+    ``<app-url>/mcp``); without it some SDK versions serve the transport at ``/``.
     """
-    mcp = FastMCP("orchestra", instructions=_INSTRUCTIONS, stateless_http=True)
+    mcp = FastMCP("orchestra", instructions=_INSTRUCTIONS, stateless_http=True, streamable_http_path="/mcp")
 
     @mcp.tool()
     def orchestra_phase_inputs(phase: str) -> dict[str, Any]:
@@ -330,37 +332,42 @@ def build_server() -> FastMCP:
 
 
 def build_http_app() -> Any:
-    """Build the Starlette ASGI app for hosting (Databricks Apps / Genie Code).
+    """Build the ASGI app for hosting (Databricks Apps / Genie Code).
 
-    Mounts the MCP streamable-HTTP transport at ``/mcp`` and adds a ``/`` health
-    endpoint so the platform's health check succeeds.
+    Returns FastMCP's *own* streamable-HTTP app (serving the MCP endpoint at ``/mcp``)
+    rather than mounting it inside a separate Starlette app. This is essential: FastMCP's
+    StreamableHTTP session manager is started by the app's lifespan, and Starlette does
+    **not** run the lifespan of a *mounted* sub-app — so mounting it elsewhere leaves the
+    session manager uninitialized and every ``/mcp`` request fails with a 500
+    ("Task group is not initialized"), which a client like Genie Code reports as a
+    connection failure.
 
-    Adds CORS so a browser client (Genie Code) on the workspace origin can reach the
-    server. Allowed origins default to ``*``; set ``ORCHESTRA_ALLOWED_ORIGINS`` to a
-    comma-separated list (e.g. your workspace URL) to restrict it and enable credentials.
+    A ``/`` (and ``/health``) endpoint is registered on the same app via ``custom_route``
+    so the platform health check succeeds without a wrapper app. CORS is attached via
+    middleware so a browser client (Genie Code) on the workspace origin can reach the
+    server; allowed origins default to ``*`` (set ``ORCHESTRA_ALLOWED_ORIGINS`` to a
+    comma-separated list, e.g. your workspace URL, to restrict it and enable credentials).
     """
-    from starlette.applications import Starlette
     from starlette.middleware.cors import CORSMiddleware
     from starlette.responses import JSONResponse
-    from starlette.routing import Mount, Route
 
     mcp = build_server()
 
+    @mcp.custom_route("/", methods=["GET"])
     async def health(_request: Any) -> JSONResponse:
         return JSONResponse({"status": "ok", "service": "orchestra-mcp"})
+
+    @mcp.custom_route("/health", methods=["GET"])
+    async def health_alias(_request: Any) -> JSONResponse:
+        return JSONResponse({"status": "ok", "service": "orchestra-mcp"})
+
+    # FastMCP's own app — its lifespan starts the StreamableHTTP session manager.
+    app = mcp.streamable_http_app()
 
     raw_origins = os.environ.get("ORCHESTRA_ALLOWED_ORIGINS", "*")
     allow_origins = [origin.strip() for origin in raw_origins.split(",") if origin.strip()]
     # Credentialed requests cannot use the "*" wildcard per the CORS spec.
     allow_credentials = allow_origins != ["*"]
-
-    app = Starlette(
-        routes=[
-            Route("/", health, methods=["GET"]),
-            Route("/health", health, methods=["GET"]),
-            Mount("/", app=mcp.streamable_http_app()),
-        ]
-    )
     app.add_middleware(
         CORSMiddleware,
         allow_origins=allow_origins,

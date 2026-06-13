@@ -57,7 +57,7 @@ Register the stdio server with a local MCP client, e.g.:
 
 `deploy.sh` stages a self-contained bundle in a temporary directory outside the repo (the app entrypoint
 plus a vendored copy of the pure-Python `orchestra` package), syncs it to your
-workspace, and creates/deploys the app (default name **`mcp-orchestra`**).
+workspace, and creates/deploys the app (default name **`orchestra-mcp`**).
 
 > **Clone into `/Workspace/Shared`.** `deploy.sh` deploys the app source from
 > `/Workspace/Shared/<app-name>` because the app's service principal **cannot read
@@ -68,22 +68,24 @@ workspace, and creates/deploys the app (default name **`mcp-orchestra`**).
 
 End-to-end, to use it from Genie Code:
 
-1. **Deploy** with `./app/deploy.sh`. The app is named `mcp-orchestra` — the
-   **`mcp-` prefix is required** for Databricks to surface it under **AI Gateway →
-   MCPs**. It deploys the source from `/Workspace/Shared/mcp-orchestra`
-   (override with `APP_SOURCE_PATH`). The script prints the app URL; the MCP
-   endpoint is `<app-url>/mcp`.
-2. **Grant app access:** give **Can use** on `mcp-orchestra` to the users / service
+1. **Deploy** with `./app/deploy.sh`. The app is named `orchestra-mcp` and deploys the
+   source from `/Workspace/Shared/orchestra-mcp` (override with `APP_SOURCE_PATH`). The
+   script prints the app URL; the MCP endpoint is `<app-url>/mcp`.
+2. **Grant app access:** give **Can use** on `orchestra-mcp` to the users / service
    principals that will call it (Apps UI → *Permissions*, or
-   `databricks apps set-permissions mcp-orchestra ...`).
+   `databricks apps set-permissions orchestra-mcp ...`).
 3. **Grant data access:** the app authenticates as its own service principal, so
    grant that principal access to the catalogs / schemas / Unity Catalog volumes
    the migration reads/writes (and any SQL warehouse used by `record-results` /
    `install-dashboard`).
 4. **Add it in Genie Code (Agent mode):** open Genie Code **Settings → MCP Servers →
-   Add Server**, choose **Custom MCP server**, select the `mcp-orchestra` app, and
+   Add Server**, choose **Custom MCP server**, select the `orchestra-mcp` app, and
    **Save**. The `orchestra_*` tools become available immediately. Verify via the
    health endpoint `<app-url>/`.
+
+> The `mcp-` name prefix is only needed for an app to be **auto-listed in the AI Playground**;
+> Genie Code's **Custom MCP server** picker selects any Databricks App by name, so `orchestra-mcp`
+> works there. If you also want AI Playground auto-discovery, deploy with `APP_NAME=mcp-orchestra`.
 
 Genie Code requires a custom MCP app to be (1) in the **same workspace**, (2) reachable
 at `https://<app-url>/mcp`, and (3) **stateless** — this server sets
@@ -97,6 +99,21 @@ MCP access is capped at **20 tools** across all servers (orchestra exposes 11).
 > and [host a custom MCP server](https://docs.databricks.com/aws/en/generative-ai/mcp/custom-mcp).
 
 ## Troubleshooting
+
+**Genie Code can't connect / add the server (is it CORS or the server?)** — Tell them apart
+from the app's logs (`databricks apps logs <app>` or the app UI):
+
+- **Server-side error (not CORS):** the logs show a `500` / `RuntimeError: Task group is not
+  initialized` on `POST /mcp`. That means the StreamableHTTP session manager never started —
+  it happens if the MCP app is *mounted inside another Starlette app* (whose lifespan doesn't
+  run the sub-app). The server now avoids this by serving FastMCP's own app directly; make sure
+  you redeployed the current `app/`. Sanity-check the app is up with `curl <app-url>/`
+  (expect `{"status":"ok"}`).
+- **CORS:** the request reaches the server fine but the **browser console** shows a CORS error
+  (blocked by `Access-Control-Allow-Origin`), with no corresponding 500 in the app logs. Set the
+  app env var `ORCHESTRA_ALLOWED_ORIGINS` to your workspace URL and redeploy.
+
+
 
 **`mkdir: cannot create directory ...: Permission denied`** — On Databricks (Genie web
 terminal / serverless), `/tmp` and `$TMPDIR` are often not writable, while the `/Workspace`
