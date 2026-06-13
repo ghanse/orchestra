@@ -112,6 +112,14 @@ from the app's logs (`databricks apps logs <app>` or the app UI):
   (blocked by `Access-Control-Allow-Origin`), with no corresponding 500 in the app logs. Set the
   app env var `ORCHESTRA_ALLOWED_ORIGINS` to your workspace URL and redeploy.
 
+**`403 Forbidden` with `Invalid Origin header`, or `421 Misdirected Request` with `Invalid Host
+header: localhost:8000`** (from `transport_security.py` in the logs) — this is the MCP SDK's
+DNS-rebinding protection, **not** CORS. Behind the Databricks Apps OAuth proxy the app sees the
+workspace `Origin` and a proxied `Host: localhost:8000`, so that allowlist check misfires. The
+server now **disables** DNS-rebinding protection (the OAuth proxy already authenticates every
+request); just redeploy the current `app/`. Note: `ORCHESTRA_ALLOWED_ORIGINS` controls **only**
+browser CORS now — it does not enable or affect this Host/Origin check.
+
 
 
 **`mkdir: cannot create directory ...: Permission denied`** — On Databricks (Genie web

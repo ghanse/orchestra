@@ -14,7 +14,6 @@ from __future__ import annotations
 import os
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
@@ -29,23 +28,16 @@ def _allowed_origins() -> list[str]:
 
 
 def _transport_security() -> TransportSecuritySettings:
-    """Build the MCP transport security (DNS-rebinding) settings.
+    """Disable the MCP SDK's DNS-rebinding (Host/Origin allowlist) protection.
 
-    The MCP SDK rejects requests whose ``Origin`` is not in its allowlist with a 403 (and an
-    empty allowlist rejects everything). A Databricks App is already fronted by the workspace
-    OAuth proxy, so by default we disable the SDK's DNS-rebinding protection — otherwise it
-    blocks Genie Code's workspace ``Origin``. Set ``ORCHESTRA_ALLOWED_ORIGINS`` to an explicit
-    comma-separated list (e.g. your workspace URL) to instead enforce a strict allowlist.
+    A Databricks App is reachable only through the workspace OAuth proxy, which authenticates
+    every request before forwarding it to the app on ``localhost:<port>``. That makes the SDK's
+    Host/Origin checks both misfire — rejecting the workspace ``Origin`` with 403, or the proxied
+    ``Host: localhost:8000`` with 421 — while adding no real protection on top of the proxy. So we
+    turn it off. Browser CORS is a separate concern handled in :func:`build_http_app` via
+    ``ORCHESTRA_ALLOWED_ORIGINS`` (which does **not** affect this setting).
     """
-    origins = _allowed_origins()
-    if origins == ["*"]:
-        return TransportSecuritySettings(enable_dns_rebinding_protection=False)
-    hosts = [netloc for netloc in (urlparse(origin).netloc for origin in origins) if netloc]
-    return TransportSecuritySettings(
-        enable_dns_rebinding_protection=True,
-        allowed_origins=origins,
-        allowed_hosts=hosts,
-    )
+    return TransportSecuritySettings(enable_dns_rebinding_protection=False)
 
 
 _INSTRUCTIONS = """\
