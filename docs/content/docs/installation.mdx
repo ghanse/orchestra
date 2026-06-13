@@ -167,10 +167,10 @@ Ask your agent to **"set up the orchestra environment"** (or run `bash <plugin_d
 bash <plugin_dir>/app/deploy.sh
 ```
 
-`deploy.sh` stages a self-contained bundle (the app entrypoint plus a vendored copy of the orchestra source), syncs it to **`/Workspace/Shared/orchestra-mcp`** (a location the app's service principal can read — override with `APP_SOURCE_PATH`), and creates/deploys the **`orchestra-mcp`** app. The script prints the app URL; the MCP endpoint is **`<app-url>/mcp`**.
+`deploy.sh` stages a self-contained bundle (the app entrypoint plus a vendored copy of the orchestra source), syncs it to **`/Workspace/Shared/mcp-orchestra`** (a location the app's service principal can read — override with `APP_SOURCE_PATH`), and creates/deploys the **`mcp-orchestra`** app. The script prints the app URL; the MCP endpoint is **`<app-url>/mcp`**.
 
 <Callout type="info" title="App naming and the AI Playground">
-Only apps named `mcp-*` are auto-listed in the **AI Playground**. Genie Code's **Custom MCP server** picker selects any Databricks App by name, so `orchestra-mcp` works there. If you also want AI Playground auto-discovery, deploy with `APP_NAME=mcp-orchestra`.
+The `mcp-` prefix on `mcp-orchestra` makes the app auto-listed in the **AI Playground**. Genie Code's **Custom MCP server** picker selects any Databricks App by name regardless of prefix. Override the name with `APP_NAME` if needed.
 </Callout>
 
 <Callout type="warn" title="Deploy from a CLI session">
@@ -181,7 +181,7 @@ Only apps named `mcp-*` are auto-listed in the **AI Playground**. Genie Code's *
 <Step>
 ### Grant access
 
-- **App access:** grant **Can use** on the `orchestra-mcp` app to the users / service principals that will call it (Apps UI → *Permissions*, or `databricks apps set-permissions`).
+- **App access:** grant **Can use** on the `mcp-orchestra` app to the users / service principals that will call it (Apps UI → *Permissions*, or `databricks apps set-permissions`).
 - **Data access:** grant the app's own service principal access to the catalogs, schemas, and Unity Catalog volumes the migration reads/writes, plus any SQL warehouse used by the reporting tools (`orchestra_record_results` / `orchestra_install_dashboard`).
 </Step>
 
@@ -192,7 +192,7 @@ MCP servers are only available in Genie Code **[Agent mode](https://learn.micros
 
 1. In the Genie Code panel, click **⚙ Settings**.
 2. Under **MCP Servers**, click **+ Add Server**.
-3. Choose **Custom MCP server** and select the **`orchestra-mcp`** Databricks App.
+3. Choose **Custom MCP server** and select the **`mcp-orchestra`** Databricks App.
 4. Click **Save**.
 
 Its `orchestra_*` tools are then available in Agent mode (start with `orchestra_phase_inputs` or `orchestra_migrate`) — no prompt changes needed.

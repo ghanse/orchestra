@@ -151,10 +151,10 @@ PYTHONPATH="<plugin_dir>/src" "$PY" -m orchestra.mcp        # stdio (default)
 #### Databricks Genie Code (`DATABRICKS_RUNTIME_VERSION` set)
 
 `app/deploy.sh` stages a self-contained bundle (the app entrypoint plus a vendored copy of the
-orchestra source), syncs it to **`/Workspace/Shared/orchestra-mcp`**, and creates/deploys the
-**`orchestra-mcp`** Databricks App. The script prints the app URL; the MCP endpoint is
-`<app-url>/mcp`. (Only `mcp-*`-named apps are auto-listed in the AI Playground, but Genie Code's
-**Custom MCP server** picker selects any app by name, so `orchestra-mcp` works there.)
+orchestra source), syncs it to **`/Workspace/Shared/mcp-orchestra`**, and creates/deploys the
+**`mcp-orchestra`** Databricks App. The script prints the app URL; the MCP endpoint is
+`<app-url>/mcp`. (The `mcp-` prefix makes it auto-listed in the AI Playground; Genie Code's
+**Custom MCP server** picker also selects any app by name.)
 
 > **Clone into a shared location.** The app's service principal cannot read private
 > `/Workspace/Users/<you>` folders by default, so `deploy.sh` deploys the source from
@@ -165,12 +165,12 @@ orchestra source), syncs it to **`/Workspace/Shared/orchestra-mcp`**, and create
 
 After it deploys, relay these follow-up steps to the user (the script also prints them):
 
-1. **App access:** grant **Can use** on `orchestra-mcp` to the users / service principals that will
-   call it (Apps UI → *Permissions*, or `databricks apps set-permissions orchestra-mcp ...`).
+1. **App access:** grant **Can use** on `mcp-orchestra` to the users / service principals that will
+   call it (Apps UI → *Permissions*, or `databricks apps set-permissions mcp-orchestra ...`).
 2. **Data access:** grant the app's service principal access to the catalogs, schemas, and volumes
    the migration touches (plus any SQL warehouse used by the reporting tools).
 3. **Add it in Genie Code (Agent mode):** open Genie Code **Settings → MCP Servers → Add Server**,
-   choose **Custom MCP server**, select the `orchestra-mcp` app, and **Save**. The `orchestra_*`
+   choose **Custom MCP server**, select the `mcp-orchestra` app, and **Save**. The `orchestra_*`
    tools then appear (MCP needs Agent mode; access is capped at 20 tools across all servers).
    The orchestra server is already **stateless** (`stateless_http=True`) with CORS, as Genie Code
    requires. If a browser CORS error appears, set the app env var `ORCHESTRA_ALLOWED_ORIGINS` to the
@@ -190,7 +190,7 @@ After it deploys, relay these follow-up steps to the user (the script also print
 | `<plugin_dir>/.migration-venv` | Marker file holding the resolved interpreter path |
 | `requirements.txt` | The dependency list installed into the venv |
 | MCP server (local) | `mcp` / `uvicorn` / `starlette` installed into the venv; run with `python -m orchestra.mcp` |
-| MCP server (Databricks Genie Code) | `orchestra-mcp` Databricks App serving the tools at `<app-url>/mcp` (add via Genie Code → Custom MCP server) |
+| MCP server (Databricks Genie Code) | `mcp-orchestra` Databricks App serving the tools at `<app-url>/mcp` (add via Genie Code → Custom MCP server) |
 
 ## Examples
 

@@ -355,11 +355,11 @@ def build_http_app() -> Any:
 
     @mcp.custom_route("/", methods=["GET"])
     async def health(_request: Any) -> JSONResponse:
-        return JSONResponse({"status": "ok", "service": "orchestra-mcp"})
+        return JSONResponse({"status": "ok", "service": "mcp-orchestra"})
 
     @mcp.custom_route("/health", methods=["GET"])
     async def health_alias(_request: Any) -> JSONResponse:
-        return JSONResponse({"status": "ok", "service": "orchestra-mcp"})
+        return JSONResponse({"status": "ok", "service": "mcp-orchestra"})
 
     # FastMCP's own app — its lifespan starts the StreamableHTTP session manager.
     app = mcp.streamable_http_app()

@@ -7,9 +7,9 @@
 # Requirements: Databricks CLI v0.230+ authenticated to the target workspace.
 #
 # Env overrides:
-#   APP_NAME            App name (default: orchestra-mcp). Note: only apps named `mcp-*` are
+#   APP_NAME            App name (default: mcp-orchestra). The `mcp-` prefix makes the app
 #                       auto-listed in the AI Playground; Genie Code's "Add Server > Custom MCP
-#                       server" picker can select any Databricks App by name regardless.
+#                       server" picker can also select any Databricks App by name.
 #   APP_SOURCE_PATH     Workspace source path the app deploys from (default:
 #                       /Workspace/Shared/<APP_NAME>). It MUST be readable by the app's
 #                       service principal, so it defaults to /Workspace/Shared — NOT a user's
@@ -17,7 +17,7 @@
 #   DATABRICKS_PROFILE  CLI profile to use (default: env/DEFAULT auth)
 set -euo pipefail
 
-APP_NAME="${APP_NAME:-orchestra-mcp}"
+APP_NAME="${APP_NAME:-mcp-orchestra}"
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$APP_DIR/.." && pwd)"
 
@@ -46,7 +46,7 @@ fi
 STAGE_DIR=""
 for _base in "$(dirname "$REPO_ROOT")" "${TMPDIR:-}" /tmp /local_disk0/tmp "$HOME"; do
   [ -n "$_base" ] && [ -d "$_base" ] && [ -w "$_base" ] || continue
-  STAGE_DIR="$(mktemp -d "${_base%/}/orchestra-mcp-build.XXXXXX" 2>/dev/null)" && break
+  STAGE_DIR="$(mktemp -d "${_base%/}/mcp-orchestra-build.XXXXXX" 2>/dev/null)" && break
 done
 if [ -z "$STAGE_DIR" ]; then
   echo "ERROR: could not create a writable staging directory (tried the repo parent, \$TMPDIR, /tmp, \$HOME)." >&2
