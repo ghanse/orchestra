@@ -91,14 +91,14 @@ class MotifConsolidate(StrEnum):
     CONSOLIDATE = "consolidate"
 
 
-class CopyNotifyDestination(StrEnum):
-    """How a Copy->Notify (copy_and_notify) motif's notifications are handled.
+class NotifyDestination(StrEnum):
+    """How an activity->Notify (activity_and_notify) motif's notifications are handled.
 
     ``KEEP`` preserves the current behaviour (the WebActivity notify
     activities translate directly; the motif is not collapsed).  Any other
-    value collapses the motif: the Copy becomes the task and the downstream
-    notifications become Databricks job-task notifications routed to the
-    chosen destination.
+    value collapses the motif: the upstream activity (Copy, Notebook, Lookup,
+    …) becomes the task and the downstream notifications become Databricks
+    job-task notifications routed to the chosen destination.
     """
 
     KEEP = "keep"
@@ -127,8 +127,8 @@ FIELD_TO_ENUM: Final[MappingProxyType[str, type[StrEnum]]] = MappingProxyType(
         "metadata_driven_access": MetadataDrivenAccess,
         "metadata_driven_size": MetadataDrivenSize,
         "metadata_driven_lookup_tool": MetadataDrivenLookupTool,
-        "copy_notify_destination": CopyNotifyDestination,
-        "copy_notify_events": NotifyEvents,
+        "notify_destination": NotifyDestination,
+        "notify_events": NotifyEvents,
     }
 )
 
@@ -165,13 +165,13 @@ class TranslationConfiguration:
     metadata_driven_access: MetadataDrivenAccess = MetadataDrivenAccess.NO
     metadata_driven_size: MetadataDrivenSize = MetadataDrivenSize.LARGE
     metadata_driven_lookup_tool: MetadataDrivenLookupTool = MetadataDrivenLookupTool.NONE
-    copy_notify_destination: CopyNotifyDestination = CopyNotifyDestination.KEEP
-    copy_notify_events: NotifyEvents = NotifyEvents.BOTH
-    copy_notify_destination_name: str = ""
+    notify_destination: NotifyDestination = NotifyDestination.KEEP
+    notify_events: NotifyEvents = NotifyEvents.BOTH
+    notify_destination_name: str = ""
     # Resolved Databricks-SDK config kwargs for the chosen destination, keyed by
     # SDK arg name (e.g. ``addresses``, ``url``, ``integration_key``).  Populated
-    # from the chained per-field follow-up answers via collect_copy_notify_args.
-    copy_notify_args: dict[str, str] = field(default_factory=dict)
+    # from the chained per-field follow-up answers via collect_notify_args.
+    notify_args: dict[str, str] = field(default_factory=dict)
     motif_consolidations: dict[str, MotifConsolidate] = field(default_factory=dict)
     per_task: dict[str, dict[str, str]] = field(default_factory=dict)
 

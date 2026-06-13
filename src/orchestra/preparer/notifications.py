@@ -1,7 +1,7 @@
-"""Resolve collapsed copy_and_notify notification specs into DAB task notifications.
+"""Resolve collapsed activity_and_notify notification specs into DAB task notifications.
 
-The adapter stamps a notification spec onto the Copy task when the user opts a
-``copy_and_notify`` motif into a Databricks notification destination.  This module
+The adapter stamps a notification spec onto the upstream task when the user opts an
+``activity_and_notify`` motif into a Databricks notification destination.  This module
 turns that spec into the task-level ``email_notifications`` / ``webhook_notifications``
 the bundler emits.  For email it uses raw addresses; for Slack / Microsoft Teams /
 PagerDuty / Generic Webhook the destination is created (or reused by display name)
@@ -54,7 +54,7 @@ def resolve_task_notifications(spec: dict[str, Any]) -> tuple[dict[str, Any], li
     if destination == "email":
         recipients = [r for r in (args.get("addresses") or []) if r]
         if not recipients:
-            logger.warning("copy_and_notify email destination has no recipients; skipping notification wiring.")
+            logger.warning("activity_and_notify email destination has no recipients; skipping notification wiring.")
             return {}, []
         return {"email_notifications": {event: list(recipients) for event in events}}, []
 

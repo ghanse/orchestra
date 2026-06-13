@@ -1,17 +1,18 @@
-"""Tests for the copy_and_notify -> Databricks notification destination feature."""
+"""Tests for the activity_and_notify -> Databricks notification destination feature."""
 
 from __future__ import annotations
 
 from orchestra.adapter.models import TranslationConfiguration
 from orchestra.adapter.operations import (
     apply_configuration,
-    collect_copy_notify_args,
+    collect_notify_args,
     gather_options,
     provision_notification_destinations,
 )
 from orchestra.models.ir import (
     CopyActivity,
     Dependency,
+    LookupActivity,
     NotebookActivity,
     Pipeline,
     WebActivity,
@@ -19,7 +20,86 @@ from orchestra.models.ir import (
 from orchestra.preparer.notifications import resolve_task_notifications
 
 
-def _pipeline_with_copy_notify() -> Pipeline:
+def _pipeline_with_upstream_notify(upstream) -> Pipeline:
+    """A non-Copy upstream activity followed by success/failure notify Web activities."""
+    notify_ok = WebActivity(
+        name="Notify Success",
+        task_key="notify_success",
+        url="https://x",
+        method="POST",
+        depends_on=[Dependency(task_key=upstream.task_key, outcome="Succeeded")],
+    )
+    notify_fail = WebActivity(
+        name="Notify Failure",
+        task_key="notify_failure",
+        url="https://x",
+        method="POST",
+        depends_on=[Dependency(task_key=upstream.task_key, outcome="Failed")],
+    )
+    return Pipeline(name="p", tasks=[upstream, notify_ok, notify_fail])
+
+
+def test_notebook_upstream_surfaces_and_collapses():
+    """A Notebook (not a Copy) followed by notify Web activities is offered and collapses."""
+    p = _pipeline_with_upstream_notify(NotebookActivity(name="Transform", task_key="transform", notebook_path="/t"))
+    assert "notify_destination" in {o.option_id for o in gather_options(p, []).options}
+
+    cfg = TranslationConfiguration(notify_destination="email", notify_args={"addresses": "a@x.com"})
+    out = apply_configuration(p, cfg)
+    names = {t.name for t in out.tasks}
+    assert "Notify Success" not in names and "Notify Failure" not in names
+    transform = next(t for t in out.tasks if t.task_key == "transform")
+    assert transform.notifications["destination"] == "email"
+    assert set(transform.notifications["events"]) == {"on_success", "on_failure"}
+
+
+def test_lookup_upstream_collapses():
+    """A Lookup followed by a failure-notify Web collapses onto the Lookup task."""
+    lookup = LookupActivity(name="Read Control", task_key="read_control")
+    notify = WebActivity(
+        name="Alert",
+        task_key="alert",
+        url="https://x",
+        method="POST",
+        depends_on=[Dependency(task_key="read_control", outcome="Failed")],
+    )
+    p = Pipeline(name="p", tasks=[lookup, notify])
+    out = apply_configuration(p, TranslationConfiguration(notify_destination="email", notify_args={"addresses": "a@x"}))
+    assert "Alert" not in {t.name for t in out.tasks}
+    read = next(t for t in out.tasks if t.task_key == "read_control")
+    assert read.notifications["destination"] == "email"
+    assert read.notifications["events"] == ["on_failure"]
+
+
+def test_generic_preparer_wires_notifications_on_non_copy_task():
+    """prepare_activity wires a stamped notification spec into the task for any type, not just Copy."""
+    from orchestra.preparer.workflow_preparer import prepare_activity
+
+    notebook = NotebookActivity(
+        name="Transform",
+        task_key="transform",
+        notebook_path="/t",
+        notifications={"destination": "email", "args": {"addresses": ["a@x.com"]}, "events": ["on_failure"]},
+    )
+    prepared = prepare_activity(notebook)
+    assert prepared.task["email_notifications"] == {"on_failure": ["a@x.com"]}
+
+
+def test_web_upstream_is_not_a_notify_target():
+    """A WebActivity following another WebActivity is not treated as a notify group (web->web)."""
+    work = WebActivity(name="Call API", task_key="call_api", url="https://api", method="POST")
+    notify = WebActivity(
+        name="Notify",
+        task_key="notify",
+        url="https://x",
+        method="POST",
+        depends_on=[Dependency(task_key="call_api", outcome="Succeeded")],
+    )
+    p = Pipeline(name="p", tasks=[work, notify])
+    assert "notify_destination" not in {o.option_id for o in gather_options(p, []).options}
+
+
+def _pipeline_with_notify() -> Pipeline:
     copy = CopyActivity(name="Load Curated", task_key="load_curated")
     notify_ok = WebActivity(
         name="Notify Success",
@@ -45,81 +125,81 @@ def _pipeline_with_copy_notify() -> Pipeline:
 
 
 def test_option_surfaces_and_followups_are_gated_by_answer():
-    p = _pipeline_with_copy_notify()
+    p = _pipeline_with_notify()
     ids = {o.option_id for o in gather_options(p, []).options}
-    assert "copy_notify_destination" in ids
+    assert "notify_destination" in ids
     # follow-ups not shown until a destination is chosen
-    assert "copy_notify_email_recipients" not in ids
-    assert "copy_notify_slack_url" not in ids
+    assert "notify_email_recipients" not in ids
+    assert "notify_slack_url" not in ids
 
-    email_ids = {o.option_id for o in gather_options(p, [], answers={"copy_notify_destination": "email"}).options}
-    assert "copy_notify_email_recipients" in email_ids
-    assert "copy_notify_slack_url" not in email_ids
+    email_ids = {o.option_id for o in gather_options(p, [], answers={"notify_destination": "email"}).options}
+    assert "notify_email_recipients" in email_ids
+    assert "notify_slack_url" not in email_ids
 
-    slack_ids = {o.option_id for o in gather_options(p, [], answers={"copy_notify_destination": "slack"}).options}
-    assert "copy_notify_slack_url" in slack_ids
-    assert "copy_notify_destination_name" in slack_ids
-    assert "copy_notify_email_recipients" not in slack_ids
+    slack_ids = {o.option_id for o in gather_options(p, [], answers={"notify_destination": "slack"}).options}
+    assert "notify_slack_url" in slack_ids
+    assert "notify_destination_name" in slack_ids
+    assert "notify_email_recipients" not in slack_ids
 
 
 def test_chain_surfaces_every_sdk_field_for_destination():
     """Each SDK field of the chosen destination becomes its own follow-up option,
     in registry order (required first), so the agent can prompt sequentially."""
-    p = _pipeline_with_copy_notify()
-    webhook_ids = [o.option_id for o in gather_options(p, [], answers={"copy_notify_destination": "webhook"}).options]
+    p = _pipeline_with_notify()
+    webhook_ids = [o.option_id for o in gather_options(p, [], answers={"notify_destination": "webhook"}).options]
     # SDK fields surface in registry order (required url first), then name + events
-    webhook_fields = [i for i in webhook_ids if i.startswith("copy_notify_webhook")]
+    webhook_fields = [i for i in webhook_ids if i.startswith("notify_webhook")]
     assert webhook_fields == [
-        "copy_notify_webhook_url",
-        "copy_notify_webhook_username",
-        "copy_notify_webhook_password",
+        "notify_webhook_url",
+        "notify_webhook_username",
+        "notify_webhook_password",
     ]
-    assert "copy_notify_destination_name" in webhook_ids
-    assert "copy_notify_events" in webhook_ids
+    assert "notify_destination_name" in webhook_ids
+    assert "notify_events" in webhook_ids
 
-    slack_ids = [o.option_id for o in gather_options(p, [], answers={"copy_notify_destination": "slack"}).options]
-    slack_fields = [i for i in slack_ids if i.startswith("copy_notify_slack")]
+    slack_ids = [o.option_id for o in gather_options(p, [], answers={"notify_destination": "slack"}).options]
+    slack_fields = [i for i in slack_ids if i.startswith("notify_slack")]
     assert slack_fields == [
-        "copy_notify_slack_url",
-        "copy_notify_slack_channel_id",
-        "copy_notify_slack_oauth_token",
+        "notify_slack_url",
+        "notify_slack_channel_id",
+        "notify_slack_oauth_token",
     ]
 
 
 def test_answered_field_drops_out_of_the_chain():
     """Already-answered follow-ups are filtered, so the chain advances field by field."""
-    p = _pipeline_with_copy_notify()
-    answers = {"copy_notify_destination": "slack", "copy_notify_slack_url": "https://hooks.slack.com/x"}
+    p = _pipeline_with_notify()
+    answers = {"notify_destination": "slack", "notify_slack_url": "https://hooks.slack.com/x"}
     ids = {o.option_id for o in gather_options(p, [], answers=answers).options}
-    assert "copy_notify_slack_url" not in ids  # answered -> gone
-    assert "copy_notify_slack_channel_id" in ids  # still pending
+    assert "notify_slack_url" not in ids  # answered -> gone
+    assert "notify_slack_channel_id" in ids  # still pending
 
 
-def test_collect_copy_notify_args_reads_only_chosen_destination_fields():
+def test_collect_notify_args_reads_only_chosen_destination_fields():
     answers = {
-        "copy_notify_destination": "webhook",
-        "copy_notify_webhook_url": "https://hooks.example.com",
-        "copy_notify_webhook_username": "svc",
-        "copy_notify_webhook_password": "",  # blank -> omitted
-        "copy_notify_slack_url": "https://leftover.slack",  # belongs to a different dest -> ignored
+        "notify_destination": "webhook",
+        "notify_webhook_url": "https://hooks.example.com",
+        "notify_webhook_username": "svc",
+        "notify_webhook_password": "",  # blank -> omitted
+        "notify_slack_url": "https://leftover.slack",  # belongs to a different dest -> ignored
     }
-    args = collect_copy_notify_args(answers)
+    args = collect_notify_args(answers)
     assert args == {"url": "https://hooks.example.com", "username": "svc"}
 
 
 def test_keep_default_does_not_collapse():
-    p = _pipeline_with_copy_notify()
+    p = _pipeline_with_notify()
     out = apply_configuration(p, TranslationConfiguration())  # default = keep
     names = {t.name for t in out.tasks}
     assert {"Notify Success", "Notify Failure"} <= names  # still present
 
 
 def test_email_collapse_drops_notifies_and_stamps_copy():
-    p = _pipeline_with_copy_notify()
+    p = _pipeline_with_notify()
     cfg = TranslationConfiguration(
-        copy_notify_destination="email",
-        copy_notify_args={"addresses": "a@x.com, b@x.com"},
-        copy_notify_events="both",
+        notify_destination="email",
+        notify_args={"addresses": "a@x.com, b@x.com"},
+        notify_events="both",
     )
     out = apply_configuration(p, cfg)
     names = {t.name for t in out.tasks}
@@ -134,11 +214,11 @@ def test_email_collapse_drops_notifies_and_stamps_copy():
 
 
 def test_webhook_collapse_stamps_resolved_args():
-    p = _pipeline_with_copy_notify()
+    p = _pipeline_with_notify()
     cfg = TranslationConfiguration(
-        copy_notify_destination="webhook",
-        copy_notify_args={"url": "https://hooks.example.com", "username": "svc"},
-        copy_notify_events="both",
+        notify_destination="webhook",
+        notify_args={"url": "https://hooks.example.com", "username": "svc"},
+        notify_events="both",
     )
     out = apply_configuration(p, cfg)
     copy = next(t for t in out.tasks if t.task_key == "load_curated")
@@ -147,11 +227,11 @@ def test_webhook_collapse_stamps_resolved_args():
 
 
 def test_events_restriction_to_failure_only():
-    p = _pipeline_with_copy_notify()
+    p = _pipeline_with_notify()
     cfg = TranslationConfiguration(
-        copy_notify_destination="email",
-        copy_notify_args={"addresses": "a@x.com"},
-        copy_notify_events="on_failure",
+        notify_destination="email",
+        notify_args={"addresses": "a@x.com"},
+        notify_events="on_failure",
     )
     out = apply_configuration(p, cfg)
     copy = next(t for t in out.tasks if t.task_key == "load_curated")
@@ -204,23 +284,23 @@ def test_build_destination_config_passes_only_supplied_optional_fields():
     assert cfg.slack.kwargs == {"url": "https://hooks"}  # blank channel_id dropped
 
 
-def test_validate_answer_accepts_free_text_copy_notify_options():
-    """Regression: free-text copy_notify follow-ups must validate (were rejected
+def test_validate_answer_accepts_free_text_notify_options():
+    """Regression: free-text notify follow-ups must validate (were rejected
     as 'Unknown option_id', so email recipients never reached the config)."""
     import pytest
 
     from orchestra.adapter.operations import validate_answer
 
     # free-text options accept any value
-    assert validate_answer("copy_notify_email_recipients", "a@x.com, b@x.com") == "a@x.com, b@x.com"
-    assert validate_answer("copy_notify_webhook_url", "https://hooks.example.com") == "https://hooks.example.com"
-    assert validate_answer("copy_notify_slack_oauth_token", "xoxb-123") == "xoxb-123"
-    assert validate_answer("copy_notify_pagerduty_integration_key", "abc123") == "abc123"
-    assert validate_answer("copy_notify_destination_name", "orchestra-oncall") == "orchestra-oncall"
+    assert validate_answer("notify_email_recipients", "a@x.com, b@x.com") == "a@x.com, b@x.com"
+    assert validate_answer("notify_webhook_url", "https://hooks.example.com") == "https://hooks.example.com"
+    assert validate_answer("notify_slack_oauth_token", "xoxb-123") == "xoxb-123"
+    assert validate_answer("notify_pagerduty_integration_key", "abc123") == "abc123"
+    assert validate_answer("notify_destination_name", "orchestra-oncall") == "orchestra-oncall"
     # enum-backed options still validate against their enum
-    assert validate_answer("copy_notify_destination", "email") == "email"
+    assert validate_answer("notify_destination", "email") == "email"
     with pytest.raises(ValueError):
-        validate_answer("copy_notify_destination", "carrier_pigeon")
+        validate_answer("notify_destination", "carrier_pigeon")
     # genuinely unknown ids are still rejected
     with pytest.raises(ValueError):
         validate_answer("totally_unknown_option", "x")
@@ -270,11 +350,11 @@ def test_provision_notification_destinations_walk(monkeypatch):
     import orchestra.preparer.notifications as nm
 
     monkeypatch.setattr(nm, "_ensure_destination", lambda dest, name, args: "dest-xyz-9")
-    p = _pipeline_with_copy_notify()
+    p = _pipeline_with_notify()
     cfg = TranslationConfiguration(
-        copy_notify_destination="slack",
-        copy_notify_args={"url": "https://hooks.slack.com/x"},
-        copy_notify_events="both",
+        notify_destination="slack",
+        notify_args={"url": "https://hooks.slack.com/x"},
+        notify_events="both",
     )
     stamped = apply_configuration(p, cfg)
     provisioned, messages = provision_notification_destinations(stamped)
@@ -291,9 +371,9 @@ def test_provision_walk_skips_email_and_keep(monkeypatch):
         raise AssertionError("SDK must not be called for email")
 
     monkeypatch.setattr(nm, "_ensure_destination", _boom)
-    p = _pipeline_with_copy_notify()
+    p = _pipeline_with_notify()
     cfg = TranslationConfiguration(
-        copy_notify_destination="email", copy_notify_args={"addresses": "a@x.com"}, copy_notify_events="both"
+        notify_destination="email", notify_args={"addresses": "a@x.com"}, notify_events="both"
     )
     provisioned, messages = provision_notification_destinations(apply_configuration(p, cfg))
     copy = next(t for t in provisioned.tasks if t.task_key == "load_curated")

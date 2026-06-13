@@ -169,17 +169,17 @@ MOTIF_STAGED_LOAD_SYNAPSE = MotifDefinition(
     notebook_template="staged_load.py",
 )
 
-MOTIF_COPY_AND_NOTIFY = MotifDefinition(
-    motif_id="copy_and_notify",
-    display_name="Copy and Notify",
+MOTIF_ACTIVITY_AND_NOTIFY = MotifDefinition(
+    motif_id="activity_and_notify",
+    display_name="Activity and Notify",
     description=(
-        "A Copy activity followed by WebActivity calls for success/failure "
-        "notifications (Logic Apps, Slack, email).  Translates to a notebook "
-        "task with built-in notification via job email/webhook settings."
+        "Any activity (Copy, Notebook, Lookup, stored procedure, …) followed by WebActivity "
+        "calls for success/failure notifications (Logic Apps, Slack, email).  Collapses to the "
+        "upstream task with built-in notification via job email/webhook settings."
     ),
-    expected_activity_types=("Copy", "WebActivity"),
-    databricks_replacement="notebook_with_notification",
-    notebook_template="copy_and_notify.py",
+    expected_activity_types=("*", "WebActivity"),
+    databricks_replacement="task_with_notification",
+    notebook_template=None,
 )
 
 MOTIF_LAKEFLOW_CONNECT_DATABASE = MotifDefinition(
@@ -207,6 +207,6 @@ ALL_MOTIFS: tuple[MotifDefinition, ...] = (
     MOTIF_FILE_EXISTENCE_VALIDATION,
     MOTIF_SCD_TYPE_2,
     MOTIF_STAGED_LOAD_SYNAPSE,
-    MOTIF_COPY_AND_NOTIFY,
+    MOTIF_ACTIVITY_AND_NOTIFY,
     MOTIF_LAKEFLOW_CONNECT_DATABASE,
 )

@@ -239,7 +239,7 @@ def translate_pipeline(
     )
 
 
-_OPT_IN_ONLY_MOTIFS: frozenset[str] = frozenset({"copy_and_notify"})
+_OPT_IN_ONLY_MOTIFS: frozenset[str] = frozenset({"activity_and_notify"})
 
 
 def _filter_motifs_for_collapse(
@@ -259,7 +259,7 @@ def _filter_motifs_for_collapse(
         The subset of motifs to pass to
         :func:`orchestra.motifs.collapser.collapse_motifs`.
     """
-    # copy_and_notify is destructive (it drops the notify activities in favour
+    # activity_and_notify is destructive (it drops the notify activities in favour
     # of Databricks job-task notifications), so it is never collapsed implicitly
     # -- only when the user explicitly opts into a notification destination.
     if motif_consolidations is None:

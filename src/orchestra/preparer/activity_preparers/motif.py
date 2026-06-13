@@ -1,16 +1,26 @@
-"""Preparer for MotifActivity -> notebook_task or consolidated pipeline_task."""
+"""Preparer for MotifActivity -> notebook_task, for_each_task, or consolidated pipeline_task."""
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING, Any
 
-from orchestra.models.dab import SetupTask
+from orchestra.models.dab import DabNotebook, SetupTask
 from orchestra.preparer.activity_preparers.helpers import build_notebook_activity_task
-from orchestra.preparer.code_generator import generate_motif_notebook
+from orchestra.preparer.code_generator import (
+    generate_metadata_driven_control_lookup_notebook,
+    generate_metadata_driven_item_notebook,
+    generate_motif_notebook,
+)
 from orchestra.preparer.workflow_preparer import PreparedActivity, build_common_task_fields
 
 if TYPE_CHECKING:
     from orchestra.models.ir import MotifActivity
+
+# Default destination-table pattern when the collapsed Copy did not name a concrete sink.
+_DEFAULT_SINK_TABLE_PATTERN = "raw.{schema_name}_{table_name}"
+# Mirrors the ForEach preparer's default fan-out.
+_FOR_EACH_CONCURRENCY = 20
 
 
 def prepare(activity: MotifActivity, *, scope: str = "") -> PreparedActivity:
@@ -22,19 +32,87 @@ def prepare(activity: MotifActivity, *, scope: str = "") -> PreparedActivity:
 
     Returns:
         A :class:`PreparedActivity` whose shape depends on the motif:
-        metadata-driven motifs marked for consolidation emit a
-        consolidated Lakeflow Connect pipeline resource and a
-        ``pipeline_task``; every other motif keeps the legacy scaffold
-        notebook task.
+
+        * Metadata-driven bulk copy the user **consolidated into a managed pipeline** (Lakeflow
+          Connect) becomes a single ``pipeline_task``.
+        * Metadata-driven bulk copy on the **default** path (not consolidated;
+          ``databricks_replacement == "for_each_ingestion"``) becomes a ``for_each_task`` that runs
+          one Spark JDBC read per source table -- instead of a single notebook looping internally.
+        * Every other motif keeps the scaffold notebook task.
     """
     if activity.consolidate_metadata_driven and activity.lookup_values:
         return _prepare_consolidated_metadata_driven(activity)
+    if activity.databricks_replacement == "for_each_ingestion":
+        return _prepare_metadata_driven_for_each(activity)
     task, notebooks = build_notebook_activity_task(
         activity,
         notebook_relative_path=f"notebooks/{activity.task_key}.py",
         notebook_content=generate_motif_notebook(activity),
     )
     return PreparedActivity(task=task, notebooks=notebooks)
+
+
+def _prepare_metadata_driven_for_each(activity: MotifActivity) -> PreparedActivity:
+    """Returns a ``for_each_task`` that ingests each source table via its own Spark JDBC read.
+
+    This is the default (non-Lakeflow-Connect) translation of the metadata-driven bulk-copy motif.
+    Each iteration runs :func:`generate_metadata_driven_item_notebook` for one control-table row
+    (passed as ``{{input}}``), replacing the former single-notebook Python ``for`` loop with a
+    native Databricks for-each fan-out.
+
+    The iteration ``inputs`` come from one of two sources:
+
+    * **Static** -- when the control rows were materialised (``activity.lookup_values``), they are
+      inlined as a literal JSON array.
+    * **Runtime** -- otherwise a control-table lookup notebook task is emitted (queries the metadata
+      table and publishes the rows as the ``items`` task value); ``inputs`` references
+      ``{{tasks.<lookup>.values.items}}`` and the for-each task depends on it.
+    """
+    config = activity.motif_config or {}
+    task_key = activity.task_key
+    copy_scope = config.get("copy_scope") or task_key
+    lookup_scope = config.get("lookup_scope") or task_key
+    sink_table_pattern = config.get("sink_table") or _DEFAULT_SINK_TABLE_PATTERN
+
+    item_notebook_path = f"notebooks/{task_key}_ingest.py"
+    notebooks = [
+        DabNotebook(
+            relative_path=item_notebook_path,
+            content=generate_metadata_driven_item_notebook(scope=copy_scope, sink_table_pattern=sink_table_pattern),
+        )
+    ]
+    inner_task: dict[str, Any] = {
+        "task_key": f"{task_key}_ingest",
+        "notebook_task": {
+            "notebook_path": f"../src/{item_notebook_path}",
+            "base_parameters": {"item": "{{input}}"},
+        },
+    }
+
+    task = build_common_task_fields(activity)
+    extra_tasks: list[dict[str, Any]] = []
+
+    if activity.lookup_values:
+        inputs = json.dumps(activity.lookup_values)
+    else:
+        lookup_key = f"{task_key}_control_lookup"
+        lookup_notebook_path = f"notebooks/{lookup_key}.py"
+        notebooks.append(
+            DabNotebook(
+                relative_path=lookup_notebook_path,
+                content=generate_metadata_driven_control_lookup_notebook(
+                    scope=lookup_scope, lookup_query=config.get("lookup_query", "")
+                ),
+            )
+        )
+        extra_tasks.append(
+            {"task_key": lookup_key, "notebook_task": {"notebook_path": f"../src/{lookup_notebook_path}"}}
+        )
+        task["depends_on"] = [*(task.get("depends_on") or []), {"task_key": lookup_key}]
+        inputs = f"{{{{tasks.{lookup_key}.values.items}}}}"
+
+    task["for_each_task"] = {"inputs": inputs, "task": inner_task, "concurrency": _FOR_EACH_CONCURRENCY}
+    return PreparedActivity(task=task, notebooks=notebooks, extra_tasks=extra_tasks)
 
 
 def _prepare_consolidated_metadata_driven(activity: MotifActivity) -> PreparedActivity:

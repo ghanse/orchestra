@@ -187,6 +187,17 @@ def prepare_activity(
         prepared = preparer_fn(activity, scope=scope)
 
     prepared.task = _stamp_compute_mode(prepared.task, activity.compute_mode)
+
+    # Collapsed activity_and_notify: wire the chosen Databricks notification destination onto this
+    # task (creating it via the SDK for webhook types). Generic across task types -- any activity the
+    # adapter stamped a notification spec onto, not just Copy.
+    if activity.notifications:
+        from orchestra.preparer.notifications import resolve_task_notifications
+
+        notification_keys, notification_setup = resolve_task_notifications(activity.notifications)
+        prepared.task = {**prepared.task, **notification_keys}
+        prepared.setup_tasks = prepared.setup_tasks + notification_setup
+
     return prepared
 
 

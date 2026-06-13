@@ -5,7 +5,7 @@ from __future__ import annotations
 from orchestra.models.adf_ast import AdfActivity, AdfDependency, AdfPipeline
 from orchestra.models.ir import Activity, Dependency, Pipeline
 from orchestra.models.motifs import (
-    MOTIF_COPY_AND_NOTIFY,
+    MOTIF_ACTIVITY_AND_NOTIFY,
     MOTIF_METADATA_DRIVEN_BULK_COPY,
     DetectedMotif,
 )
@@ -80,7 +80,7 @@ def test_convex_motif_collapse_is_tolerated():
     assert "missing_edge" not in _codes(result)
 
 
-def test_copy_and_notify_collapse_is_equivalent():
+def test_activity_and_notify_collapse_is_equivalent():
     # ADF: Copy -> {NotifySuccess, NotifyFailure}.  All three collapse.
     adf = AdfPipeline(
         name="p",
@@ -99,7 +99,7 @@ def test_copy_and_notify_collapse_is_equivalent():
         ],
     )
     motif = DetectedMotif(
-        definition=MOTIF_COPY_AND_NOTIFY,
+        definition=MOTIF_ACTIVITY_AND_NOTIFY,
         matched_activities=["Copy", "NotifySuccess", "NotifyFailure"],
     )
     collapsed = collapse_motifs(pre, [motif])
@@ -191,7 +191,7 @@ def test_merged_outcome_is_warned_not_blocking():
         name="p",
         tasks=[_task("E"), _task("a1", [("E", "Succeeded")]), _task("a2", [("E", "Failed")])],
     )
-    motif = DetectedMotif(definition=MOTIF_COPY_AND_NOTIFY, matched_activities=["a1", "a2"])
+    motif = DetectedMotif(definition=MOTIF_ACTIVITY_AND_NOTIFY, matched_activities=["a1", "a2"])
     collapsed = collapse_motifs(pre, [motif])
 
     result = check_dag_equivalence(adf, collapsed)

@@ -11,8 +11,8 @@ from orchestra.models.adf_ast import (
     AdfPipeline,
 )
 from orchestra.models.motifs import (
+    MOTIF_ACTIVITY_AND_NOTIFY,
     MOTIF_CDC_CHANGE_TRACKING,
-    MOTIF_COPY_AND_NOTIFY,
     MOTIF_FILE_EXISTENCE_VALIDATION,
     MOTIF_FILE_LANDING_ZONE_PROCESSING,
     MOTIF_INCREMENTAL_LOAD_WATERMARK,
@@ -105,7 +105,7 @@ def detect_motifs(
         (MOTIF_FILE_EXISTENCE_VALIDATION, _detect_file_existence_validation),
         (MOTIF_SCD_TYPE_2, _detect_scd_type_2),
         (MOTIF_STAGED_LOAD_SYNAPSE, _detect_staged_load_synapse),
-        (MOTIF_COPY_AND_NOTIFY, _detect_copy_and_notify),
+        (MOTIF_ACTIVITY_AND_NOTIFY, _detect_activity_and_notify),
     ]
 
     for motif_def, detector_fn in _detectors:
@@ -476,22 +476,27 @@ def _detect_file_landing_zone(
     return results
 
 
-def _detect_copy_and_notify(
+def _detect_activity_and_notify(
     activities: list[AdfActivity],
     by_name: dict[str, AdfActivity],
     definitions: AdfDefinitions,
     claimed: set[str],
 ) -> list[DetectedMotif]:
-    """Detects copy-and-notify pattern."""
-    results: list[DetectedMotif] = []
-    copies = _activities_of_type(activities, "Copy", claimed)
+    """Detects the activity-and-notify pattern: any activity followed by notification Web calls.
 
-    for copy_act in copies:
+    Generalised beyond Copy -- any upstream activity (Copy, Notebook, Lookup, stored procedure, …)
+    that is directly followed by a WebActivity which looks like a notification (Logic Apps / email /
+    Slack / Teams / webhook keywords, or a success/failure-conditioned dependency) is reported.
+    """
+    results: list[DetectedMotif] = []
+    upstream_acts = [a for a in activities if a.type != "WebActivity" and a.name not in claimed]
+
+    for upstream_act in upstream_acts:
         downstream_webs: list[AdfActivity] = []
         for activity in activities:
             if activity.name in claimed:
                 continue
-            if activity.type == "WebActivity" and _depends_on(activity, copy_act.name):
+            if activity.type == "WebActivity" and _depends_on(activity, upstream_act.name):
                 downstream_webs.append(activity)
 
         if not downstream_webs:
@@ -509,27 +514,28 @@ def _detect_copy_and_notify(
 
         if not notification_found:
             # If there is no notification hint, we still accept if the Web
-            # activity depends on Copy with success/failure conditions
+            # activity depends on the upstream with success/failure conditions
             for web in downstream_webs:
                 if web.depends_on:
                     for dep in web.depends_on:
-                        if dep.activity == copy_act.name and dep.dependency_conditions:
+                        if dep.activity == upstream_act.name and dep.dependency_conditions:
                             conds = [cond.lower() for cond in dep.dependency_conditions]
                             if "failed" in conds or "completed" in conds:
                                 notification_found = True
                                 notes.append(
-                                    f"WebActivity '{web.name}' triggers on {dep.dependency_conditions} of Copy"
+                                    f"WebActivity '{web.name}' triggers on "
+                                    f"{dep.dependency_conditions} of '{upstream_act.name}'"
                                 )
 
         if not notification_found:
             continue
 
-        matched = [copy_act.name] + [web.name for web in downstream_webs]
-        source_hint = _infer_source_type(copy_act, definitions)
+        matched = [upstream_act.name] + [web.name for web in downstream_webs]
+        source_hint = _infer_source_type(upstream_act, definitions)
 
         _record_motif(
             results,
-            definition=MOTIF_COPY_AND_NOTIFY,
+            definition=MOTIF_ACTIVITY_AND_NOTIFY,
             matched_activities=matched,
             source_type_hint=source_hint,
             confidence_notes=notes,

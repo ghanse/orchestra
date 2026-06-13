@@ -23,7 +23,6 @@ from orchestra.adapter.constants import MOTIF_CONSOLIDATE_OPTION_PREFIX
 from orchestra.adapter.models import (
     DEFAULT_CONFIGURATION,
     CopyActivityParadigm,
-    CopyNotifyDestination,
     LakeflowConnectorType,
     MetadataDrivenAccess,
     MetadataDrivenConsolidate,
@@ -31,6 +30,7 @@ from orchestra.adapter.models import (
     MetadataDrivenSize,
     MotifConsolidate,
     NonDatabricksTaskCompute,
+    NotifyDestination,
     NotifyEvents,
     PendingOptions,
     TranslationConfiguration,
@@ -39,7 +39,7 @@ from orchestra.adapter.models import (
 )
 from orchestra.adapter.operations import (
     apply_configuration,
-    collect_copy_notify_args,
+    collect_notify_args,
     collect_workspace_artifact_paths,
     detect_databricks_hosts,
     gather_options,
@@ -243,7 +243,7 @@ def _build_parser() -> argparse.ArgumentParser:
         default=[],
         metavar="OPTION_ID=VALUE",
         help=(
-            "A collected answer as OPTION_ID=VALUE (e.g. --answer copy_notify_destination=email). "
+            "A collected answer as OPTION_ID=VALUE (e.g. --answer notify_destination=email). "
             "Repeatable; pass one per option the user answered. Values may contain '=' (only the "
             "first '=' splits the pair)."
         ),
@@ -550,7 +550,7 @@ def _run_modify(args: argparse.Namespace) -> int:
         for pipeline in pipelines
     ]
     # Prompt-time provisioning: create (or reuse) the Databricks notification
-    # destination for any non-email copy_and_notify spec now, so it exists and the
+    # destination for any non-email activity_and_notify spec now, so it exists and the
     # resolved id is baked into the report.  Email needs no destination.
     provisioned_pipelines = []
     for pipeline in stamped_pipelines:
@@ -730,12 +730,12 @@ def _configuration_from_answers(answers: dict[str, str]) -> TranslationConfigura
         metadata_driven_lookup_tool=MetadataDrivenLookupTool(
             validated.get("metadata_driven_lookup_tool", DEFAULT_CONFIGURATION.metadata_driven_lookup_tool)
         ),
-        copy_notify_destination=CopyNotifyDestination(
-            validated.get("copy_notify_destination", DEFAULT_CONFIGURATION.copy_notify_destination)
+        notify_destination=NotifyDestination(
+            validated.get("notify_destination", DEFAULT_CONFIGURATION.notify_destination)
         ),
-        copy_notify_events=NotifyEvents(validated.get("copy_notify_events", DEFAULT_CONFIGURATION.copy_notify_events)),
-        copy_notify_destination_name=validated.get("copy_notify_destination_name", ""),
-        copy_notify_args=collect_copy_notify_args(validated),
+        notify_events=NotifyEvents(validated.get("notify_events", DEFAULT_CONFIGURATION.notify_events)),
+        notify_destination_name=validated.get("notify_destination_name", ""),
+        notify_args=collect_notify_args(validated),
         motif_consolidations=motif_consolidations,
     )
 

@@ -1488,6 +1488,78 @@ def _generate_generic_copy_body(activity: CopyActivity) -> str:
     )
 
 
+def generate_metadata_driven_item_notebook(*, scope: str, sink_table_pattern: str) -> str:
+    """Generates the per-iteration notebook for a metadata-driven for_each_task.
+
+    Each ``for_each_task`` iteration runs this notebook with the current control-table row passed as
+    the ``item`` widget (set to ``{{input}}``). It reads that one source table over Spark JDBC and
+    writes it to Delta -- the per-row body of the former in-notebook loop, now one task per table.
+
+    Args:
+        scope: Secret scope holding ``jdbc-url`` / ``jdbc-user`` / ``jdbc-password`` for the source.
+        sink_table_pattern: ``str.format`` pattern for the destination table, e.g.
+            ``"raw.{schema_name}_{table_name}"``.
+    """
+    return "# Databricks notebook source\n" + textwrap.dedent(f"""\
+        import json
+
+        # The for_each_task passes the current control-table row as the "item" widget via {{{{input}}}}.
+        item_raw = dbutils.widgets.get("item")
+        item = json.loads(item_raw) if item_raw else {{}}
+        schema_name = item.get("schema_name", "dbo")
+        table_name = item.get("table_name") or item.get("name") or "UNKNOWN_TABLE"
+        target = {sink_table_pattern!r}.format(schema_name=schema_name, table_name=table_name)
+        query = f"SELECT * FROM {{schema_name}}.{{table_name}}"
+
+        jdbc_url = dbutils.secrets.get(scope="{scope}", key="jdbc-url")
+        jdbc_user = dbutils.secrets.get(scope="{scope}", key="jdbc-user")
+        jdbc_password = dbutils.secrets.get(scope="{scope}", key="jdbc-password")
+
+        (
+            spark.read.format("jdbc")
+            .option("url", jdbc_url)
+            .option("user", jdbc_user)
+            .option("password", jdbc_password)
+            .option("query", query)
+            .load()
+            .write.format("delta")
+            .mode("overwrite")
+            .option("overwriteSchema", "true")
+            .saveAsTable(target)
+        )
+        """)
+
+
+def generate_metadata_driven_control_lookup_notebook(*, scope: str, lookup_query: str) -> str:
+    """Generates the control-table lookup notebook that seeds a metadata-driven for_each_task.
+
+    Used when the control rows were not materialised at translation time: it queries the metadata
+    table over Spark JDBC and publishes the rows as the ``items`` task value, which the downstream
+    ``for_each_task`` consumes via ``{{tasks.<this>.values.items}}``.
+
+    Args:
+        scope: Secret scope holding the control DB's ``jdbc-*`` credentials.
+        lookup_query: SQL that returns one row per source table to ingest.
+    """
+    return "# Databricks notebook source\n" + textwrap.dedent(f"""\
+        jdbc_url = dbutils.secrets.get(scope="{scope}", key="jdbc-url")
+        jdbc_user = dbutils.secrets.get(scope="{scope}", key="jdbc-user")
+        jdbc_password = dbutils.secrets.get(scope="{scope}", key="jdbc-password")
+
+        control_query = {lookup_query!r}
+        control_df = (
+            spark.read.format("jdbc")
+            .option("url", jdbc_url)
+            .option("user", jdbc_user)
+            .option("password", jdbc_password)
+            .option("query", control_query)
+            .load()
+        )
+        items = [row.asDict() for row in control_df.collect()]
+        dbutils.jobs.taskValues.set(key="items", value=items)
+        """)
+
+
 def generate_motif_notebook(activity: MotifActivity) -> str:
     """Generates a notebook scaffold for a collapsed motif activity."""
     return _build_motif_notebook(

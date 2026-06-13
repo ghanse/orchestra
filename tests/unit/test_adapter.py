@@ -822,13 +822,13 @@ class TestCli:
         # No answers: only the destination question surfaces.
         assert adapter_cli_main(["inspect", str(report_path)]) == 0
         ids = {o["option_id"] for o in json.loads(capsys.readouterr().out)["pipelines"][0]["options"]}
-        assert "copy_notify_destination" in ids
-        assert "copy_notify_email_recipients" not in ids
+        assert "notify_destination" in ids
+        assert "notify_email_recipients" not in ids
 
         # Pass the destination answer via --answer: the email follow-up now appears.
-        assert adapter_cli_main(["inspect", str(report_path), "--answer", "copy_notify_destination=email"]) == 0
+        assert adapter_cli_main(["inspect", str(report_path), "--answer", "notify_destination=email"]) == 0
         ids = {o["option_id"] for o in json.loads(capsys.readouterr().out)["pipelines"][0]["options"]}
-        assert "copy_notify_email_recipients" in ids
+        assert "notify_email_recipients" in ids
 
     def test_inspect_rejects_malformed_answer(self, tmp_path: Path):
         from orchestra.translator.engine import _pipeline_to_dict

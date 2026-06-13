@@ -248,31 +248,32 @@ as `--answer` flags to surface the next batch:
 
 ```bash
 "$PY" -m orchestra.adapter inspect <output_dir>/.work/translation_report.json \
-  --answer copy_notify_destination=email \
-  --answer copy_notify_email_recipients=alerts@example.com
+  --answer notify_destination=email \
+  --answer notify_email_recipients=alerts@example.com
 ```
 
-**Copy→Notify (`copy_and_notify`) motifs.** When a Copy activity is followed by
-notification Web activities, the adapter raises `copy_notify_destination`:
+**Activity→Notify (`activity_and_notify`) motifs.** When **any** activity (Copy,
+Notebook, Lookup, stored procedure, …) is followed by notification Web
+activities, the adapter raises `notify_destination`:
 `keep` (default) leaves the Web activities to translate directly — nothing is
 collapsed. Any other value (`email`, `slack`, `teams`, `pagerduty`, `webhook`)
-collapses the pattern: the Copy becomes the task and the notifications become
-Databricks job-task `on_success`/`on_failure` notifications routed to that
-destination (the ADF Web activity URL/body is not used). Once a non-`keep`
+collapses the pattern: the upstream activity becomes the task and the
+notifications become Databricks job-task `on_success`/`on_failure` notifications
+routed to that destination (the ADF Web activity URL/body is not used). Once a non-`keep`
 destination is chosen, the adapter chains **one follow-up per Databricks-SDK
 field** of that destination, required fields first, so each is prompted
 sequentially (re-run `inspect` with the accumulated `--answer` flags after each answer to surface the next):
 
 | Destination | Chained field options (SDK arg) |
 |-------------|---------------------------------|
-| `email`     | `copy_notify_email_recipients` (`addresses`, comma-separated) |
-| `slack`     | `copy_notify_slack_url` (`url`), `copy_notify_slack_channel_id` (`channel_id`, optional), `copy_notify_slack_oauth_token` (`oauth_token`, optional) |
-| `teams`     | `copy_notify_teams_url` (`url`) |
-| `pagerduty` | `copy_notify_pagerduty_integration_key` (`integration_key`) |
-| `webhook`   | `copy_notify_webhook_url` (`url`), `copy_notify_webhook_username` (`username`, optional), `copy_notify_webhook_password` (`password`, optional) |
+| `email`     | `notify_email_recipients` (`addresses`, comma-separated) |
+| `slack`     | `notify_slack_url` (`url`), `notify_slack_channel_id` (`channel_id`, optional), `notify_slack_oauth_token` (`oauth_token`, optional) |
+| `teams`     | `notify_teams_url` (`url`) |
+| `pagerduty` | `notify_pagerduty_integration_key` (`integration_key`) |
+| `webhook`   | `notify_webhook_url` (`url`), `notify_webhook_username` (`username`, optional), `notify_webhook_password` (`password`, optional) |
 
-All destinations also take an optional `copy_notify_destination_name` and
-`copy_notify_events` (both/on_failure/on_success). Optional fields left blank are
+All destinations also take an optional `notify_destination_name` and
+`notify_events` (both/on_failure/on_success). Optional fields left blank are
 omitted so the SDK applies its defaults. For **non-email** destinations, the
 `modify` phase creates (or reuses by display name) the Databricks notification
 destination via the SDK **as soon as you submit the answers** — it validates the
@@ -298,7 +299,11 @@ to `modify` via `--lookup-csv` (no intermediate JSON file):
     --lookup-csv "<csv-file-path-or-literal-csv-string>"
 ```
 
-When no metadata-driven motif is consolidated, `--lookup-csv` is omitted.
+When no metadata-driven motif is consolidated, `--lookup-csv` is omitted. In that default
+(non-consolidated) case the motif becomes a Databricks **for-each task** that runs one Spark JDBC
+read per source table — its iteration inputs are the resolved lookup rows when available, otherwise a
+control-table lookup task seeds them at run time. (Consolidating instead emits one managed Lakeflow
+Connect ingestion pipeline.)
 
 #### Legacy flow details
 

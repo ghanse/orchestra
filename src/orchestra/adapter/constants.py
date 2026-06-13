@@ -81,8 +81,8 @@ LAKEFLOW_CONNECT_MOTIF_REPLACEMENTS: Final[frozenset[str]] = frozenset(
 
 DATABASE_SOURCE_TYPE_HINT: Final[str] = "database"
 
-OPTION_COPY_NOTIFY_DESTINATION: Final[str] = "copy_notify_destination"
-OPTION_COPY_NOTIFY_EVENTS: Final[str] = "copy_notify_events"
-OPTION_COPY_NOTIFY_DESTINATION_NAME: Final[str] = "copy_notify_destination_name"
-# Per-field notification follow-up option ids (e.g. copy_notify_email_recipients,
-# copy_notify_slack_url) are defined by the _NOTIFY_FIELDS registry in operations.py.
+OPTION_NOTIFY_DESTINATION: Final[str] = "notify_destination"
+OPTION_NOTIFY_EVENTS: Final[str] = "notify_events"
+OPTION_NOTIFY_DESTINATION_NAME: Final[str] = "notify_destination_name"
+# Per-field notification follow-up option ids (e.g. notify_email_recipients,
+# notify_slack_url) are defined by the _NOTIFY_FIELDS registry in operations.py.

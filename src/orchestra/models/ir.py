@@ -96,7 +96,7 @@ class Activity:
     # configuration.  One of "serverless", "classic_single_node",
     # "classic_multi_node", "inherit", or None when no configuration were applied.
     compute_mode: str | None = None
-    # Collapsed copy_and_notify motif notification spec (set by the adapter
+    # Collapsed activity_and_notify motif notification spec (set by the adapter
     # when the user opts into a Databricks notification destination):
     # {destination, events:[on_success|on_failure], email_recipients,
     #  webhook_url, pagerduty_integration_key, destination_name}.

@@ -52,7 +52,7 @@ orchestra(command="migrate", parameters={
 ```
 
 **`migrate` is interactive when configuration options exist.** After translating, it checks whether
-any pipeline raises options it can't decide on its own (e.g. how to handle a `copy_and_notify` motif,
+any pipeline raises options it can't decide on its own (e.g. how to handle an `activity_and_notify` motif,
 metadata-driven bulk-copy consolidation, non-Databricks task compute). If so, it **does not package** —
 it returns `{"status": "needs_input", "pending_options": [{"pipeline_name", "options": [{option_id,
 prompt, rationale, options, default}, …]}, …], "report_path", "output_dir"}`. When you get that:
