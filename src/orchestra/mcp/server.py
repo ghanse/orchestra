@@ -115,6 +115,22 @@ def _bundle_output(p: dict[str, Any], out: Path) -> dict[str, Any]:
     return {"bundle": runner.read_tree(out)}
 
 
+def _noop() -> None:
+    """Cleanup placeholder used when there is no materialized source to remove."""
+
+
+def _pending_options(inspect_result: dict[str, Any]) -> list[dict[str, Any]]:
+    """Extract the per-pipeline configuration options still awaiting an answer.
+
+    Reads the payload :func:`_cmd_inspect` returns (``{"questions": {"pipelines": [...]}}``)
+    and keeps only pipelines that still have unanswered ``options`` — empty when nothing needs
+    input, which is the signal for ``migrate`` to package without pausing.
+    """
+    questions = inspect_result.get("questions") or {}
+    pipelines = questions.get("pipelines") or []
+    return [pipeline for pipeline in pipelines if pipeline.get("options")]
+
+
 # --- command handlers (one per adapter operation) -------------------------------------------------
 # Each takes the tool's `parameters` dict and returns a structured result. Required keys are accessed
 # with `p[...]` so a missing one raises KeyError, which the dispatcher turns into a clear error.
@@ -231,38 +247,106 @@ def _cmd_package(p: dict[str, Any]) -> dict[str, Any]:
 
 
 def _cmd_migrate(p: dict[str, Any]) -> dict[str, Any]:
+    """Run discover→convert→package, pausing for configuration when options are available.
+
+    Because an MCP call can't prompt mid-flight, ``migrate`` is interactive by *handing the
+    questions back to the agent*: after ``convert`` it inspects the report, and if any pipeline
+    still has pending configuration options it stops and returns ``status="needs_input"`` with the
+    ``pending_options``. The agent surfaces those to the user, then re-calls ``migrate`` with the
+    collected ``answers`` (``["option_id=value", ...]``). Dependent options are revealed as answers
+    accumulate, so the loop repeats until no options remain, at which point the answers are applied
+    and the bundle is packaged (``status="completed"``). Pass ``interactive=False`` to skip the pause
+    and package with defaults.
+    """
     output_dir = p.get("output_dir", "./orchestra_output")
     catalog = p.get("catalog", "main")
     schema = p.get("schema", "default")
     pipeline = p.get("pipeline")
-    source, cleanup = _resolve_source(p)
-    if not source:
-        return {"ok": False, "error": "Provide 'adf_definitions' (inline ARM JSON) or 'adf_source_path'."}
+    answers = p.get("answers") or []
+    interactive = p.get("interactive", True)
     out = Path(output_dir)
+    report_path = str(out / ".work" / "translation_report.json")
     steps: dict[str, Any] = {}
-    try:
-        discover_args = ["discover", "--adf-source-path", source, "--output-dir", output_dir]
-        if pipeline:
-            discover_args += ["--pipeline", pipeline]
-        discover_res = runner.run_adapter(discover_args)
-        steps["discover"] = _phase_result(discover_res, out, inventory=runner.summarize_inventory(out))
-        if not discover_res.ok:
-            return {"ok": False, "failed_phase": "discover", "steps": steps}
 
-        convert_args = ["convert", "--output-dir", output_dir, "--adf-source-path", source]
-        if pipeline:
-            convert_args += ["--pipeline", pipeline]
-        convert_res = runner.run_adapter(convert_args)
-        steps["convert"] = _phase_result(convert_res, out, translation=runner.summarize_translation(out))
-        if not convert_res.ok:
-            return {"ok": False, "failed_phase": "convert", "steps": steps}
+    # Resuming an interactive loop: once answers are in hand and a prior run already produced the
+    # report, skip the deterministic discover/convert phases so each round doesn't recompute them
+    # (matters for large factories). Answers only exist relative to that report, so this is safe.
+    resume = bool(answers) and (out / ".work" / "translation_report.json").is_file()
+
+    cleanup = _noop
+    try:
+        if not resume:
+            source, cleanup = _resolve_source(p)
+            if not source:
+                return {
+                    "ok": False,
+                    "error": (
+                        "Provide 'adf_volume_path' / 'adf_workspace_path' / 'adf_definitions' / 'adf_source_path'."
+                    ),
+                }
+            discover_args = ["discover", "--adf-source-path", source, "--output-dir", output_dir]
+            if pipeline:
+                discover_args += ["--pipeline", pipeline]
+            discover_res = runner.run_adapter(discover_args)
+            steps["discover"] = _phase_result(discover_res, out, inventory=runner.summarize_inventory(out))
+            if not discover_res.ok:
+                return {"ok": False, "status": "failed", "failed_phase": "discover", "steps": steps}
+
+            convert_args = ["convert", "--output-dir", output_dir, "--adf-source-path", source]
+            if pipeline:
+                convert_args += ["--pipeline", pipeline]
+            convert_res = runner.run_adapter(convert_args)
+            steps["convert"] = _phase_result(convert_res, out, translation=runner.summarize_translation(out))
+            if not convert_res.ok:
+                return {"ok": False, "status": "failed", "failed_phase": "convert", "steps": steps}
+
+        # Interactive gate: surface any pending configuration options before packaging. Pass the
+        # answers gathered so far so dependent options reveal themselves across rounds.
+        if interactive:
+            pending = _pending_options(_cmd_inspect({"report_path": report_path, "answers": answers}))
+            if pending:
+                return {
+                    "ok": True,
+                    "status": "needs_input",
+                    "pending_options": pending,
+                    "answers_applied": answers,
+                    "report_path": report_path,
+                    "output_dir": output_dir,
+                    "steps": steps,
+                    "message": (
+                        "Configuration options are available. Present each option's prompt/rationale and "
+                        "choices to the user, collect answers as 'option_id=value', then call migrate "
+                        "again with the full 'answers' list (append to any already collected). Dependent "
+                        "options appear as you answer, so repeat until status is 'completed'. To accept "
+                        "defaults and skip, call migrate with interactive=false."
+                    ),
+                }
+
+        # No (more) pending options: stamp the collected answers (if any) then package.
+        if answers:
+            apply_res = _cmd_apply_answers(
+                {
+                    "report_path": report_path,
+                    "answers": answers,
+                    "output_dir": output_dir,
+                    "lookup_csv": p.get("lookup_csv"),
+                }
+            )
+            steps["apply_answers"] = apply_res
+            if not apply_res.get("ok"):
+                return {"ok": False, "status": "failed", "failed_phase": "apply_answers", "steps": steps}
 
         package_res = runner.run_adapter(
             ["package", "--output-dir", output_dir, "--catalog", catalog, "--schema", schema]
         )
         extra = _bundle_output(p, out) if package_res.ok else {}
         steps["package"] = _phase_result(package_res, out, bundle_files=runner.list_tree(out), **extra)
-        return {"ok": package_res.ok, "failed_phase": None if package_res.ok else "package", "steps": steps}
+        return {
+            "ok": package_res.ok,
+            "status": "completed" if package_res.ok else "failed",
+            "failed_phase": None if package_res.ok else "package",
+            "steps": steps,
+        }
     finally:
         cleanup()
 
@@ -346,8 +430,10 @@ def build_server() -> FastMCP:
           catalog(default "main"), schema(default "default"), bundle_name, profile,
           download_workspace_files(bool), keep_intermediates(bool).
         - "migrate": one of adf_volume_path | adf_workspace_path | adf_definitions | adf_source_path
-          (req), output_dir, output_volume_path, output_workspace_path, catalog, schema, pipeline —
-          runs discover→convert→package.
+          (req), output_dir, output_volume_path, output_workspace_path, catalog, schema, pipeline,
+          answers(list of "ID=VALUE"), interactive(bool, default true), lookup_csv — runs
+          discover→convert→package, pausing (status "needs_input") to collect configuration options
+          when any are available; re-call with accumulated answers to resume (see below).
         - "record_results": output_dir(req), results_table(req: catalog.schema.table), warehouse_id.
         - "install_dashboard": results_table(req), warehouse_id, dashboard_name, parent_path.
 
@@ -371,6 +457,17 @@ def build_server() -> FastMCP:
           "output_workspace_path", "files":[...], "count"}. **Preferred** — required for large bundles.
         - With neither set, they return ``bundle`` = {"files": {relpath: text, ...}, "truncated": [...]}
           inline for the agent to persist (small bundles only; capped).
+
+        Interactive "migrate" (collecting configuration options):
+        - "migrate" runs autonomously but **pauses** when a pipeline raises configuration options it
+          can't decide on its own, returning ``{"ok": true, "status": "needs_input", "pending_options":
+          [{"pipeline_name", "options":[{option_id, prompt, rationale, options, default}, ...]}, ...],
+          "report_path", "output_dir"}``. Present the prompts/choices to the user, collect each as
+          "option_id=value", then call "migrate" again with the full ``answers`` list (append to any
+          already collected). Repeat until ``status`` is "completed" — dependent options surface as you
+          answer. ``interactive=false`` skips the pause and packages with defaults. (The standalone
+          "inspect" → "apply_answers" → "package" commands offer the same loop with finer control and
+          without re-running discover/convert.)
 
         Returns a dict ``{"ok": bool, ...}`` with per-command summaries (inventory / translation /
         bundle_files / questions / result) and a "process" block (stdout/stderr/returncode). An unknown

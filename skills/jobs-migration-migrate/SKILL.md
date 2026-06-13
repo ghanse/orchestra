@@ -51,6 +51,22 @@ orchestra(command="migrate", parameters={
   "output_dir": ..., "catalog": ..., "schema": ..., "pipeline": "<optional>"})
 ```
 
+**`migrate` is interactive when configuration options exist.** After translating, it checks whether
+any pipeline raises options it can't decide on its own (e.g. how to handle a `copy_and_notify` motif,
+metadata-driven bulk-copy consolidation, non-Databricks task compute). If so, it **does not package** —
+it returns `{"status": "needs_input", "pending_options": [{"pipeline_name", "options": [{option_id,
+prompt, rationale, options, default}, …]}, …], "report_path", "output_dir"}`. When you get that:
+
+1. Present each option's `prompt`, `rationale`, and `options` (choices) to the user; note the `default`.
+2. Collect their picks as `"option_id=value"` strings.
+3. Re-call `migrate` with the **same** parameters plus `"answers": ["option_id=value", …]` (append to
+   any answers already collected — never drop earlier ones).
+4. Some options only appear once a related one is answered, so repeat 1–3 until `migrate` returns
+   `"status": "completed"`. Then the answers are applied and the bundle is packaged automatically.
+
+To accept all defaults and skip the prompts, pass `"interactive": false`. (Re-calling `migrate` with
+`answers` reuses the existing report and skips re-running discover/convert.)
+
 > **Large factories (hundreds–thousands of pipelines): do not inline.** Inline `adf_definitions`
 > passes through your context window and is capped (~5 MB). Instead point the server at the source by
 > reference: either stage the ADF export to a **UC Volume** and pass
