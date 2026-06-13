@@ -27,45 +27,52 @@ This is the top-level orchestration skill. It runs the full migration pipeline:
 
 Each phase builds on the output of the previous phase. The user is shown a summary and asked to confirm before proceeding to the next phase.
 
-## Prerequisite — Python environment
+## How to run this skill — MCP tools or venv CLI
 
-This skill runs the plugin's Python code, which depends on third-party packages. Before running
-any Python commands, ensure the plugin's virtual environment is bootstrapped. Run the
-**`setup`** skill, or directly:
+This skill orchestrates all three phases. Run the **`setup`** skill first if you haven't. There are
+two execution paths:
 
-```bash
-bash <plugin_dir>/scripts/bootstrap.sh
+### MCP tools (Databricks Genie Code, or a local stdio registration)
+
+In Genie Code this is the **only** path — the phases run on the deployed `mcp-orchestra` app, so
+there is **no venv, no `bootstrap.sh`, and no `.migration-venv`**. Run **no** `python3`/`$PY`/`bash`
+commands on this path; the `"$PY" -m …` snippets in the steps below are the **local-CLI fallback
+only**. Everything goes through the single **`orchestra`** tool, one `command` per step:
+
+```
+orchestra(command="inputs", parameters={"phase": "profile" | "translate" | "prepare"})  # learn each phase's inputs
+orchestra(command="profile", parameters={"adf_source_path": ..., "output_dir": ..., "pipeline": ...})
+orchestra(command="translate", parameters={"output_dir": ..., "adf_source_path": ..., "pipeline": ...})
+orchestra(command="merge_agentic", parameters={"report_path": ..., "agentic_results_dir": ..., "output_path": ...})  # if agentic results
+orchestra(command="inspect", parameters={"report_path": ...})
+orchestra(command="apply_answers", parameters={"report_path": ..., "answers": [...], "output_dir": ...})
+orchestra(command="prepare", parameters={"output_dir": ..., "catalog": ..., "schema": ...})
+orchestra(command="record_results", parameters={...}) / orchestra(command="install_dashboard", parameters={...})
 ```
 
-This creates the venv (`<plugin_dir>/.venv` locally, or `/Workspace/Users/<current user>/.migration-skills`
-on Databricks) and installs dependencies from `requirements.txt`. If Python or pip is missing, the
-script prints a warning telling the user what to install — relay it and stop until they have installed
-Python 3.12+ and pip.
+Or run the whole thing non-interactively with `orchestra(command="migrate", parameters={"adf_source_path": ...,
+"output_dir": ..., "catalog": ..., "schema": ..., "pipeline": ...})` (uses default translation options — for
+control over options, chain `command="inspect"` / `command="apply_answers"`). Each call returns a structured
+result (summaries / file trees); use those in place of reading files. Wherever a step below shows
+`"$PY" -m orchestra.adapter <cmd> …`, call `orchestra(command="<cmd>", parameters={...})` instead.
 
-### Databricks serverless / Genie Code environments
+> `databricks bundle validate` / `deploy` of the *generated* bundle is still a user-driven CLI step
+> (web terminal / local / CI-CD); present the bundle for review.
 
-When running on Databricks serverless compute, two differences apply automatically:
+### venv CLI (local, no MCP server)
 
-1. **venv creation:** The bootstrap script creates the venv at
-   `/Workspace/Users/<current user>/.migration-skills` (persisted in the workspace) and falls back to
-   `--without-pip` + `get-pip.py` since `ensurepip` is not bundled. No manual workaround needed. The
-   resolved interpreter path is written to `<plugin_dir>/.migration-venv`.
-2. **Workspace auth:** The `workspace_downloader` module detects the Databricks runtime and
-   auto-configures `~/.databrickscfg` from the notebook context token. Skip the
-   `databricks auth login` interactive step.
-3. **CLI unavailable:** `databricks bundle validate` / `deploy` cannot run on serverless.
-   Present the generated bundle for review and instruct the user to validate/deploy from
-   the web terminal, local CLI, or CI/CD.
-
-Run **every** Python command in this skill with the venv interpreter (from the marker file
-`<plugin_dir>/.migration-venv`) and `src/` on `PYTHONPATH` (use `$PY` anywhere a command below
-shows `python3`):
+Ensure the venv exists (`setup` Path B / `bootstrap.sh`), then run the commands below with the venv
+interpreter (from the marker file `<plugin_dir>/.migration-venv`) and `src/` on `PYTHONPATH` (use
+`$PY` anywhere a command shows `python3`):
 
 ```bash
 export PYTHONPATH="<plugin_dir>/src"
 PY="$(cat <plugin_dir>/.migration-venv)"
 "$PY" -m orchestra.adapter inputs profile
 ```
+
+If Python or pip is missing, `bootstrap.sh` prints a warning telling the user what to install — relay
+it and stop until they have Python 3.12+ and pip.
 
 ## Workflow
 

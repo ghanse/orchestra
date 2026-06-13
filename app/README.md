@@ -9,25 +9,32 @@ The MCP server itself lives in the orchestra package at
 [`src/orchestra/mcp/`](../src/orchestra/mcp); this directory is just the
 Databricks App wrapper and deployment tooling.
 
-## Tools
+## Tool
 
-| Tool | Wraps | Purpose |
-|------|-------|---------|
-| `orchestra_phase_inputs` | `adapter inputs` | List a phase's input prompts/defaults |
-| `orchestra_profile` | `adapter profile` | Parse ADF JSON, classify activities |
-| `orchestra_translate` | `adapter translate` | ADF activities → Databricks IR |
-| `orchestra_inspect_report` | `adapter inspect` | Surface pending translation options |
-| `orchestra_apply_answers` | `adapter modify` | Apply answers → stamped IR |
-| `orchestra_materialize_lookup` | `adapter materialize-lookup` | CSV → lookup-values JSON |
-| `orchestra_workspace_paths` | `adapter workspace-paths` | Detect workspace paths / hosts |
-| `orchestra_prepare` | `adapter prepare` | Emit the deployable DAB bundle |
-| `orchestra_migrate` | profile→translate→prepare | Full non-interactive migration |
-| `orchestra_record_results` | `adapter record-results` | Write coverage to a UC table |
-| `orchestra_install_dashboard` | `adapter install-dashboard` | Publish the coverage dashboard |
+The server exposes a **single** MCP tool, `orchestra(command, parameters)`, to stay well under
+host tool-count limits (e.g. Genie Code's 20-tools-across-all-servers cap). `command` selects the
+operation; `parameters` is its keyword-argument dict.
 
-Each tool is a thin bridge over `python -m orchestra.adapter` (the same entry
-point the agent skills use), then reads back the JSON/CSV artifacts each phase
-writes — so the MCP surface stays in lockstep with the tested CLI contract.
+| `command` | Wraps | Purpose |
+|-----------|-------|---------|
+| `inputs` | `adapter inputs` | List a phase's input prompts/defaults |
+| `profile` | `adapter profile` | Parse ADF JSON, classify activities |
+| `translate` | `adapter translate` | ADF activities → Databricks IR |
+| `merge_agentic` | `adapter translate --merge-agentic` | Merge agent-produced results into the report |
+| `inspect` | `adapter inspect` | Surface pending translation options |
+| `apply_answers` | `adapter modify` | Apply answers → stamped IR |
+| `materialize_lookup` | `adapter materialize-lookup` | CSV → lookup-values JSON |
+| `workspace_paths` | `adapter workspace-paths` | Detect workspace paths / hosts |
+| `prepare` | `adapter prepare` | Emit the deployable DAB bundle |
+| `migrate` | profile→translate→prepare | Full non-interactive migration |
+| `record_results` | `adapter record-results` | Write coverage to a UC table |
+| `install_dashboard` | `adapter install-dashboard` | Publish the coverage dashboard |
+
+Example: `orchestra(command="profile", parameters={"adf_source_path": "/Volumes/main/default/adf_export", "output_dir": "./out"})`.
+
+Each command is a thin bridge over `python -m orchestra.adapter` (the same entry point the agent
+skills use), then reads back the JSON/CSV artifacts each phase writes — so the MCP surface stays in
+lockstep with the tested CLI contract.
 
 ## Run locally
 
@@ -80,7 +87,7 @@ End-to-end, to use it from Genie Code:
    `install-dashboard`).
 4. **Add it in Genie Code (Agent mode):** open Genie Code **Settings → MCP Servers →
    Add Server**, choose **Custom MCP server**, select the `mcp-orchestra` app, and
-   **Save**. The `orchestra_*` tools become available immediately. Verify via the
+   **Save**. The `orchestra` tool becomes available immediately. Verify via the
    health endpoint `<app-url>/`.
 
 > The `mcp-` name prefix also makes the app **auto-listed in the AI Playground**. Genie Code's
@@ -90,7 +97,8 @@ Genie Code requires a custom MCP app to be (1) in the **same workspace**, (2) re
 at `https://<app-url>/mcp`, and (3) **stateless** — this server sets
 `stateless_http=True` and adds CORS, so it qualifies. If a browser CORS error appears,
 set the app env var `ORCHESTRA_ALLOWED_ORIGINS` to your workspace URL and redeploy.
-MCP access is capped at **20 tools** across all servers (orchestra exposes 11).
+MCP access is capped at **20 tools** across all servers; orchestra exposes just **one** tool
+(`orchestra`, with 12 commands), so it uses a single slot.
 
 > Run `./app/deploy.sh` from a Databricks CLI session (workspace web terminal or a
 > local machine) — `databricks apps` deploy is not available from serverless

@@ -25,30 +25,35 @@ This is phase 1 of the orchestra migration workflow. It takes raw ADF JSON expor
 - **Agentic** — requires LLM-assisted translation via the `adf-to-databricks-plugin` skills (ExecuteDataFlow, Switch, Until, StoredProc, etc.)
 - **Unsupported** — no known translation path; requires manual intervention
 
-## Prerequisite — Python environment
+## How to run this skill — MCP tool or venv CLI
 
-This skill runs the plugin's Python code, which depends on third-party packages. Before running
-any Python commands, ensure the plugin's virtual environment is bootstrapped. Run the
-**`setup`** skill, or directly:
+This phase runs one of two ways; run the **`setup`** skill first if you haven't.
 
-```bash
-bash <plugin_dir>/scripts/bootstrap.sh
-```
+- **MCP tool (Databricks Genie Code, or a local stdio registration) — the only path in Genie Code:**
+  call the single **`orchestra`** tool with `command="profile"` and run **no** `python3`/`$PY`/`bash`
+  commands. The `"$PY" -m …` snippets in the steps below are the **local-CLI fallback only** — ignore
+  them on this path.
 
-This creates the venv (`<plugin_dir>/.venv` locally, or `/Workspace/Users/<current user>/.migration-skills`
-on Databricks) and installs dependencies from `requirements.txt`. If Python or pip is missing, the
-script prints a warning telling the user what to install — relay it and stop until they have installed
-Python 3.12+ and pip.
+  ```
+  orchestra(command="profile",
+            parameters={"adf_source_path": "<ADF source path>", "output_dir": "<output dir>", "pipeline": "<optional>"})
+  ```
 
-Run **every** Python command in this skill with the venv interpreter and `src/` on `PYTHONPATH`. The
-interpreter path is in the marker file `<plugin_dir>/.migration-venv` (use `$PY` anywhere a command
-below shows `python3`):
+  The tool returns the inventory summary (pipeline/activity counts by strategy and coverage); use it
+  in place of reading the files directly.
 
-```bash
-export PYTHONPATH="<plugin_dir>/src"
-PY="$(cat <plugin_dir>/.migration-venv)"
-"$PY" <plugin_dir>/src/orchestra/parser/adf_loader.py ...
-```
+- **venv CLI (local, no MCP server):** ensure the venv exists (`setup` Path B / `bootstrap.sh`), then
+  run the commands below with the venv interpreter and `src/` on `PYTHONPATH`. The interpreter path is
+  in the marker file `<plugin_dir>/.migration-venv` (use `$PY` anywhere a command shows `python3`):
+
+  ```bash
+  export PYTHONPATH="<plugin_dir>/src"
+  PY="$(cat <plugin_dir>/.migration-venv)"
+  "$PY" -m orchestra.adapter profile --adf-source-path <path> --output-dir <dir>
+  ```
+
+  If Python or pip is missing, `bootstrap.sh` prints a warning telling the user what to install —
+  relay it and stop until they have Python 3.12+ and pip.
 
 ## Workflow
 

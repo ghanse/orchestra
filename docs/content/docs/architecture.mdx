@@ -40,15 +40,16 @@ The reporting layer (`reporting/`) can write per-run coverage to a Unity Catalog
                                   ▲
                                   │ subprocess (same contract)
                     ┌─────────────────────────────┐
-   MCP tools ──────▶│  orchestra.mcp (FastMCP)     │
-   (Claude / Genie) │  11 tools → adapter bridge   │
+   MCP tool  ──────▶│  orchestra.mcp (FastMCP)     │
+   (Claude / Genie) │  1 tool, 12 commands →       │
+                    │  adapter bridge              │
                     └─────────────────────────────┘
 ```
 
 The unified `orchestra.adapter` CLI is the single contract. Both surfaces go through it:
 
 - **Agent skills** (`skills/`) shell out to `python -m orchestra.adapter <phase|op> …` directly.
-- **MCP tools** (`src/orchestra/mcp/`) are a thin bridge: each tool builds the same adapter arguments, runs them as a subprocess via `orchestra.mcp.runner`, then reads back the JSON/CSV artifacts and returns a structured result. No phase logic is duplicated, so the tool surface can't drift from the tested CLI.
+- **MCP tool** (`src/orchestra/mcp/`) is a thin bridge: the single `orchestra(command, parameters)` tool builds the same adapter arguments for the chosen `command`, runs them as a subprocess via `orchestra.mcp.runner`, then reads back the JSON/CSV artifacts and returns a structured result. No phase logic is duplicated, so the tool surface can't drift from the tested CLI. A single tool also keeps orchestra to **one** of the host's tool slots (e.g. Genie Code's 20-tool cap).
 
 ### MCP tool layer
 
@@ -58,7 +59,7 @@ The unified `orchestra.adapter` CLI is the single contract. Both surfaces go thr
 | `mcp/runner.py`   | Subprocess bridge to `orchestra.adapter` with artifact summarizers (for running translation without the `mcp` dependency) |
 | `mcp/__main__.py` | `python -m orchestra.mcp` entry point (stdio default, `--http` for hosting)                                               |
 
-Each tool represents an adapter subcommand: `orchestra_phase_inputs`, `orchestra_profile`, `orchestra_translate`, `orchestra_inspect_report`, `orchestra_apply_answers`, `orchestra_materialize_lookup`, `orchestra_workspace_paths`, `orchestra_prepare`, `orchestra_migrate`, `orchestra_record_results`, and `orchestra_install_dashboard`.
+The `orchestra` tool's `command` selects the adapter operation: `inputs`, `profile`, `translate`, `merge_agentic`, `inspect`, `apply_answers`, `materialize_lookup`, `workspace_paths`, `prepare`, `migrate`, `record_results`, and `install_dashboard` (with `parameters` carrying that command's arguments).
 
 ## Deployment topology
 

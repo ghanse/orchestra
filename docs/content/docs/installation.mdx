@@ -182,7 +182,7 @@ The `mcp-` prefix on `mcp-orchestra` makes the app auto-listed in the **AI Playg
 ### Grant access
 
 - **App access:** grant **Can use** on the `mcp-orchestra` app to the users / service principals that will call it (Apps UI → *Permissions*, or `databricks apps set-permissions`).
-- **Data access:** grant the app's own service principal access to the catalogs, schemas, and Unity Catalog volumes the migration reads/writes, plus any SQL warehouse used by the reporting tools (`orchestra_record_results` / `orchestra_install_dashboard`).
+- **Data access:** grant the app's own service principal access to the catalogs, schemas, and Unity Catalog volumes the migration reads/writes, plus any SQL warehouse used by the reporting commands (`orchestra(command="record_results")` / `orchestra(command="install_dashboard")`).
 </Step>
 
 <Step>
@@ -195,17 +195,17 @@ MCP servers are only available in Genie Code **[Agent mode](https://learn.micros
 3. Choose **Custom MCP server** and select the **`mcp-orchestra`** Databricks App.
 4. Click **Save**.
 
-Its `orchestra_*` tools are then available in Agent mode (start with `orchestra_phase_inputs` or `orchestra_migrate`) — no prompt changes needed.
+The single `orchestra` tool is then available in Agent mode (start with `orchestra(command="inputs", …)` or `orchestra(command="migrate", …)`) — no prompt changes needed.
 
 <Callout type="info" title="Genie Code custom MCP requirements">
-Databricks requires a custom MCP app to be (1) deployed in the **same workspace**, (2) reachable at **`https://<app-url>/mcp`**, and (3) **stateless**. The orchestra server already satisfies these — it sets `stateless_http=True` and adds CORS. If a browser CORS error appears, set the app's `ORCHESTRA_ALLOWED_ORIGINS` env var to your workspace URL and redeploy. MCP access is also capped at **20 tools** across all servers (orchestra exposes 11); enable/disable specific tools in Genie Code settings. See [Connect Genie Code to MCP servers](https://learn.microsoft.com/en-us/azure/databricks/genie-code/mcp).
+Databricks requires a custom MCP app to be (1) deployed in the **same workspace**, (2) reachable at **`https://<app-url>/mcp`**, and (3) **stateless**. The orchestra server already satisfies these — it sets `stateless_http=True` and adds CORS. If a browser CORS error appears, set the app's `ORCHESTRA_ALLOWED_ORIGINS` env var to your workspace URL and redeploy. MCP access is also capped at **20 tools** across all servers; orchestra exposes a **single** `orchestra` tool (12 commands), so it uses one slot. See [Connect Genie Code to MCP servers](https://learn.microsoft.com/en-us/azure/databricks/genie-code/mcp).
 </Callout>
 </Step>
 
 <Step>
 ### Verify
 
-Open the health endpoint `<app-url>/` (returns `{"status":"ok"}`), or ask Genie Code **"what orchestra MCP tools are available?"** — you should see the eleven `orchestra_*` tools.
+Open the health endpoint `<app-url>/` (returns `{"status":"ok"}`), or ask Genie Code **"what orchestra MCP tools are available?"** — you should see the single `orchestra` tool.
 </Step>
 </Steps>
 </Tab>

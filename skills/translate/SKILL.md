@@ -24,30 +24,37 @@ The translation follows a **deterministic-first** strategy:
 1. Activities with known, well-defined mappings are translated by built-in Python translators
 2. Activities that require interpretation, expression conversion, or lack a Python translator are handled by agent skills from the `adf-to-databricks-plugin`
 
-## Prerequisite — Python environment
+## How to run this skill — MCP tools or venv CLI
 
-This skill runs the plugin's Python code, which depends on third-party packages. Before running
-any Python commands, ensure the plugin's virtual environment is bootstrapped. Run the
-**`setup`** skill, or directly:
+This phase runs one of two ways; run the **`setup`** skill first if you haven't.
 
-```bash
-bash <plugin_dir>/scripts/bootstrap.sh
-```
+- **MCP tool (Databricks Genie Code, or a local stdio registration) — the only path in Genie Code:**
+  call the single **`orchestra`** tool (one command per step) and run **no** `python3`/`$PY`/`bash`
+  commands. The `"$PY" -m …` snippets in the steps below are the **local-CLI fallback only** — ignore
+  them on this path. Map the steps to:
 
-This creates the venv (`<plugin_dir>/.venv` locally, or `/Workspace/Users/<current user>/.migration-skills`
-on Databricks) and installs dependencies from `requirements.txt`. If Python or pip is missing, the
-script prints a warning telling the user what to install — relay it and stop until they have installed
-Python 3.12+ and pip.
+  ```
+  orchestra(command="translate", parameters={"output_dir": "<dir>", "adf_source_path": "<optional>", "pipeline": "<optional>"})
+  orchestra(command="inspect", parameters={"report_path": "<dir>/.work/translation_report.json", "answers": [...]})
+  orchestra(command="apply_answers", parameters={"report_path": "...", "answers": ["id=value", ...], "output_dir": "<dir>", "lookup_csv": "<optional>"})
+  orchestra(command="merge_agentic", parameters={"report_path": "...", "agentic_results_dir": "<dir>", "output_path": "<optional>"})
+  ```
 
-Run **every** Python command in this skill with the venv interpreter (from the marker file
-`<plugin_dir>/.migration-venv`) and `src/` on `PYTHONPATH` (use `$PY` anywhere a command below
-shows `python3`):
+  Use the tool results in place of reading the files directly. `command="merge_agentic"` covers the
+  agentic `--merge-agentic` step shown later in this skill.
 
-```bash
-export PYTHONPATH="<plugin_dir>/src"
-PY="$(cat <plugin_dir>/.migration-venv)"
-"$PY" -m orchestra.translator.engine ...
-```
+- **venv CLI (local, no MCP server):** ensure the venv exists (`setup` Path B / `bootstrap.sh`), then
+  run the commands below with the venv interpreter (from the marker file `<plugin_dir>/.migration-venv`)
+  and `src/` on `PYTHONPATH` (use `$PY` anywhere a command shows `python3`):
+
+  ```bash
+  export PYTHONPATH="<plugin_dir>/src"
+  PY="$(cat <plugin_dir>/.migration-venv)"
+  "$PY" -m orchestra.adapter translate --output-dir <dir>
+  ```
+
+  If Python or pip is missing, `bootstrap.sh` prints a warning telling the user what to install —
+  relay it and stop until they have Python 3.12+ and pip.
 
 ## Workflow
 
