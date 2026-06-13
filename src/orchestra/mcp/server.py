@@ -14,10 +14,39 @@ from __future__ import annotations
 import os
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 
 from orchestra.mcp import runner
+
+
+def _allowed_origins() -> list[str]:
+    """Allowed browser/MCP origins from ``ORCHESTRA_ALLOWED_ORIGINS`` (comma-separated, default ``*``)."""
+    raw = os.environ.get("ORCHESTRA_ALLOWED_ORIGINS", "*")
+    return [origin.strip() for origin in raw.split(",") if origin.strip()]
+
+
+def _transport_security() -> TransportSecuritySettings:
+    """Build the MCP transport security (DNS-rebinding) settings.
+
+    The MCP SDK rejects requests whose ``Origin`` is not in its allowlist with a 403 (and an
+    empty allowlist rejects everything). A Databricks App is already fronted by the workspace
+    OAuth proxy, so by default we disable the SDK's DNS-rebinding protection — otherwise it
+    blocks Genie Code's workspace ``Origin``. Set ``ORCHESTRA_ALLOWED_ORIGINS`` to an explicit
+    comma-separated list (e.g. your workspace URL) to instead enforce a strict allowlist.
+    """
+    origins = _allowed_origins()
+    if origins == ["*"]:
+        return TransportSecuritySettings(enable_dns_rebinding_protection=False)
+    hosts = [netloc for netloc in (urlparse(origin).netloc for origin in origins) if netloc]
+    return TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_origins=origins,
+        allowed_hosts=hosts,
+    )
+
 
 _INSTRUCTIONS = """\
 orchestra translates Azure Data Factory (ADF) pipelines into Databricks Lakeflow Jobs
@@ -51,8 +80,16 @@ def build_server() -> FastMCP:
     MCP servers that do not rely on a persistent session (no ``Mcp-Session-Id`` round-trip).
     ``streamable_http_path="/mcp"`` pins the transport to ``/mcp`` (Genie expects the server at
     ``<app-url>/mcp``); without it some SDK versions serve the transport at ``/``.
+    ``transport_security`` controls the SDK's DNS-rebinding Origin check (disabled by default so
+    the workspace Origin isn't 403'd — see :func:`_transport_security`).
     """
-    mcp = FastMCP("orchestra", instructions=_INSTRUCTIONS, stateless_http=True, streamable_http_path="/mcp")
+    mcp = FastMCP(
+        "orchestra",
+        instructions=_INSTRUCTIONS,
+        stateless_http=True,
+        streamable_http_path="/mcp",
+        transport_security=_transport_security(),
+    )
 
     @mcp.tool()
     def orchestra_phase_inputs(phase: str) -> dict[str, Any]:
@@ -364,8 +401,7 @@ def build_http_app() -> Any:
     # FastMCP's own app — its lifespan starts the StreamableHTTP session manager.
     app = mcp.streamable_http_app()
 
-    raw_origins = os.environ.get("ORCHESTRA_ALLOWED_ORIGINS", "*")
-    allow_origins = [origin.strip() for origin in raw_origins.split(",") if origin.strip()]
+    allow_origins = _allowed_origins()
     # Credentialed requests cannot use the "*" wildcard per the CORS spec.
     allow_credentials = allow_origins != ["*"]
     app.add_middleware(
